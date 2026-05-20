@@ -1,0 +1,101 @@
+import { useState, type ReactNode, type SubmitEventHandler } from 'react';
+import type { ApplicationFormData, Status, Priority } from '../types';
+
+const EMPTY: ApplicationFormData = {
+	company: '', role: '', status: 'wishlist', priority: 'medium',
+	date_applied: '', job_url: '', notes: '',
+};
+
+interface Props {
+	initial: Partial<ApplicationFormData> | null;
+	onSave: (form: ApplicationFormData) => void;
+	onClose: () => void;
+}
+
+export default function AddModal({ initial, onSave, onClose }: Props) {
+	const [form, setForm] = useState<ApplicationFormData>(
+		initial ? { ...EMPTY, ...initial } : EMPTY
+	);
+
+	const set = <K extends keyof ApplicationFormData>(k: K, v: ApplicationFormData[K]) =>
+		setForm(f => ({ ...f, [k]: v }));
+
+	const handleSubmit: SubmitEventHandler<HTMLFormElement> = (e) => {
+		e.preventDefault();
+		if (!form.company.trim() || !form.role.trim()) return;
+		onSave(form);
+	};
+
+	return (
+		<div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+			<div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+				<div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-gray-100">
+					<h2 className="text-lg font-semibold text-gray-800">
+						{initial?.id ? 'Edit Application' : 'Add Application'}
+					</h2>
+					<button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+				</div>
+
+				<form onSubmit={handleSubmit} className="p-6 space-y-4">
+					<Field label="Company *">
+						<input value={form.company} onChange={e => set('company', e.target.value)}
+							required className={inputCls} placeholder="Acme Corp" />
+					</Field>
+					<Field label="Role *">
+						<input value={form.role} onChange={e => set('role', e.target.value)}
+							required className={inputCls} placeholder="Software Engineer" />
+					</Field>
+					<div className="grid grid-cols-2 gap-3">
+						<Field label="Status">
+							<select value={form.status} onChange={e => set('status', e.target.value as Status)} className={inputCls}>
+								<option value="wishlist">Wishlist</option>
+								<option value="applied">Applied</option>
+								<option value="interview">Interview</option>
+								<option value="offer">Offer</option>
+								<option value="rejected">Rejected</option>
+							</select>
+						</Field>
+						<Field label="Priority">
+							<select value={form.priority} onChange={e => set('priority', e.target.value as Priority)} className={inputCls}>
+								<option value="high">High</option>
+								<option value="medium">Medium</option>
+								<option value="low">Low</option>
+							</select>
+						</Field>
+					</div>
+					<Field label="Date Applied">
+						<input type="date" value={form.date_applied} onChange={e => set('date_applied', e.target.value)} className={inputCls} />
+					</Field>
+					<Field label="Job URL">
+						<input value={form.job_url} onChange={e => set('job_url', e.target.value)}
+							className={inputCls} placeholder="https://..." />
+					</Field>
+					<Field label="Notes">
+						<textarea value={form.notes} onChange={e => set('notes', e.target.value)}
+							rows={3} className={inputCls} placeholder="Any notes..." />
+					</Field>
+
+					<div className="flex justify-end gap-2 pt-1">
+						<button type="button" onClick={onClose}
+							className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100">Cancel</button>
+						<button type="submit"
+							className="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 font-medium">
+							{initial?.id ? 'Save Changes' : 'Add Application'}
+						</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	);
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+	return (
+		<div className="flex flex-col gap-1">
+			<label className="text-xs font-medium text-gray-600">{label}</label>
+			{children}
+		</div>
+	);
+}
+
+const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-400';

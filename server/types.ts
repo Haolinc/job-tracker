@@ -1,0 +1,68 @@
+import 'express-session';
+import type { Credentials } from 'google-auth-library';
+
+declare module 'express-session' {
+	interface SessionData {
+		tokens: Credentials | null;
+	}
+}
+
+export type Status = 'wishlist' | 'applied' | 'interview' | 'offer' | 'rejected';
+export type Priority = 'high' | 'medium' | 'low';
+export type Source = 'manual' | 'gmail';
+export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
+
+export interface Application {
+	id: number;
+	company: string;
+	role: string;
+	status: Status;
+	priority: Priority;
+	date_applied: string | null;
+	job_url: string | null;
+	notes: string | null;
+	source: Source;
+	gmail_thread_id: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface SyncRecord {
+	id: number;
+	added: number;
+	updated: number;
+	skipped: number;
+	synced_at: string;
+}
+
+export interface Classification {
+	category: Category;
+	company: string | null;
+	role: string | null;
+	confidence: number;
+}
+
+export interface EmailResult {
+	threadId: string;
+	messageId: string;
+	subject: string;
+	snippet: string;
+}
+
+export interface CreateApplicationData {
+	company: string;
+	role: string;
+	status: Status;
+	priority: Priority;
+	date_applied: string | null;
+	job_url: string | null;
+	notes: string | null;
+	source: Source;
+	gmail_thread_id: string | null;
+}
+
+export interface MarkSyncedData {
+	thread_id: string;
+	message_id: string;
+	classified_as: Category;
+}

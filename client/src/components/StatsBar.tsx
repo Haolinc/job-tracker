@@ -1,0 +1,29 @@
+import type { Application } from '../types';
+
+interface Props {
+	applications: Application[];
+}
+
+export default function StatsBar({ applications }: Props) {
+	const total = applications.length;
+	const active = applications.filter(a => !['rejected', 'wishlist'].includes(a.status)).length;
+	const offers = applications.filter(a => a.status === 'offer').length;
+	const applied = applications.filter(a => a.status !== 'wishlist').length;
+	const rate = applied > 0 ? ((offers / applied) * 100).toFixed(1) : '0.0';
+
+	const stat = (label: string, value: string | number, color: string) => (
+		<div className="flex flex-col items-center px-6 py-3 bg-white rounded-xl shadow-sm border border-gray-100">
+			<span className={`text-2xl font-bold ${color}`}>{value}</span>
+			<span className="text-xs text-gray-500 mt-0.5">{label}</span>
+		</div>
+	);
+
+	return (
+		<div className="flex gap-3 flex-wrap">
+			{stat('Total', total, 'text-gray-800')}
+			{stat('Active', active, 'text-blue-600')}
+			{stat('Offers', offers, 'text-green-600')}
+			{stat('Offer Rate', `${rate}%`, 'text-purple-600')}
+		</div>
+	);
+}
