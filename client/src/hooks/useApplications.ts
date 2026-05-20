@@ -7,6 +7,7 @@ export function useApplications() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
+	// useCallback required — used in a useEffect dep array in App.tsx
 	const fetchAll = useCallback(async (filters: Record<string, string> = {}) => {
 		setLoading(true);
 		setError(null);
@@ -20,22 +21,22 @@ export function useApplications() {
 		}
 	}, []);
 
-	const add = useCallback(async (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> => {
+	const add = async (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> => {
 		const created = await createApplication(data);
 		setApplications(prev => [created, ...prev]);
 		return created;
-	}, []);
+	};
 
-	const update = useCallback(async (id: number, data: Partial<Application>): Promise<Application> => {
+	const update = async (id: number, data: Partial<Application>): Promise<Application> => {
 		const updated = await updateApplication(id, data);
 		setApplications(prev => prev.map(a => a.id === id ? updated : a));
 		return updated;
-	}, []);
+	};
 
-	const remove = useCallback(async (id: number): Promise<void> => {
+	const remove = async (id: number): Promise<void> => {
 		await deleteApplication(id);
 		setApplications(prev => prev.filter(a => a.id !== id));
-	}, []);
+	};
 
 	return { applications, loading, error, fetchAll, add, update, remove };
 }

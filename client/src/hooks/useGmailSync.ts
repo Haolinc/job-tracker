@@ -9,6 +9,7 @@ export function useGmailSync() {
 	const [history, setHistory] = useState<SyncRecord[]>([]);
 	const [error, setError] = useState<string | null>(null);
 
+	// useCallback required — used in a useEffect dep array in App.tsx
 	const checkStatus = useCallback(async () => {
 		try {
 			const { connected: c } = await getAuthStatus();
@@ -16,12 +17,12 @@ export function useGmailSync() {
 		} catch { /* silently ignore */ }
 	}, []);
 
-	const disconnect = useCallback(async () => {
+	const disconnect = async () => {
 		await disconnectGmail();
 		setConnected(false);
-	}, []);
+	};
 
-	const sync = useCallback(async (): Promise<SyncResult> => {
+	const sync = async (): Promise<SyncResult> => {
 		setSyncing(true);
 		setError(null);
 		try {
@@ -36,12 +37,12 @@ export function useGmailSync() {
 		} finally {
 			setSyncing(false);
 		}
-	}, []);
+	};
 
-	const fetchHistory = useCallback(async () => {
+	const fetchHistory = async () => {
 		const data = await getSyncHistory();
 		setHistory(data);
-	}, []);
+	};
 
 	return { connected, syncing, lastResult, history, error, checkStatus, disconnect, sync, fetchHistory };
 }
