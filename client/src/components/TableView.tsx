@@ -1,26 +1,6 @@
-import { useState } from 'react';
-import type { Application, InterviewStep, Status } from '../types';
-
-const STATUS_COLORS: Record<Status, string> = {
-	applied:   'bg-blue-100 text-blue-700',
-	interview: 'bg-yellow-100 text-yellow-700',
-	offer:     'bg-green-100 text-green-700',
-	rejected:  'bg-red-100 text-red-700',
-};
-
-const STATUS_LABELS: Record<Status, string> = {
-	applied:   'Applied',
-	interview: 'Interview',
-	offer:     'Offer',
-	rejected:  'Rejected',
-};
-
-const STEP_LABELS: Record<InterviewStep, string> = {
-	phone_screen: 'Phone Screen',
-	technical:    'Technical',
-	onsite:       'Onsite',
-	final:        'Final Round',
-};
+import { useState, useMemo } from 'react';
+import type { Application } from '../types';
+import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS } from '../constants';
 
 type SortKey = 'company' | 'role' | 'status' | 'date_applied' | 'last_activity';
 type SortDir = 'asc' | 'desc';
@@ -42,7 +22,7 @@ interface ThProps {
 }
 
 function Th({ label, col, sortKey, sortDir, onSort }: ThProps) {
-	const active = col && col === sortKey;
+	const active = col === sortKey;
 	return (
 		<th
 			onClick={col ? () => onSort(col) : undefined}
@@ -71,12 +51,10 @@ export default function TableView({ applications, onEdit, onDelete }: Props) {
 		setPage(0);
 	};
 
-	const sorted = [...applications].sort((a, b) => {
-		const av = a[sortKey] ?? '';
-		const bv = b[sortKey] ?? '';
-		const cmp = String(av).localeCompare(String(bv));
+	const sorted = useMemo(() => [...applications].sort((a, b) => {
+		const cmp = String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''));
 		return sortDir === 'asc' ? cmp : -cmp;
-	});
+	}), [applications, sortKey, sortDir]);
 
 	const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
 	// Clamp page to valid range — handles filter changes that shrink total pages

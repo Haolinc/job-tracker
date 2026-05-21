@@ -1,12 +1,11 @@
 import { useState, useCallback } from 'react';
-import { getAuthStatus, disconnectGmail, syncGmail, getSyncHistory } from '../api';
-import type { SyncResult, SyncRecord } from '../types';
+import { getAuthStatus, disconnectGmail, syncGmail } from '../api';
+import type { SyncResult } from '../types';
 
 export function useGmailSync() {
 	const [connected, setConnected] = useState(false);
 	const [syncing, setSyncing] = useState(false);
 	const [lastResult, setLastResult] = useState<SyncResult | null>(null);
-	const [history, setHistory] = useState<SyncRecord[]>([]);
 	const [error, setError] = useState<string | null>(null);
 
 	// useCallback required — used in a useEffect dep array in App.tsx
@@ -18,8 +17,12 @@ export function useGmailSync() {
 	}, []);
 
 	const disconnect = async () => {
-		await disconnectGmail();
-		setConnected(false);
+		try {
+			await disconnectGmail();
+			setConnected(false);
+		} catch {
+			setError('Failed to disconnect');
+		}
 	};
 
 	const sync = async (): Promise<SyncResult> => {
@@ -39,10 +42,5 @@ export function useGmailSync() {
 		}
 	};
 
-	const fetchHistory = async () => {
-		const data = await getSyncHistory();
-		setHistory(data);
-	};
-
-	return { connected, syncing, lastResult, history, error, checkStatus, disconnect, sync, fetchHistory };
+	return { connected, syncing, lastResult, error, checkStatus, disconnect, sync };
 }

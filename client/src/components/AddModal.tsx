@@ -1,5 +1,6 @@
 import { useState, type ReactNode, type SubmitEventHandler } from 'react';
 import type { ApplicationFormData, Status, InterviewStep } from '../types';
+import { STATUS_LABELS, STEP_LABELS } from '../constants';
 
 const EMPTY: ApplicationFormData = {
 	company: '', role: '', status: 'applied',
@@ -47,20 +48,18 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					</Field>
 					<Field label="Status">
 						<select value={form.status} onChange={e => set('status', e.target.value as Status)} className={inputCls}>
-							<option value="applied">Applied</option>
-							<option value="interview">Interview</option>
-							<option value="offer">Offer</option>
-							<option value="rejected">Rejected</option>
+							{(Object.entries(STATUS_LABELS) as [Status, string][]).map(([v, label]) => (
+								<option key={v} value={v}>{label}</option>
+							))}
 						</select>
 					</Field>
 					{form.status === 'interview' && (
 						<Field label="Interview Stage">
 							<select value={form.interview_step} onChange={e => set('interview_step', e.target.value as InterviewStep | '')} className={inputCls}>
-								<option value="">— select stage —</option>
-								<option value="phone_screen">Phone Screen</option>
-								<option value="technical">Technical</option>
-								<option value="onsite">Onsite</option>
-								<option value="final">Final Round</option>
+								<option value="">— Select Stage —</option>
+								{(Object.entries(STEP_LABELS) as [InterviewStep, string][]).map(([v, label]) => (
+									<option key={v} value={v}>{label}</option>
+								))}
 							</select>
 						</Field>
 					)}

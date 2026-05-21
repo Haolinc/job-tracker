@@ -27,7 +27,6 @@ export default function App() {
 		checkStatus();
 		const params = new URLSearchParams(window.location.search);
 		if (params.get('gmail') === 'connected') {
-			checkStatus();
 			window.history.replaceState({}, '', '/');
 		}
 	}, [checkStatus]);

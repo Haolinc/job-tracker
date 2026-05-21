@@ -1,9 +1,9 @@
 import axios from 'axios';
-import type { Application, SyncResult, SyncRecord } from './types';
+import type { Application, Filters, SyncResult } from './types';
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
 
-export const getApplications = (params?: Record<string, string>): Promise<Application[]> =>
+export const getApplications = (params?: Filters): Promise<Application[]> =>
 	api.get('/applications', { params }).then(r => r.data as Application[]);
 
 export const createApplication = (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> =>
@@ -23,6 +23,3 @@ export const disconnectGmail = (): Promise<{ success: boolean }> =>
 
 export const syncGmail = (): Promise<SyncResult> =>
 	api.post('/gmail/sync').then(r => r.data as SyncResult);
-
-export const getSyncHistory = (): Promise<SyncRecord[]> =>
-	api.get('/gmail/sync/history').then(r => r.data as SyncRecord[]);

@@ -1,13 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Application, InterviewStep } from '../types';
-
-const STEP_LABELS: Record<InterviewStep, string> = {
-	phone_screen: 'Phone Screen',
-	technical: 'Technical',
-	onsite: 'Onsite',
-	final: 'Final Round',
-};
+import type { Application } from '../types';
+import { STEP_LABELS } from '../constants';
 
 interface Props {
 	app: Application;

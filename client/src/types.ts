@@ -24,17 +24,8 @@ export interface SyncResult {
 	skipped: number;
 }
 
-export interface SyncRecord {
-	id: string;
-	added: number;
-	updated: number;
-	skipped: number;
-	synced_at: string;
-}
-
 export interface Filters {
 	search: string;
-	[key: string]: string;
 }
 
 export interface ApplicationFormData {

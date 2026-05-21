@@ -8,8 +8,7 @@ export default function StatsBar({ applications }: Props) {
 	const total = applications.length;
 	const active = applications.filter(a => a.status !== 'rejected').length;
 	const offers = applications.filter(a => a.status === 'offer').length;
-	const applied = applications.length;
-	const rate = applied > 0 ? ((offers / applied) * 100).toFixed(1) : '0.0';
+	const rate = total > 0 ? ((offers / total) * 100).toFixed(1) : '0.0';
 
 	const stat = (label: string, value: string | number, color: string) => (
 		<div className="flex flex-col items-center px-6 py-3 bg-white rounded-xl shadow-sm border border-gray-100">

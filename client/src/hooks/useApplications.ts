@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { getApplications, createApplication, updateApplication, deleteApplication } from '../api';
-import type { Application } from '../types';
+import type { Application, Filters } from '../types';
 
 export function useApplications() {
 	const [applications, setApplications] = useState<Application[]>([]);
@@ -8,7 +8,7 @@ export function useApplications() {
 	const [error, setError] = useState<string | null>(null);
 
 	// useCallback required — used in a useEffect dep array in App.tsx
-	const fetchAll = useCallback(async (filters: Record<string, string> = {}) => {
+	const fetchAll = useCallback(async (filters: Filters = { search: '' }) => {
 		setLoading(true);
 		setError(null);
 		try {
