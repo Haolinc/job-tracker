@@ -55,11 +55,12 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 			const lastMsg = messages[messages.length - 1];
 			const headers = msg.payload?.headers || [];
 			const subject = headers.find(h => h.name === 'Subject')?.value || '';
+			const from    = headers.find(h => h.name === 'From')?.value    || '';
 			const snippet = lastMsg.snippet || '';
 			const lastMessageDate = lastMsg.internalDate
 				? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]
 				: new Date().toISOString().split('T')[0];
-			return { threadId: t.id!, messageId: msg.id!, subject, snippet, lastMessageDate };
+			return { threadId: t.id!, messageId: msg.id!, subject, from, snippet, lastMessageDate };
 		})
 	);
 

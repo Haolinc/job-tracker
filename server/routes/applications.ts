@@ -5,72 +5,88 @@ import type { Status, InterviewStep } from '../types';
 
 const router = Router();
 
-router.get('/', (req: Request, res: Response) => {
-	const apps = db.getAll(req.query as Record<string, string>);
-	res.json(apps);
+router.get('/', async (req: Request, res: Response) => {
+	try {
+		const apps = await db.getAll(req.query as Record<string, string>);
+		res.json(apps);
+	} catch (err) {
+		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to fetch applications' });
+	}
 });
 
-router.post('/', (req: Request, res: Response) => {
-	const { company, role, status, interview_step, date_applied, last_activity, job_url, notes } = req.body as {
-		company: string;
-		role: string;
-		status?: Status;
-		interview_step?: InterviewStep;
-		date_applied?: string;
-		last_activity?: string;
-		job_url?: string;
-		notes?: string;
-	};
+router.post('/', async (req: Request, res: Response) => {
+	try {
+		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes } = req.body as {
+			company: string;
+			role: string;
+			status?: Status;
+			interview_step?: InterviewStep;
+			date_applied?: string;
+			last_activity?: string;
+			job_url?: string;
+			notes?: string;
+		};
 
-	if (!company || !role) {
-		res.status(400).json({ error: 'company and role are required' });
-		return;
-	}
-
-	const app = db.create({
-		company,
-		role,
-		status: status || 'applied',
-		interview_step: interview_step || null,
-		date_applied: date_applied || null,
-		last_activity: last_activity || null,
-		job_url: job_url || null,
-		notes: notes || null,
-		source: 'manual',
-		gmail_thread_id: null,
-	});
-	res.status(201).json(app);
-});
-
-router.patch('/:id', (req: Request<{ id: string }>, res: Response) => {
-	const { id } = req.params;
-	const existing = db.getById(id);
-	if (!existing) {
-		res.status(404).json({ error: 'Not found' });
-		return;
-	}
-
-	const allowed = ['company', 'role', 'status', 'interview_step', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
-	const updates: Record<string, unknown> = {};
-	for (const key of allowed) {
-		if ((req.body as Record<string, unknown>)[key] !== undefined) {
-			updates[key] = (req.body as Record<string, unknown>)[key];
+		if (!company || !role) {
+			res.status(400).json({ error: 'company and role are required' });
+			return;
 		}
-	}
 
-	const updated = db.update(id, updates);
-	res.json(updated);
+		const app = await db.create({
+			company,
+			role,
+			status: status || 'applied',
+			interview_step: interview_step || null,
+			date_applied: date_applied || null,
+			last_activity: last_activity || null,
+			job_url: job_url || null,
+			notes: notes || null,
+			source: 'manual',
+			gmail_thread_id: null,
+		});
+		res.status(201).json(app);
+	} catch (err) {
+		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create application' });
+	}
 });
 
-router.delete('/:id', (req: Request<{ id: string }>, res: Response) => {
-	const { id } = req.params;
-	const existing = db.getById(id);
-	if (!existing) {
-		res.status(404).json({ error: 'Not found' });
-		return;
+router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
+	try {
+		const { id } = req.params;
+		const existing = await db.getById(id);
+		if (!existing) {
+			res.status(404).json({ error: 'Not found' });
+			return;
+		}
+
+		const allowed = ['company', 'role', 'status', 'interview_step', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
+		const updates: Record<string, unknown> = {};
+		for (const key of allowed) {
+			if ((req.body as Record<string, unknown>)[key] !== undefined) {
+				updates[key] = (req.body as Record<string, unknown>)[key];
+			}
+		}
+
+		const updated = await db.update(id, updates);
+		res.json(updated);
+	} catch (err) {
+		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update application' });
 	}
-	db.remove(id);
-	res.status(204).send();
+});
+
+router.delete('/:id', async (req: Request<{ id: string }>, res: Response) => {
+	try {
+		const { id } = req.params;
+		const existing = await db.getById(id);
+		if (!existing) {
+			res.status(404).json({ error: 'Not found' });
+			return;
+		}
+		await db.remove(id);
+		res.status(204).send();
+	} catch (err) {
+		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to delete application' });
+	}
 });
 
 export default router;

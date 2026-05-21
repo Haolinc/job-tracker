@@ -22,7 +22,7 @@ interface ColumnProps {
 	col: Column;
 	apps: Application[];
 	onEdit: (app: Application) => void;
-	onDelete: (id: number) => void;
+	onDelete: (id: string) => void;
 }
 
 function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
@@ -47,8 +47,8 @@ function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
 interface BoardProps {
 	applications: Application[];
 	onEdit: (app: Application) => void;
-	onDelete: (id: number) => void;
-	onStatusChange: (id: number, status: Status) => void;
+	onDelete: (id: string) => void;
+	onStatusChange: (id: string, status: Status) => void;
 }
 
 export default function Board({ applications, onEdit, onDelete, onStatusChange }: BoardProps) {

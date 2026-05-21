@@ -13,7 +13,7 @@ export type Source = 'manual' | 'gmail';
 export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
 
 export interface Application {
-	id: number;
+	id: string;
 	company: string;
 	role: string;
 	status: Status;
@@ -29,7 +29,7 @@ export interface Application {
 }
 
 export interface SyncRecord {
-	id: number;
+	id: string;
 	added: number;
 	updated: number;
 	skipped: number;
@@ -47,6 +47,7 @@ export interface EmailResult {
 	threadId: string;
 	messageId: string;
 	subject: string;
+	from: string;       // full "From" header, e.g. "Walmart Careers <noreply@walmart.com>"
 	snippet: string;
 	lastMessageDate: string;
 }

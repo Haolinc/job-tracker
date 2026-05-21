@@ -27,13 +27,13 @@ export function useApplications() {
 		return created;
 	};
 
-	const update = async (id: number, data: Partial<Application>): Promise<Application> => {
+	const update = async (id: string, data: Partial<Application>): Promise<Application> => {
 		const updated = await updateApplication(id, data);
 		setApplications(prev => prev.map(a => a.id === id ? updated : a));
 		return updated;
 	};
 
-	const remove = async (id: number): Promise<void> => {
+	const remove = async (id: string): Promise<void> => {
 		await deleteApplication(id);
 		setApplications(prev => prev.filter(a => a.id !== id));
 	};

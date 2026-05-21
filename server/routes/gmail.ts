@@ -13,11 +13,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		let added = 0, updated = 0, skipped = 0;
 
 		for (const email of emails) {
-			if (db.isEmailSynced(email.threadId)) { skipped++; continue; }
+			if (await db.isEmailSynced(email.threadId)) { skipped++; continue; }
 
 			let classification;
 			try {
-				classification = await classifyEmail(email.subject, email.snippet);
+				classification = await classifyEmail(email.subject, email.from, email.snippet);
 			} catch {
 				skipped++;
 				continue;
@@ -25,40 +25,46 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			const { category, company, role, confidence } = classification;
 
-			if (category === 'ignored' || confidence < 0.6 || !company) {
-				db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: 'ignored' });
+			// Ignore newsletters, cold outreach, and emails where we can't even identify
+			// the company (confidence < 0.5 means even the category is uncertain).
+			if (category === 'ignored' || confidence < 0.5 || !company) {
+				await db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: 'ignored' });
 				skipped++;
 				continue;
 			}
 
-			const existing = role ? db.findByCompanyRole(company, role) : undefined;
+			const existing = role ? await db.findByCompanyRole(company, role) : undefined;
 
 			if (existing) {
-				db.update(existing.id, {
+				await db.update(existing.id, {
 					status: category === 'applied' ? existing.status : category,
 					last_activity: email.lastMessageDate,
 				});
 				updated++;
 			} else {
-				db.create({
+				const resolvedRole = role || 'Unknown Role';
+				const notes = role
+					? `Auto-detected from Gmail: ${email.subject}`
+					: `Auto-detected from Gmail: ${email.subject}\n⚠️ Role could not be extracted — please update manually.`;
+				await db.create({
 					company,
-					role: role || 'Unknown Role',
+					role: resolvedRole,
 					status: category,
 					interview_step: null,
 					date_applied: email.lastMessageDate,
 					last_activity: email.lastMessageDate,
 					job_url: null,
-					notes: `Auto-detected from Gmail: ${email.subject}`,
+					notes,
 					source: 'gmail',
 					gmail_thread_id: email.threadId,
 				});
 				added++;
 			}
 
-			db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: category });
+			await db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: category });
 		}
 
-		db.addSyncRecord({ added, updated, skipped });
+		await db.addSyncRecord({ added, updated, skipped });
 		res.json({ added, updated, skipped });
 	} catch (err) {
 		console.error('Sync error:', err);
@@ -66,8 +72,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	}
 });
 
-router.get('/sync/history', (_req: Request, res: Response) => {
-	res.json(db.getSyncHistory());
+router.get('/sync/history', async (_req: Request, res: Response) => {
+	res.json(await db.getSyncHistory());
 });
 
 export default router;

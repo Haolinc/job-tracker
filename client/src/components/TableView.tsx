@@ -30,7 +30,7 @@ const PAGE_SIZE = 25;
 interface Props {
 	applications: Application[];
 	onEdit: (app: Application) => void;
-	onDelete: (id: number) => void;
+	onDelete: (id: string) => void;
 }
 
 interface ThProps {

@@ -3,7 +3,7 @@ export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
 export type Source = 'manual' | 'gmail';
 
 export interface Application {
-	id: number;
+	id: string;
 	company: string;
 	role: string;
 	status: Status;
@@ -25,7 +25,7 @@ export interface SyncResult {
 }
 
 export interface SyncRecord {
-	id: number;
+	id: string;
 	added: number;
 	updated: number;
 	skipped: number;
@@ -38,7 +38,7 @@ export interface Filters {
 }
 
 export interface ApplicationFormData {
-	id?: number;
+	id?: string;
 	company: string;
 	role: string;
 	status: Status;

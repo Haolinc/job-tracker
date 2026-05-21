@@ -1,116 +1,166 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import mongoose, { Schema } from 'mongoose';
 import type { Application, CreateApplicationData, MarkSyncedData, SyncRecord } from '../types';
 
-const DB_PATH = path.join(__dirname, '../../data/tracker.db');
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+// ── Application ────────────────────────────────────────────────────────────
 
-db.exec(`
-	CREATE TABLE IF NOT EXISTS applications (
-		id              INTEGER PRIMARY KEY AUTOINCREMENT,
-		company         TEXT NOT NULL,
-		role            TEXT NOT NULL,
-		status          TEXT DEFAULT 'applied',
-		interview_step  TEXT,
-		date_applied    TEXT,
-		last_activity   TEXT,
-		job_url         TEXT,
-		notes           TEXT,
-		source          TEXT DEFAULT 'manual',
-		gmail_thread_id TEXT,
-		created_at      TEXT DEFAULT (datetime('now')),
-		updated_at      TEXT DEFAULT (datetime('now'))
-	);
-
-	CREATE TABLE IF NOT EXISTS synced_emails (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		thread_id     TEXT UNIQUE NOT NULL,
-		message_id    TEXT NOT NULL,
-		classified_as TEXT,
-		synced_at     TEXT DEFAULT (datetime('now'))
-	);
-
-	CREATE TABLE IF NOT EXISTS sync_history (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		added      INTEGER DEFAULT 0,
-		updated    INTEGER DEFAULT 0,
-		skipped    INTEGER DEFAULT 0,
-		synced_at  TEXT DEFAULT (datetime('now'))
-	);
-`);
-
-// Migrations for existing databases — SQLite throws on duplicate columns so we swallow those errors
-try { db.exec("ALTER TABLE applications ADD COLUMN interview_step TEXT"); } catch { /* already exists */ }
-try { db.exec("ALTER TABLE applications ADD COLUMN last_activity TEXT"); } catch { /* already exists */ }
-
-interface GetAllFilters {
-	search?: string;
-	priority?: string;
-	status?: string;
+interface AppDoc {
+	_id: mongoose.Types.ObjectId;
+	company: string;
+	role: string;
+	status: string;
+	interview_step: string | null;
+	date_applied: string | null;
+	last_activity: string | null;
+	job_url: string | null;
+	notes: string | null;
+	source: string;
+	gmail_thread_id: string | null;
+	created_at: Date;
+	updated_at: Date;
 }
 
-const getAll = (filters: GetAllFilters = {}): Application[] => {
-	let query = 'SELECT * FROM applications WHERE 1=1';
-	const params: string[] = [];
+const appSchema = new Schema<AppDoc>({
+	company:         { type: String, required: true },
+	role:            { type: String, required: true },
+	status:          { type: String, default: 'applied' },
+	interview_step:  { type: String, default: null },
+	date_applied:    { type: String, default: null },
+	last_activity:   { type: String, default: null },
+	job_url:         { type: String, default: null },
+	notes:           { type: String, default: null },
+	source:          { type: String, default: 'manual' },
+	gmail_thread_id: { type: String, default: null },
+}, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
 
+const AppModel = mongoose.model<AppDoc>('Application', appSchema);
+
+function toApp(doc: AppDoc): Application {
+	return {
+		id:              doc._id.toString(),
+		company:         doc.company,
+		role:            doc.role,
+		status:          doc.status as Application['status'],
+		interview_step:  (doc.interview_step ?? null) as Application['interview_step'],
+		date_applied:    doc.date_applied,
+		last_activity:   doc.last_activity,
+		job_url:         doc.job_url,
+		notes:           doc.notes,
+		source:          doc.source as Application['source'],
+		gmail_thread_id: doc.gmail_thread_id,
+		created_at:      doc.created_at.toISOString(),
+		updated_at:      doc.updated_at.toISOString(),
+	};
+}
+
+// ── Synced Emails ──────────────────────────────────────────────────────────
+
+const syncedEmailSchema = new Schema({
+	thread_id:     { type: String, unique: true, required: true },
+	message_id:    { type: String, required: true },
+	classified_as: String,
+	synced_at:     { type: Date, default: () => new Date() },
+});
+
+const SyncedEmailModel = mongoose.model('SyncedEmail', syncedEmailSchema);
+
+// ── Sync History ───────────────────────────────────────────────────────────
+
+interface SyncHistoryDoc {
+	_id: mongoose.Types.ObjectId;
+	added: number;
+	updated: number;
+	skipped: number;
+	synced_at: Date;
+}
+
+const syncHistorySchema = new Schema<SyncHistoryDoc>({
+	added:     { type: Number, default: 0 },
+	updated:   { type: Number, default: 0 },
+	skipped:   { type: Number, default: 0 },
+	synced_at: { type: Date, default: () => new Date() },
+});
+
+const SyncHistoryModel = mongoose.model<SyncHistoryDoc>('SyncHistory', syncHistorySchema);
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+// Escape special regex characters in user-supplied strings to prevent ReDoS
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ── Connection ─────────────────────────────────────────────────────────────
+
+export const connect = (): Promise<typeof mongoose> =>
+	mongoose.connect(process.env.MONGODB_URI!);
+
+// ── DB Functions ───────────────────────────────────────────────────────────
+
+interface GetAllFilters { search?: string; status?: string; }
+
+export const getAll = async (filters: GetAllFilters = {}): Promise<Application[]> => {
+	const query: Record<string, unknown> = {};
 	if (filters.search) {
-		query += ' AND (company LIKE ? OR role LIKE ?)';
-		params.push(`%${filters.search}%`, `%${filters.search}%`);
+		const re = new RegExp(escapeRegex(filters.search), 'i');
+		query.$or = [{ company: re }, { role: re }];
 	}
-	if (filters.status) {
-		query += ' AND status = ?';
-		params.push(filters.status);
-	}
-
-	query += ' ORDER BY updated_at DESC';
-	return db.prepare(query).all(...params) as Application[];
+	if (filters.status) query.status = filters.status;
+	const docs = await AppModel.find(query).sort({ updated_at: -1 }).lean<AppDoc[]>();
+	return docs.map(toApp);
 };
 
-const getById = (id: number | string): Application | undefined =>
-	db.prepare('SELECT * FROM applications WHERE id = ?').get(id) as Application | undefined;
-
-const create = (data: CreateApplicationData): Application => {
-	const stmt = db.prepare(`
-		INSERT INTO applications (company, role, status, interview_step, date_applied, last_activity, job_url, notes, source, gmail_thread_id)
-		VALUES (@company, @role, @status, @interview_step, @date_applied, @last_activity, @job_url, @notes, @source, @gmail_thread_id)
-	`);
-	const result = stmt.run(data as unknown as Record<string, unknown>);
-	return getById(Number(result.lastInsertRowid))!;
+export const getById = async (id: string): Promise<Application | undefined> => {
+	try {
+		const doc = await AppModel.findById(id).lean<AppDoc>();
+		return doc ? toApp(doc) : undefined;
+	} catch { return undefined; }
 };
 
-const update = (id: number | string, data: Record<string, unknown>): Application => {
-	const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
-	db.prepare(`UPDATE applications SET ${fields}, updated_at = datetime('now') WHERE id = @id`)
-		.run({ ...data, id });
-	return getById(id)!;
+export const create = async (data: CreateApplicationData): Promise<Application> => {
+	const doc = await AppModel.create(data);
+	const lean = doc.toObject() as AppDoc;
+	return toApp(lean);
 };
 
-const remove = (id: number | string): void => {
-	db.prepare('DELETE FROM applications WHERE id = ?').run(id);
+export const update = async (id: string, data: Record<string, unknown>): Promise<Application> => {
+	const doc = await AppModel.findByIdAndUpdate(id, { $set: data }, { returnDocument: 'after' }).lean<AppDoc>();
+	if (!doc) throw new Error('Not found');
+	return toApp(doc);
 };
 
-const findByCompanyRole = (company: string, role: string): Application | undefined =>
-	db.prepare('SELECT * FROM applications WHERE lower(company) = lower(?) AND lower(role) = lower(?)')
-		.get(company, role) as Application | undefined;
-
-const isEmailSynced = (threadId: string): boolean =>
-	!!db.prepare('SELECT id FROM synced_emails WHERE thread_id = ?').get(threadId);
-
-const markEmailSynced = (data: MarkSyncedData): void => {
-	db.prepare('INSERT OR IGNORE INTO synced_emails (thread_id, message_id, classified_as) VALUES (@thread_id, @message_id, @classified_as)')
-		.run(data as unknown as Record<string, unknown>);
+export const remove = async (id: string): Promise<void> => {
+	await AppModel.findByIdAndDelete(id);
 };
 
-const addSyncRecord = (data: { added: number; updated: number; skipped: number }): void => {
-	db.prepare('INSERT INTO sync_history (added, updated, skipped) VALUES (@added, @updated, @skipped)')
-		.run(data);
+export const findByCompanyRole = async (company: string, role: string): Promise<Application | undefined> => {
+	const doc = await AppModel.findOne({
+		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
+		role:    new RegExp(`^${escapeRegex(role)}$`, 'i'),
+	}).lean<AppDoc>();
+	return doc ? toApp(doc) : undefined;
 };
 
-const getSyncHistory = (): SyncRecord[] =>
-	db.prepare('SELECT * FROM sync_history ORDER BY synced_at DESC LIMIT 20').all() as SyncRecord[];
+export const isEmailSynced = async (threadId: string): Promise<boolean> => {
+	return !!(await SyncedEmailModel.findOne({ thread_id: threadId }));
+};
 
-export {
-	getAll, getById, create, update, remove, findByCompanyRole,
-	isEmailSynced, markEmailSynced, addSyncRecord, getSyncHistory,
+export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
+	await SyncedEmailModel.updateOne(
+		{ thread_id: data.thread_id },
+		{ $setOnInsert: { message_id: data.message_id, classified_as: data.classified_as } },
+		{ upsert: true },
+	);
+};
+
+export const addSyncRecord = async (data: { added: number; updated: number; skipped: number }): Promise<void> => {
+	await SyncHistoryModel.create(data);
+};
+
+export const getSyncHistory = async (): Promise<SyncRecord[]> => {
+	const docs = await SyncHistoryModel.find().sort({ synced_at: -1 }).limit(20).lean<SyncHistoryDoc[]>();
+	return docs.map(doc => ({
+		id:        doc._id.toString(),
+		added:     doc.added,
+		updated:   doc.updated,
+		skipped:   doc.skipped,
+		synced_at: doc.synced_at.toISOString(),
+	}));
 };

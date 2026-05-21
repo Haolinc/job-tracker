@@ -12,7 +12,7 @@ const STEP_LABELS: Record<InterviewStep, string> = {
 interface Props {
 	app: Application;
 	onEdit: (app: Application) => void;
-	onDelete: (id: number) => void;
+	onDelete: (id: string) => void;
 }
 
 export default function Card({ app, onEdit, onDelete }: Props) {

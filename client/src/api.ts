@@ -9,10 +9,10 @@ export const getApplications = (params?: Record<string, string>): Promise<Applic
 export const createApplication = (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> =>
 	api.post('/applications', data).then(r => r.data as Application);
 
-export const updateApplication = (id: number, data: Partial<Application>): Promise<Application> =>
+export const updateApplication = (id: string, data: Partial<Application>): Promise<Application> =>
 	api.patch(`/applications/${id}`, data).then(r => r.data as Application);
 
-export const deleteApplication = (id: number): Promise<void> =>
+export const deleteApplication = (id: string): Promise<void> =>
 	api.delete(`/applications/${id}`);
 
 export const getAuthStatus = (): Promise<{ connected: boolean }> =>

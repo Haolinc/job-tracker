@@ -51,13 +51,13 @@ export default function App() {
 		fetchAll(filters);
 	};
 
-	const handleDelete = async (id: number) => {
+	const handleDelete = async (id: string) => {
 		if (confirm('Delete this application?')) {
 			await remove(id);
 		}
 	};
 
-	const handleStatusChange = async (id: number, status: Status) => {
+	const handleStatusChange = async (id: string, status: Status) => {
 		await update(id, { status });
 	};
 

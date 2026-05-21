@@ -10,7 +10,7 @@ interface Props {
 	onSync: () => void;
 }
 
-export default function GmailSync({ connected, syncing, lastResult, error, onDisconnect, onSync }: Props) {
+export default function GmailSync({ connected, syncing, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
 	return (
 		<div className="flex items-center gap-3 flex-wrap">
 			{connected ? (
@@ -37,8 +37,8 @@ export default function GmailSync({ connected, syncing, lastResult, error, onDis
 					{error && <span className="text-xs text-red-500">{error}</span>}
 				</>
 			) : (
-				<a
-					href="/api/auth/google"
+				<button
+					onClick={onConnect}
 					className="flex items-center gap-2 px-4 py-2 border border-gray-300 hover:border-gray-400 bg-white text-gray-700 text-sm font-medium rounded-lg transition-colors"
 				>
 					<svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -48,7 +48,7 @@ export default function GmailSync({ connected, syncing, lastResult, error, onDis
 						<path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
 					</svg>
 					Connect Gmail
-				</a>
+				</button>
 			)}
 		</div>
 	);
