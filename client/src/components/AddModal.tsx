@@ -1,9 +1,9 @@
 import { useState, type ReactNode, type SubmitEventHandler } from 'react';
-import type { ApplicationFormData, Status, Priority } from '../types';
+import type { ApplicationFormData, Status, InterviewStep } from '../types';
 
 const EMPTY: ApplicationFormData = {
-	company: '', role: '', status: 'wishlist', priority: 'medium',
-	date_applied: '', job_url: '', notes: '',
+	company: '', role: '', status: 'applied',
+	interview_step: '', date_applied: '', last_activity: '', job_url: '', notes: '',
 };
 
 interface Props {
@@ -45,27 +45,33 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 						<input value={form.role} onChange={e => set('role', e.target.value)}
 							required className={inputCls} placeholder="Software Engineer" />
 					</Field>
-					<div className="grid grid-cols-2 gap-3">
-						<Field label="Status">
-							<select value={form.status} onChange={e => set('status', e.target.value as Status)} className={inputCls}>
-								<option value="wishlist">Wishlist</option>
-								<option value="applied">Applied</option>
-								<option value="interview">Interview</option>
-								<option value="offer">Offer</option>
-								<option value="rejected">Rejected</option>
+					<Field label="Status">
+						<select value={form.status} onChange={e => set('status', e.target.value as Status)} className={inputCls}>
+							<option value="applied">Applied</option>
+							<option value="interview">Interview</option>
+							<option value="offer">Offer</option>
+							<option value="rejected">Rejected</option>
+						</select>
+					</Field>
+					{form.status === 'interview' && (
+						<Field label="Interview Stage">
+							<select value={form.interview_step} onChange={e => set('interview_step', e.target.value as InterviewStep | '')} className={inputCls}>
+								<option value="">— select stage —</option>
+								<option value="phone_screen">Phone Screen</option>
+								<option value="technical">Technical</option>
+								<option value="onsite">Onsite</option>
+								<option value="final">Final Round</option>
 							</select>
 						</Field>
-						<Field label="Priority">
-							<select value={form.priority} onChange={e => set('priority', e.target.value as Priority)} className={inputCls}>
-								<option value="high">High</option>
-								<option value="medium">Medium</option>
-								<option value="low">Low</option>
-							</select>
+					)}
+					<div className="grid grid-cols-2 gap-3">
+						<Field label="Date Applied">
+							<input type="date" value={form.date_applied} onChange={e => set('date_applied', e.target.value)} className={inputCls} />
+						</Field>
+						<Field label="Last Response">
+							<input type="date" value={form.last_activity} onChange={e => set('last_activity', e.target.value)} className={inputCls} />
 						</Field>
 					</div>
-					<Field label="Date Applied">
-						<input type="date" value={form.date_applied} onChange={e => set('date_applied', e.target.value)} className={inputCls} />
-					</Field>
 					<Field label="Job URL">
 						<input value={form.job_url} onChange={e => set('job_url', e.target.value)}
 							className={inputCls} placeholder="https://..." />

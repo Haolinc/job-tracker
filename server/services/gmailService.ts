@@ -52,10 +52,14 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 			});
 			const messages = thread.data.messages!;
 			const msg = messages[0];
+			const lastMsg = messages[messages.length - 1];
 			const headers = msg.payload?.headers || [];
 			const subject = headers.find(h => h.name === 'Subject')?.value || '';
-			const snippet = messages[messages.length - 1].snippet || '';
-			return { threadId: t.id!, messageId: msg.id!, subject, snippet };
+			const snippet = lastMsg.snippet || '';
+			const lastMessageDate = lastMsg.internalDate
+				? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]
+				: new Date().toISOString().split('T')[0];
+			return { threadId: t.id!, messageId: msg.id!, subject, snippet, lastMessageDate };
 		})
 	);
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import Board from './components/Board';
+import TableView from './components/TableView';
 import AddModal from './components/AddModal';
 import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
@@ -8,12 +9,15 @@ import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
 import type { Application, ApplicationFormData, Filters as FiltersType, Status } from './types';
 
+type View = 'board' | 'table';
+
 export default function App() {
 	const { applications, loading, fetchAll, add, update, remove } = useApplications();
 	const { connected, syncing, lastResult, error: syncError, checkStatus, disconnect, sync } = useGmailSync();
 
-	const [filters, setFilters] = useState<FiltersType>({ search: '', priority: '' });
+	const [filters, setFilters] = useState<FiltersType>({ search: '' });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
+	const [view, setView] = useState<View>('board');
 
 	useEffect(() => {
 		fetchAll(filters);
@@ -29,17 +33,19 @@ export default function App() {
 	}, [checkStatus]);
 
 	const handleSave = async (form: ApplicationFormData) => {
+		const { interview_step, date_applied, last_activity, job_url, notes, ...rest } = form;
+		const cleaned = {
+			...rest,
+			interview_step: interview_step || null,
+			date_applied: date_applied || null,
+			last_activity: last_activity || null,
+			job_url: job_url || null,
+			notes: notes || null,
+		};
 		if (form.id) {
-			await update(form.id, form as Partial<Application>);
+			await update(form.id, cleaned as Partial<Application>);
 		} else {
-			await add({
-				...form,
-				date_applied: form.date_applied || null,
-				job_url: form.job_url || null,
-				notes: form.notes || null,
-				source: 'manual',
-				gmail_thread_id: null,
-			});
+			await add({ ...cleaned, source: 'manual', gmail_thread_id: null });
 		}
 		setModal(null);
 		fetchAll(filters);
@@ -82,24 +88,42 @@ export default function App() {
 			<main className="max-w-screen-xl mx-auto px-6 py-6 space-y-5">
 				<div className="flex flex-wrap items-center justify-between gap-4">
 					<StatsBar applications={applications} />
-					<button
-						onClick={() => setModal({})}
-						className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
-					>
-						+ Add Application
-					</button>
+					<div className="flex items-center gap-2">
+						<div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium">
+							<button
+								onClick={() => setView('board')}
+								className={`px-3 py-2 ${view === 'board' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
+							>⊞ Board</button>
+							<button
+								onClick={() => setView('table')}
+								className={`px-3 py-2 border-l border-gray-200 ${view === 'table' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
+							>☰ Table</button>
+						</div>
+						<button
+							onClick={() => setModal({})}
+							className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
+						>
+							+ Add Application
+						</button>
+					</div>
 				</div>
 
 				<Filters filters={filters} onChange={setFilters} />
 
 				{loading ? (
 					<div className="text-center text-gray-400 py-12">Loading...</div>
-				) : (
+				) : view === 'board' ? (
 					<Board
 						applications={applications}
 						onEdit={app => setModal(app as Partial<ApplicationFormData>)}
 						onDelete={handleDelete}
 						onStatusChange={handleStatusChange}
+					/>
+				) : (
+					<TableView
+						applications={applications}
+						onEdit={app => setModal(app as Partial<ApplicationFormData>)}
+						onDelete={handleDelete}
 					/>
 				)}
 			</main>

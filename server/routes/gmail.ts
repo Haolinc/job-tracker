@@ -34,15 +34,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			const existing = role ? db.findByCompanyRole(company, role) : undefined;
 
 			if (existing) {
-				db.update(existing.id, { status: category === 'applied' ? existing.status : category });
+				db.update(existing.id, {
+					status: category === 'applied' ? existing.status : category,
+					last_activity: email.lastMessageDate,
+				});
 				updated++;
 			} else {
 				db.create({
 					company,
 					role: role || 'Unknown Role',
 					status: category,
-					priority: 'medium',
-					date_applied: new Date().toISOString().split('T')[0],
+					interview_step: null,
+					date_applied: email.lastMessageDate,
+					last_activity: email.lastMessageDate,
 					job_url: null,
 					notes: `Auto-detected from Gmail: ${email.subject}`,
 					source: 'gmail',

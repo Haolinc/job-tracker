@@ -11,9 +11,10 @@ db.exec(`
 		id              INTEGER PRIMARY KEY AUTOINCREMENT,
 		company         TEXT NOT NULL,
 		role            TEXT NOT NULL,
-		status          TEXT DEFAULT 'wishlist',
-		priority        TEXT DEFAULT 'medium',
+		status          TEXT DEFAULT 'applied',
+		interview_step  TEXT,
 		date_applied    TEXT,
+		last_activity   TEXT,
 		job_url         TEXT,
 		notes           TEXT,
 		source          TEXT DEFAULT 'manual',
@@ -39,6 +40,10 @@ db.exec(`
 	);
 `);
 
+// Migrations for existing databases — SQLite throws on duplicate columns so we swallow those errors
+try { db.exec("ALTER TABLE applications ADD COLUMN interview_step TEXT"); } catch { /* already exists */ }
+try { db.exec("ALTER TABLE applications ADD COLUMN last_activity TEXT"); } catch { /* already exists */ }
+
 interface GetAllFilters {
 	search?: string;
 	priority?: string;
@@ -52,10 +57,6 @@ const getAll = (filters: GetAllFilters = {}): Application[] => {
 	if (filters.search) {
 		query += ' AND (company LIKE ? OR role LIKE ?)';
 		params.push(`%${filters.search}%`, `%${filters.search}%`);
-	}
-	if (filters.priority) {
-		query += ' AND priority = ?';
-		params.push(filters.priority);
 	}
 	if (filters.status) {
 		query += ' AND status = ?';
@@ -71,8 +72,8 @@ const getById = (id: number | string): Application | undefined =>
 
 const create = (data: CreateApplicationData): Application => {
 	const stmt = db.prepare(`
-		INSERT INTO applications (company, role, status, priority, date_applied, job_url, notes, source, gmail_thread_id)
-		VALUES (@company, @role, @status, @priority, @date_applied, @job_url, @notes, @source, @gmail_thread_id)
+		INSERT INTO applications (company, role, status, interview_step, date_applied, last_activity, job_url, notes, source, gmail_thread_id)
+		VALUES (@company, @role, @status, @interview_step, @date_applied, @last_activity, @job_url, @notes, @source, @gmail_thread_id)
 	`);
 	const result = stmt.run(data as unknown as Record<string, unknown>);
 	return getById(Number(result.lastInsertRowid))!;

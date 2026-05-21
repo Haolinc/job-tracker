@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import * as db from '../services/db';
-import type { Status, Priority } from '../types';
+import type { Status, InterviewStep } from '../types';
 
 const router = Router();
 
@@ -11,12 +11,13 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 router.post('/', (req: Request, res: Response) => {
-	const { company, role, status, priority, date_applied, job_url, notes } = req.body as {
+	const { company, role, status, interview_step, date_applied, last_activity, job_url, notes } = req.body as {
 		company: string;
 		role: string;
 		status?: Status;
-		priority?: Priority;
+		interview_step?: InterviewStep;
 		date_applied?: string;
+		last_activity?: string;
 		job_url?: string;
 		notes?: string;
 	};
@@ -29,9 +30,10 @@ router.post('/', (req: Request, res: Response) => {
 	const app = db.create({
 		company,
 		role,
-		status: status || 'wishlist',
-		priority: priority || 'medium',
+		status: status || 'applied',
+		interview_step: interview_step || null,
 		date_applied: date_applied || null,
+		last_activity: last_activity || null,
 		job_url: job_url || null,
 		notes: notes || null,
 		source: 'manual',
@@ -48,7 +50,7 @@ router.patch('/:id', (req: Request<{ id: string }>, res: Response) => {
 		return;
 	}
 
-	const allowed = ['company', 'role', 'status', 'priority', 'date_applied', 'job_url', 'notes'] as const;
+	const allowed = ['company', 'role', 'status', 'interview_step', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
 	const updates: Record<string, unknown> = {};
 	for (const key of allowed) {
 		if ((req.body as Record<string, unknown>)[key] !== undefined) {

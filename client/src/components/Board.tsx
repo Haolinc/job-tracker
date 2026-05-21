@@ -12,8 +12,7 @@ interface Column {
 }
 
 const COLUMNS: Column[] = [
-	{ id: 'wishlist',  label: 'Wishlist',  color: 'bg-slate-100 border-slate-300' },
-	{ id: 'applied',   label: 'Applied',   color: 'bg-blue-50  border-blue-200' },
+	{ id: 'applied',   label: 'Applied',   color: 'bg-blue-50   border-blue-200' },
 	{ id: 'interview', label: 'Interview', color: 'bg-yellow-50 border-yellow-200' },
 	{ id: 'offer',     label: 'Offer',     color: 'bg-green-50  border-green-200' },
 	{ id: 'rejected',  label: 'Rejected',  color: 'bg-red-50    border-red-200' },

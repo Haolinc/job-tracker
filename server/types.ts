@@ -7,8 +7,8 @@ declare module 'express-session' {
 	}
 }
 
-export type Status = 'wishlist' | 'applied' | 'interview' | 'offer' | 'rejected';
-export type Priority = 'high' | 'medium' | 'low';
+export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
+export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
 export type Source = 'manual' | 'gmail';
 export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
 
@@ -17,8 +17,9 @@ export interface Application {
 	company: string;
 	role: string;
 	status: Status;
-	priority: Priority;
+	interview_step: InterviewStep | null;
 	date_applied: string | null;
+	last_activity: string | null;
 	job_url: string | null;
 	notes: string | null;
 	source: Source;
@@ -47,14 +48,16 @@ export interface EmailResult {
 	messageId: string;
 	subject: string;
 	snippet: string;
+	lastMessageDate: string;
 }
 
 export interface CreateApplicationData {
 	company: string;
 	role: string;
 	status: Status;
-	priority: Priority;
+	interview_step: InterviewStep | null;
 	date_applied: string | null;
+	last_activity: string | null;
 	job_url: string | null;
 	notes: string | null;
 	source: Source;

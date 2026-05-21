@@ -1,11 +1,12 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Application, Priority } from '../types';
+import type { Application, InterviewStep } from '../types';
 
-const PRIORITY_COLORS: Record<Priority, string> = {
-	high: 'bg-red-100 text-red-700',
-	medium: 'bg-yellow-100 text-yellow-700',
-	low: 'bg-gray-100 text-gray-600',
+const STEP_LABELS: Record<InterviewStep, string> = {
+	phone_screen: 'Phone Screen',
+	technical: 'Technical',
+	onsite: 'Onsite',
+	final: 'Final Round',
 };
 
 interface Props {
@@ -53,14 +54,22 @@ export default function Card({ app, onEdit, onDelete }: Props) {
 			</div>
 
 			<div className="mt-2 flex items-center gap-2 flex-wrap">
-				<span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PRIORITY_COLORS[app.priority] ?? PRIORITY_COLORS.medium}`}>
-					{app.priority}
-				</span>
-				{app.date_applied && (
-					<span className="text-xs text-gray-400">{app.date_applied}</span>
+				{app.interview_step && (
+					<span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">
+						{STEP_LABELS[app.interview_step]}
+					</span>
 				)}
 				{app.source === 'gmail' && (
 					<span className="text-xs text-blue-400" title="Auto-detected from Gmail">📧</span>
+				)}
+			</div>
+
+			<div className="mt-2 flex flex-col gap-0.5">
+				{app.date_applied && (
+					<span className="text-xs text-gray-400">Applied: {app.date_applied}</span>
+				)}
+				{app.last_activity && (
+					<span className="text-xs text-gray-400">Last response: {app.last_activity}</span>
 				)}
 			</div>
 
