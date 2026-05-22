@@ -28,14 +28,6 @@ export interface Application {
 	updated_at: string;
 }
 
-export interface SyncRecord {
-	id: string;
-	added: number;
-	updated: number;
-	skipped: number;
-	synced_at: string;
-}
-
 export interface Classification {
 	category: Category;
 	company: string | null;

@@ -4,16 +4,18 @@ import { requireAuth } from '../middleware/auth';
 import { fetchJobEmails } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
 import * as db from '../services/db';
+import { errMsg } from '../utils';
 
 const router = Router();
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
 		const emails = await fetchJobEmails(req.session.tokens!);
+		const syncedIds = await db.getSyncedThreadIds(emails.map(e => e.threadId));
 		let added = 0, updated = 0, skipped = 0;
 
 		for (const email of emails) {
-			if (await db.isEmailSynced(email.threadId)) { skipped++; continue; }
+			if (syncedIds.has(email.threadId)) { skipped++; continue; }
 
 			let classification;
 			try {
@@ -64,16 +66,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			await db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: category });
 		}
 
-		await db.addSyncRecord({ added, updated, skipped });
 		res.json({ added, updated, skipped });
 	} catch (err) {
 		console.error('Sync error:', err);
-		res.status(500).json({ error: 'Sync failed: ' + (err instanceof Error ? err.message : String(err)) });
+		res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
 	}
 });
 
-router.get('/sync/history', async (_req: Request, res: Response) => {
-	res.json(await db.getSyncHistory());
-});
 
 export default router;

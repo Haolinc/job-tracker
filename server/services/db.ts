@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { Application, CreateApplicationData, MarkSyncedData, SyncRecord } from '../types';
+import type { Application, CreateApplicationData, MarkSyncedData } from '../types';
 
 // ── Application ────────────────────────────────────────────────────────────
 
@@ -63,25 +63,6 @@ const syncedEmailSchema = new Schema({
 
 const SyncedEmailModel = mongoose.model('SyncedEmail', syncedEmailSchema);
 
-// ── Sync History ───────────────────────────────────────────────────────────
-
-interface SyncHistoryDoc {
-	_id: mongoose.Types.ObjectId;
-	added: number;
-	updated: number;
-	skipped: number;
-	synced_at: Date;
-}
-
-const syncHistorySchema = new Schema<SyncHistoryDoc>({
-	added:     { type: Number, default: 0 },
-	updated:   { type: Number, default: 0 },
-	skipped:   { type: Number, default: 0 },
-	synced_at: { type: Date, default: () => new Date() },
-});
-
-const SyncHistoryModel = mongoose.model<SyncHistoryDoc>('SyncHistory', syncHistorySchema);
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 // Escape special regex characters in user-supplied strings to prevent ReDoS
@@ -126,8 +107,9 @@ export const update = async (id: string, data: Record<string, unknown>): Promise
 	return toApp(doc);
 };
 
-export const remove = async (id: string): Promise<void> => {
-	await AppModel.findByIdAndDelete(id);
+export const remove = async (id: string): Promise<boolean> => {
+	const doc = await AppModel.findByIdAndDelete(id).lean();
+	return !!doc;
 };
 
 export const findByCompanyRole = async (company: string, role: string): Promise<Application | undefined> => {
@@ -142,6 +124,13 @@ export const isEmailSynced = async (threadId: string): Promise<boolean> => {
 	return !!(await SyncedEmailModel.findOne({ thread_id: threadId }));
 };
 
+export const getSyncedThreadIds = async (threadIds: string[]): Promise<Set<string>> => {
+	const docs = await SyncedEmailModel
+		.find({ thread_id: { $in: threadIds } }, 'thread_id')
+		.lean<{ thread_id: string }[]>();
+	return new Set(docs.map(d => d.thread_id));
+};
+
 export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
 	await SyncedEmailModel.updateOne(
 		{ thread_id: data.thread_id },
@@ -150,17 +139,3 @@ export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
 	);
 };
 
-export const addSyncRecord = async (data: { added: number; updated: number; skipped: number }): Promise<void> => {
-	await SyncHistoryModel.create(data);
-};
-
-export const getSyncHistory = async (): Promise<SyncRecord[]> => {
-	const docs = await SyncHistoryModel.find().sort({ synced_at: -1 }).limit(20).lean<SyncHistoryDoc[]>();
-	return docs.map(doc => ({
-		id:        doc._id.toString(),
-		added:     doc.added,
-		updated:   doc.updated,
-		skipped:   doc.skipped,
-		synced_at: doc.synced_at.toISOString(),
-	}));
-};

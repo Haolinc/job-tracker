@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import * as db from '../services/db';
+import { errMsg } from '../utils';
 import type { Status, InterviewStep } from '../types';
 
 const router = Router();
@@ -10,7 +11,7 @@ router.get('/', async (req: Request, res: Response) => {
 		const apps = await db.getAll(req.query as Record<string, string>);
 		res.json(apps);
 	} catch (err) {
-		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to fetch applications' });
+		res.status(500).json({ error: errMsg(err, 'Failed to fetch applications') });
 	}
 });
 
@@ -46,19 +47,13 @@ router.post('/', async (req: Request, res: Response) => {
 		});
 		res.status(201).json(app);
 	} catch (err) {
-		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create application' });
+		res.status(500).json({ error: errMsg(err, 'Failed to create application') });
 	}
 });
 
 router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
 		const { id } = req.params;
-		const existing = await db.getById(id);
-		if (!existing) {
-			res.status(404).json({ error: 'Not found' });
-			return;
-		}
-
 		const allowed = ['company', 'role', 'status', 'interview_step', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
 		const updates: Record<string, unknown> = {};
 		for (const key of allowed) {
@@ -66,26 +61,21 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 				updates[key] = (req.body as Record<string, unknown>)[key];
 			}
 		}
-
 		const updated = await db.update(id, updates);
 		res.json(updated);
 	} catch (err) {
-		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update application' });
+		const msg = errMsg(err, 'Failed to update application');
+		res.status(msg === 'Not found' ? 404 : 500).json({ error: msg });
 	}
 });
 
 router.delete('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
-		const { id } = req.params;
-		const existing = await db.getById(id);
-		if (!existing) {
-			res.status(404).json({ error: 'Not found' });
-			return;
-		}
-		await db.remove(id);
+		const deleted = await db.remove(req.params.id);
+		if (!deleted) { res.status(404).json({ error: 'Not found' }); return; }
 		res.status(204).send();
 	} catch (err) {
-		res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to delete application' });
+		res.status(500).json({ error: errMsg(err, 'Failed to delete application') });
 	}
 });
 
