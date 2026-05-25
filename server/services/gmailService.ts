@@ -1,6 +1,9 @@
 import { google } from 'googleapis';
+import type { gmail_v1 } from 'googleapis';
 import type { Credentials } from 'google-auth-library';
 import type { EmailResult } from '../types';
+
+const BODY_LIMIT = 2000;
 
 function getOAuthClient() {
 	return new google.auth.OAuth2(
@@ -25,6 +28,43 @@ async function exchangeCode(code: string): Promise<Credentials> {
 	return tokens;
 }
 
+// Recursively extract plain-text body from a message part.
+// Prefers text/plain; falls back to stripped text/html.
+function extractBody(part: gmail_v1.Schema$MessagePart | undefined): string {
+	if (!part) return '';
+
+	if (part.mimeType === 'text/plain' && part.body?.data) {
+		return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+	}
+
+	if (part.parts) {
+		// Prefer plain text first
+		for (const p of part.parts) {
+			if (p.mimeType === 'text/plain' && p.body?.data) {
+				return Buffer.from(p.body.data, 'base64url').toString('utf-8');
+			}
+		}
+		// Recurse into nested multipart
+		for (const p of part.parts) {
+			const text = extractBody(p);
+			if (text) return text;
+		}
+	}
+
+	// Last resort: strip HTML — remove style/script blocks first, then tags
+	if (part.mimeType === 'text/html' && part.body?.data) {
+		const html = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+		return html
+			.replace(/<style[\s\S]*?<\/style>/gi, '')
+			.replace(/<script[\s\S]*?<\/script>/gi, '')
+			.replace(/<[^>]+>/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
+	return '';
+}
+
 async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 	const client = getOAuthClient();
 	client.setCredentials(tokens);
@@ -47,20 +87,20 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 			const thread = await gmail.users.threads.get({
 				userId: 'me',
 				id: t.id!,
-				format: 'metadata',
-				metadataHeaders: ['Subject', 'From'],
+				format: 'full',
 			});
 			const messages = thread.data.messages!;
-			const msg = messages[0];
+			const msg     = messages[0];
 			const lastMsg = messages[messages.length - 1];
 			const headers = msg.payload?.headers || [];
 			const subject = headers.find(h => h.name === 'Subject')?.value || '';
 			const from    = headers.find(h => h.name === 'From')?.value    || '';
-			const snippet = lastMsg.snippet || '';
+			const rawBody = extractBody(msg.payload ?? undefined);
+			const body    = rawBody.slice(0, BODY_LIMIT);
 			const lastMessageDate = lastMsg.internalDate
 				? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]
 				: new Date().toISOString().split('T')[0];
-			return { threadId: t.id!, messageId: msg.id!, subject, from, snippet, lastMessageDate };
+			return { threadId: t.id!, messageId: msg.id!, subject, from, body, lastMessageDate };
 		})
 	);
 

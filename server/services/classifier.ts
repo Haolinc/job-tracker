@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { Classification } from '../types';
+import ollama from 'ollama'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const systemPrompt = `You are a job application email classifier. Given an email's From header, subject, and body snippet, determine if it relates to a job application and extract key information.
+const systemPrompt = `You are a job application email classifier. Given an email's From header, subject, and body text, determine if it relates to a job application and extract key information.
 
 Return ONLY valid JSON in this exact shape:
 {
@@ -21,7 +19,7 @@ Categories:
 - ignored: newsletters, cold outreach, unrelated emails
 
 Company extraction tips (in order of reliability):
-1. Look for "at [Company]" or "with [Company]" in the subject or snippet
+1. Look for "at [Company]" or "with [Company]" in the subject or body
 2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart")
 3. Extract the domain from the sender email and convert to a company name
    (e.g. "noreply@greenhouse.io" means the ATS is Greenhouse — look elsewhere;
@@ -31,7 +29,7 @@ Company extraction tips (in order of reliability):
    not the employer. Return null if only the ATS domain is available.
 
 Role extraction tips:
-- Look for job titles in the subject (e.g. "Application for Software Engineer")
+- Look for job titles in the subject or body (e.g. "Application for Software Engineer")
 - A generic "Thank you for applying" with no title → return null (caller will store "Unknown Role")
 - Do not invent a role; only return what is explicitly stated.
 
@@ -41,19 +39,19 @@ Confidence:
 - 0.5–0.7: application email likely but company is uncertain
 - below 0.5: ambiguous or unrelated`;
 
-async function classifyEmail(subject: string, from: string, snippet: string): Promise<Classification> {
-	const response = await anthropic.messages.create({
-		model: 'claude-sonnet-4-20250514',
-		max_tokens: 200,
-		system: systemPrompt,
-		messages: [{
-			role: 'user',
-			content: `From: ${from}\nSubject: ${subject}\n\nSnippet: ${snippet}`,
-		}],
-	});
-	const block = response.content[0];
-	if (block.type !== 'text') throw new Error('Unexpected response type from classifier');
-	return JSON.parse(block.text) as Classification;
+async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
+    const res = await ollama.chat({
+        model: 'qwen2.5:7b',
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },
+        ],
+    })
+	const text = res.message.content.trim();
+	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
+	const json = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+
+	return JSON.parse(json) as Classification;
 }
 
 export { classifyEmail };

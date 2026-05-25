@@ -19,7 +19,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			let classification;
 			try {
-				classification = await classifyEmail(email.subject, email.from, email.snippet);
+				classification = await classifyEmail(email.subject, email.from, email.body);
 			} catch {
 				skipped++;
 				continue;

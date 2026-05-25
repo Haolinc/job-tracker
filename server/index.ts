@@ -1,14 +1,18 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-if (!process.env.MONGODB_URI) {
-	console.error('ERROR: MONGODB_URI is not set. Add it to your .env file.');
-	process.exit(1);
+const required = ['MONGODB_URI', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
+for (const key of required) {
+	if (!process.env[key]) {
+		console.error(`ERROR: ${key} is not set. Add it to your .env file.`);
+		process.exit(1);
+	}
 }
 
 import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
+import MongoStore from 'connect-mongo';
 import { connect } from './services/db';
 import applicationsRouter from './routes/applications';
 import authRouter from './routes/auth';
@@ -29,6 +33,7 @@ app.use(session({
 	resave: false,
 	saveUninitialized: false,
 	cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 },
+	store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI! }),
 }));
 
 app.use('/api/applications', applicationsRouter);

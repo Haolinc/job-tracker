@@ -39,8 +39,8 @@ export interface EmailResult {
 	threadId: string;
 	messageId: string;
 	subject: string;
-	from: string;       // full "From" header, e.g. "Walmart Careers <noreply@walmart.com>"
-	snippet: string;
+	from: string;
+	body: string;
 	lastMessageDate: string;
 }
 
