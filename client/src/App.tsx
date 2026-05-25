@@ -52,12 +52,20 @@ export default function App() {
 
 	const handleDelete = async (id: string) => {
 		if (confirm('Delete this application?')) {
-			await remove(id);
+			try {
+				await remove(id);
+			} catch {
+				alert('Failed to delete. Please try again.');
+			}
 		}
 	};
 
 	const handleStatusChange = async (id: string, status: Status) => {
-		await update(id, { status });
+		try {
+			await update(id, { status });
+		} catch {
+			alert('Failed to update status. Please try again.');
+		}
 	};
 
 	const handleSync = async () => {

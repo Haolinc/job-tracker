@@ -70,7 +70,7 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 	client.setCredentials(tokens);
 
 	const gmail = google.gmail({ version: 'v1', auth: client });
-	const days = process.env.GMAIL_SCAN_DAYS || 30;
+	const days = parseInt(process.env.GMAIL_SCAN_DAYS || '30', 10);
 
 	const query = [
 		'(' + [
@@ -92,27 +92,36 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 	const listRes = await gmail.users.threads.list({ userId: 'me', q: query, maxResults: 100 });
 	const threads = listRes.data.threads || [];
 
-	const results = await Promise.all(
-		threads.map(async (t) => {
-			const thread = await gmail.users.threads.get({
-				userId: 'me',
-				id: t.id!,
-				format: 'full',
-			});
-			const messages = thread.data.messages!;
-			const msg     = messages[0];
-			const lastMsg = messages[messages.length - 1];
-			const headers = msg.payload?.headers || [];
-			const subject = headers.find(h => h.name === 'Subject')?.value || '';
-			const from    = headers.find(h => h.name === 'From')?.value    || '';
-			const rawBody = extractBody(msg.payload ?? undefined);
-			const body    = rawBody.slice(0, BODY_LIMIT);
-			const lastMessageDate = lastMsg.internalDate
-				? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]
-				: new Date().toISOString().split('T')[0];
-			return { threadId: t.id!, messageId: msg.id!, subject, from, body, lastMessageDate };
-		})
-	);
+	const BATCH_SIZE = 10;
+	const results: EmailResult[] = [];
+
+	for (let i = 0; i < threads.length; i += BATCH_SIZE) {
+		const batch = threads.slice(i, i + BATCH_SIZE);
+		const batchResults = await Promise.all(
+			batch.map(async (t) => {
+				const thread = await gmail.users.threads.get({
+					userId: 'me',
+					id: t.id!,
+					format: 'full',
+				});
+				const messages = thread.data.messages;
+				// Skip threads with no messages (expunged/deleted by the time we fetch)
+				if (!messages || messages.length === 0) return null;
+				const msg     = messages[0];
+				const lastMsg = messages[messages.length - 1];
+				const headers = msg.payload?.headers || [];
+				const subject = headers.find(h => h.name === 'Subject')?.value || '';
+				const from    = headers.find(h => h.name === 'From')?.value    || '';
+				const rawBody = extractBody(msg.payload ?? undefined);
+				const body    = rawBody.slice(0, BODY_LIMIT);
+				const lastMessageDate = lastMsg.internalDate
+					? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]
+					: new Date().toISOString().split('T')[0];
+				return { threadId: t.id!, messageId: msg.id!, subject, from, body, lastMessageDate };
+			})
+		);
+		results.push(...batchResults.filter((r): r is EmailResult => r !== null));
+	}
 
 	return results;
 }

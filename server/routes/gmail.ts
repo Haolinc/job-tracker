@@ -33,6 +33,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			try {
 				classification = await classifyEmail(email.subject, email.from, email.body);
 			} catch {
+				// Mark synced so this thread is not retried on every subsequent sync.
+				// Malformed LLM output (JSON parse error) would otherwise cause infinite re-attempts.
+				await db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: 'ignored' });
 				skipped++;
 				continue;
 			}

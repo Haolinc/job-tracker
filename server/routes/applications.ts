@@ -8,7 +8,13 @@ const router = Router();
 
 router.get('/', async (req: Request, res: Response) => {
 	try {
-		const apps = await db.getAll(req.query as Record<string, string>);
+		// Coerce query params explicitly — Express parses repeated params as arrays,
+		// and the cast to Record<string,string> does not coerce them at runtime.
+		const { search, status } = req.query;
+		const apps = await db.getAll({
+			search: typeof search === 'string' ? search : undefined,
+			status: typeof status === 'string' ? status : undefined,
+		});
 		res.json(apps);
 	} catch (err) {
 		res.status(500).json({ error: errMsg(err, 'Failed to fetch applications') });

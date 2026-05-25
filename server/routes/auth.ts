@@ -9,8 +9,14 @@ router.get('/google', (_req: Request, res: Response) => {
 });
 
 router.get('/google/callback', async (req: Request, res: Response) => {
+	const { code } = req.query;
+	if (!code || typeof code !== 'string') {
+		// User cancelled the OAuth flow or the redirect is missing the code param
+		res.redirect(`${process.env.CLIENT_URL}?gmail=error`);
+		return;
+	}
 	try {
-		const tokens = await exchangeCode(req.query.code as string);
+		const tokens = await exchangeCode(code);
 		req.session.tokens = tokens;
 		res.redirect(`${process.env.CLIENT_URL}?gmail=connected`);
 	} catch (err) {
