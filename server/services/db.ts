@@ -120,6 +120,14 @@ export const findByCompanyRole = async (company: string, role: string): Promise<
 	return doc ? toApp(doc) : undefined;
 };
 
+// Returns all applications for a company — used when role is unknown to avoid duplicates
+export const findByCompany = async (company: string): Promise<Application[]> => {
+	const docs = await AppModel.find({
+		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
+	}).lean<AppDoc[]>();
+	return docs.map(toApp);
+};
+
 export const isEmailSynced = async (threadId: string): Promise<boolean> => {
 	return !!(await SyncedEmailModel.findOne({ thread_id: threadId }));
 };

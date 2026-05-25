@@ -7,16 +7,17 @@ Return ONLY valid JSON in this exact shape:
 {
   "category": "applied" | "interview" | "offer" | "rejected" | "ignored",
   "company": "Company name or null",
-  "role": "Job title or null",
-  "confidence": 0.0 to 1.0
+  "role": "Job title or null"
 }
 
 Categories:
 - applied: confirmation that an application was received
-- interview: invitation to interview, scheduling request, or interview confirmation
+- interview: a HUMAN recruiter or hiring manager personally reaching out to invite you for an interview — must feel like a direct, intentional outreach, not a system-generated message
 - offer: job offer extended
 - rejected: application declined or position filled
-- ignored: newsletters, cold outreach, unrelated emails
+- ignored: everything else — newsletters, cold outreach, unrelated emails, automated scheduling confirmations (Calendly, Google Meet invites, "your interview is confirmed"), calendar invites, automatic replies, out-of-office replies, or anything ambiguous where you cannot confidently determine the category
+
+IMPORTANT — only use "interview" when the email reads like a human personally wrote it to invite you. If it is a system-generated confirmation, a calendar event, or an automatic reply, classify as "ignored". When in doubt, use "ignored".
 
 Company extraction tips (in order of reliability):
 1. Look for "at [Company]" or "with [Company]" in the subject or body
@@ -31,13 +32,7 @@ Company extraction tips (in order of reliability):
 Role extraction tips:
 - Look for job titles in the subject or body (e.g. "Application for Software Engineer")
 - A generic "Thank you for applying" with no title → return null (caller will store "Unknown Role")
-- Do not invent a role; only return what is explicitly stated.
-
-Confidence:
-- 0.9+: clear application email with company and role both identified
-- 0.7–0.9: clear application email, company identified, role unknown
-- 0.5–0.7: application email likely but company is uncertain
-- below 0.5: ambiguous or unrelated`;
+- Do not invent a role; only return what is explicitly stated.`;
 
 async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
     const res = await ollama.chat({
@@ -46,6 +41,10 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
             { role: 'system', content: systemPrompt },
             { role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },
         ],
+        options: {
+            num_predict: 120,  // JSON output is ~40 tokens — cap prevents unnecessary generation
+            temperature: 0,    // deterministic output, no randomness needed for classification
+        },
     })
 	const text = res.message.content.trim();
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```

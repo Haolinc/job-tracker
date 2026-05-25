@@ -3,7 +3,7 @@ import type { gmail_v1 } from 'googleapis';
 import type { Credentials } from 'google-auth-library';
 import type { EmailResult } from '../types';
 
-const BODY_LIMIT = 2000;
+const BODY_LIMIT = 800;
 
 function getOAuthClient() {
 	return new google.auth.OAuth2(
@@ -73,7 +73,17 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 	const days = process.env.GMAIL_SCAN_DAYS || 30;
 
 	const query = [
-		'(subject:application OR subject:interview OR subject:offer OR subject:position OR subject:opportunity)',
+		'(' + [
+			'"your application"',
+			'"your interview"',
+			'"hiring process"',
+			'"hiring team"',
+			'"not be moving forward"',
+			'"unfortunately"',
+			'"compensation"',
+			'"start date"',
+			'"welcome aboard"',
+		].join(' OR ') + ')',
 		`newer_than:${days}d`,
 		'-category:promotions',
 		'-category:social',

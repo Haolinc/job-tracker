@@ -32,7 +32,6 @@ export interface Classification {
 	category: Category;
 	company: string | null;
 	role: string | null;
-	confidence: number;
 }
 
 export interface EmailResult {
