@@ -88,13 +88,6 @@ export const getAll = async (filters: GetAllFilters = {}): Promise<Application[]
 	return docs.map(toApp);
 };
 
-export const getById = async (id: string): Promise<Application | undefined> => {
-	try {
-		const doc = await AppModel.findById(id).lean<AppDoc>();
-		return doc ? toApp(doc) : undefined;
-	} catch { return undefined; }
-};
-
 export const create = async (data: CreateApplicationData): Promise<Application> => {
 	const doc = await AppModel.create(data);
 	const lean = doc.toObject() as AppDoc;
@@ -126,10 +119,6 @@ export const findByCompany = async (company: string): Promise<Application[]> => 
 		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
 	}).lean<AppDoc[]>();
 	return docs.map(toApp);
-};
-
-export const isEmailSynced = async (threadId: string): Promise<boolean> => {
-	return !!(await SyncedEmailModel.findOne({ thread_id: threadId }));
 };
 
 export const getSyncedThreadIds = async (threadIds: string[]): Promise<Set<string>> => {

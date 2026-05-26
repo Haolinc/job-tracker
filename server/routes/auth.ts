@@ -18,7 +18,17 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 	try {
 		const tokens = await exchangeCode(code);
 		req.session.tokens = tokens;
-		res.redirect(`${process.env.CLIENT_URL}?gmail=connected`);
+		// Explicitly save before redirecting — MongoStore saves asynchronously, and the
+		// browser may follow the redirect before the session is persisted, causing a
+		// phantom "not connected" state on the very next request.
+		req.session.save((err) => {
+			if (err) {
+				console.error('Session save error:', err);
+				res.redirect(`${process.env.CLIENT_URL}?gmail=error`);
+			} else {
+				res.redirect(`${process.env.CLIENT_URL}?gmail=connected`);
+			}
+		});
 	} catch (err) {
 		console.error('OAuth callback error:', err);
 		res.redirect(`${process.env.CLIENT_URL}?gmail=error`);

@@ -20,6 +20,8 @@ export function useGmailSync() {
 		try {
 			await disconnectGmail();
 			setConnected(false);
+			setLastResult(null);
+			setError(null);
 		} catch {
 			setError('Failed to disconnect');
 		}

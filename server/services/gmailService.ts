@@ -112,7 +112,9 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 				const headers = msg.payload?.headers || [];
 				const subject = headers.find(h => h.name === 'Subject')?.value || '';
 				const from    = headers.find(h => h.name === 'From')?.value    || '';
-				const rawBody = extractBody(msg.payload ?? undefined);
+				// Use the last message body — it reflects the most recent status in the thread
+				// (e.g. a rejection reply to an application confirmation).
+				const rawBody = extractBody(lastMsg.payload ?? undefined);
 				const body    = rawBody.slice(0, BODY_LIMIT);
 				const lastMessageDate = lastMsg.internalDate
 					? new Date(parseInt(lastMsg.internalDate)).toISOString().split('T')[0]

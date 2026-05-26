@@ -52,8 +52,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Dedup strategy:
 			// 1. Role known → exact company+role match.
 			// 2. Role unknown, one app for this company → must be the same one, update it.
-			// 3. Role unknown, multiple apps → prefer an existing "Unknown Role" entry over
-			//    creating another, since job board emails often omit the role.
+			// 3. Role unknown, multiple apps → update an existing "Unknown Role" entry if one
+			//    exists; otherwise we cannot tell which app this belongs to, so skip rather
+			//    than creating a duplicate "Unknown Role" alongside real-role entries.
 			let existing: Application | undefined;
 			if (role) {
 				existing = await db.findByCompanyRole(company, role);
@@ -63,13 +64,20 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					existing = matches[0];
 				} else if (matches.length > 1) {
 					existing = matches.find(m => m.role === 'Unknown Role');
+					if (!existing) {
+						await db.markEmailSynced({ thread_id: email.threadId, message_id: email.messageId, classified_as: 'ignored' });
+						skipped++;
+						continue;
+					}
 				}
 			}
 
 			if (existing) {
+				// Date is the only authority — the most recent email represents the true status.
+				const isNewer = email.lastMessageDate >= (existing.last_activity ?? '');
 				await db.update(existing.id, {
-					status: category === 'applied' ? existing.status : category,
-					last_activity: email.lastMessageDate,
+					status:        isNewer ? category : existing.status,
+					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
 				});
 				updated++;
 			} else {
