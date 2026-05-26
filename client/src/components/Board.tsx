@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { DndContext, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -54,6 +55,14 @@ interface BoardProps {
 export default function Board({ applications, onEdit, onDelete, onStatusChange }: BoardProps) {
 	const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+	const byStatus = useMemo(() => {
+		const groups: Partial<Record<Status, Application[]>> = {};
+		for (const app of applications) {
+			(groups[app.status] ??= []).push(app);
+		}
+		return groups;
+	}, [applications]);
+
 	const handleDragEnd = ({ active, over }: DragEndEvent) => {
 		if (!over) return;
 		const app = applications.find(a => a.id === active.id);
@@ -70,7 +79,7 @@ export default function Board({ applications, onEdit, onDelete, onStatusChange }
 					<KanbanColumn
 						key={col.id}
 						col={col}
-						apps={applications.filter(a => a.status === col.id)}
+						apps={byStatus[col.id] ?? []}
 						onEdit={onEdit}
 						onDelete={onDelete}
 					/>

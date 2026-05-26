@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-const required = ['MONGODB_URI', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
+const required = ['MONGODB_URI', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
 for (const key of required) {
 	if (!process.env[key]) {
 		console.error(`ERROR: ${key} is not set. Add it to your .env file.`);
@@ -29,7 +29,7 @@ app.use(cors({
 app.use(express.json());
 
 app.use(session({
-	secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+	secret: process.env.SESSION_SECRET!,
 	resave: false,
 	saveUninitialized: false,
 	cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 },

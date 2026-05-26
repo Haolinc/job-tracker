@@ -4,6 +4,9 @@ import * as db from '../services/db';
 import { errMsg } from '../utils';
 import type { Status, InterviewStep } from '../types';
 
+const VALID_STATUSES    = new Set<string>(['applied', 'interview', 'offer', 'rejected']);
+const VALID_STEPS       = new Set<string>(['phone_screen', 'technical', 'onsite', 'final']);
+
 const router = Router();
 
 router.get('/', async (req: Request, res: Response) => {
@@ -13,7 +16,7 @@ router.get('/', async (req: Request, res: Response) => {
 		const { search, status } = req.query;
 		const apps = await db.getAll({
 			search: typeof search === 'string' ? search : undefined,
-			status: typeof status === 'string' ? status : undefined,
+			status: typeof status === 'string' && VALID_STATUSES.has(status) ? status as Status : undefined,
 		});
 		res.json(apps);
 	} catch (err) {
@@ -66,6 +69,14 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 			if ((req.body as Record<string, unknown>)[key] !== undefined) {
 				updates[key] = (req.body as Record<string, unknown>)[key];
 			}
+		}
+		if ('status' in updates && !VALID_STATUSES.has(updates.status as string)) {
+			res.status(400).json({ error: 'Invalid status value' });
+			return;
+		}
+		if ('interview_step' in updates && updates.interview_step !== null && !VALID_STEPS.has(updates.interview_step as string)) {
+			res.status(400).json({ error: 'Invalid interview_step value' });
+			return;
 		}
 		const updated = await db.update(id, updates);
 		res.json(updated);

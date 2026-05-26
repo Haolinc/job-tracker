@@ -50,7 +50,16 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
 	const json = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
 
-	return JSON.parse(json) as Classification;
+	const parsed = JSON.parse(json);
+	const validCategories = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
+	if (!parsed || !validCategories.has(parsed.category)) {
+		throw new Error(`Unexpected classifier response: ${text}`);
+	}
+	return {
+		category: parsed.category as Classification['category'],
+		company:  typeof parsed.company === 'string' ? parsed.company : null,
+		role:     typeof parsed.role    === 'string' ? parsed.role    : null,
+	};
 }
 
 export { classifyEmail };

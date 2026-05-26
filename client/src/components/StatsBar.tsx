@@ -1,10 +1,11 @@
+import { memo } from 'react';
 import type { Application } from '../types';
 
 interface Props {
 	applications: Application[];
 }
 
-export default function StatsBar({ applications }: Props) {
+export default memo(function StatsBar({ applications }: Props) {
 	const total = applications.length;
 	const active = applications.filter(a => a.status !== 'rejected').length;
 	const offers = applications.filter(a => a.status === 'offer').length;
@@ -25,4 +26,4 @@ export default function StatsBar({ applications }: Props) {
 			{stat('Offer Rate', `${rate}%`, 'text-purple-600')}
 		</div>
 	);
-}
+});

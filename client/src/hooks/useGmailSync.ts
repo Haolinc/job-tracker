@@ -16,7 +16,7 @@ export function useGmailSync() {
 		} catch { /* silently ignore */ }
 	}, []);
 
-	const disconnect = async () => {
+	const disconnect = useCallback(async () => {
 		try {
 			await disconnectGmail();
 			setConnected(false);
@@ -25,9 +25,9 @@ export function useGmailSync() {
 		} catch {
 			setError('Failed to disconnect');
 		}
-	};
+	}, []);
 
-	const sync = async (): Promise<SyncResult> => {
+	const sync = useCallback(async (): Promise<SyncResult> => {
 		setSyncing(true);
 		setError(null);
 		try {
@@ -42,7 +42,7 @@ export function useGmailSync() {
 		} finally {
 			setSyncing(false);
 		}
-	};
+	}, []);
 
 	return { connected, syncing, lastResult, error, checkStatus, disconnect, sync };
 }
