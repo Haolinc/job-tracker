@@ -33,6 +33,7 @@ export interface Classification {
 	category: Category;
 	company: string | null;
 	role: string | null;
+    classifier_code?: string; // Optional field to store which parser/classifier was used
 }
 
 export interface EmailResult {

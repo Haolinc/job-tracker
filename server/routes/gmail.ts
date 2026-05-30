@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { fetchJobEmails } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
+import { parseEmail }    from '../services/parser';
 import * as db from '../services/db';
 import { errMsg, buildLookupKey } from '../utils';
 import type { Application } from '../types';
@@ -120,7 +121,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
 		const emails    = await fetchJobEmails(req.session.tokens!);
 		const syncedIds = await db.getSyncedMessageIds(emails.map(e => e.messageId));
-		let added = 0, updated = 0, skipped = 0;
+		let added = 0, updated = 0, skipped = 0, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0;
 
 		for (const email of emails) {
 			const { threadId, messageId, subject, from, body } = email;
@@ -139,19 +140,28 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				continue;
 			}
 
-			let classification;
-			try {
-				classification = await classifyEmail(subject, from, body);
-			} catch (err) {
-				// Mark synced so a malformed LLM response isn't retried on every subsequent sync.
-				console.error(`[classify] error for subject="${subject}":`, err);
-				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
-				skipped++;
-				continue;
+			// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
+			// with zero AI cost. Falls back to the LLM for everything else.
+			let classification = parseEmail(subject, from, body);
+
+			if (!classification) {
+				try {
+					classification = await classifyEmail(subject, from, body);
+				} catch (err) {
+					// Mark synced so a malformed LLM response isn't retried on every subsequent sync.
+					console.error(`[classify] error for subject="${subject}":`, err);
+					await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
+					skipped++;
+					continue;
+				}
 			}
 
-			const { category, role } = classification;
+			const { category, role, classifier_code } = classification;
 			let { company } = classification;
+
+            if (classifier_code === 'linkedin_applied') linkedinApplyParsed++;
+            if (classifier_code === 'linkedin_rejected') linkedinRejectParsed++;
+            if (classifier_code === 'indeed_applied') indeedParsed++;
 
 			// If the LLM couldn't identify the company, fall back to parsing the sender domain
 			// (e.g. "noreply@walmart.com" → "Walmart").
@@ -212,7 +222,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
 		}
-
+        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed})`);
+        
 		res.json({ added, updated, skipped });
 	} catch (err) {
 		console.error('Sync error:', err);
