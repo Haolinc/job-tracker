@@ -40,7 +40,11 @@ Job board recommendation rules (classify as "ignored"):
 Indeed rule for company extraction: the subject is "Indeed Application: [Role]" with no company. Look in the body for the employer name — it typically appears near "applied to", "position at", or the job listing header.
 
 Company extraction tips (in order of reliability):
-1. Look for "at [Company]" or "with [Company]" in the subject or body
+1. Look for explicit company mentions in the subject or body:
+   - "at [Company]" or "with [Company]"
+   - "applying to [Company]", "applied to [Company]", "thanks for applying to [Company]"
+   - "Thank you for your interest in [Company]", "welcome to [Company]"
+   These phrases directly name the employer — always prefer them over domain guessing.
 2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart")
 3. Extract the domain from the sender email and convert to a company name
    (e.g. "noreply@greenhouse.io" means the ATS is Greenhouse — look elsewhere;

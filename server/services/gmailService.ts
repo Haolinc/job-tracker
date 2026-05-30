@@ -58,6 +58,66 @@ function stripHtml(html: string): string {
 		.trim();
 }
 
+// Signals that mark the start of boilerplate footers.
+// Everything from the first match onward is discarded.
+const FOOTER_RE = /please do not reply to this (email|message)|this is an auto(?:matically)? generated email|this message was sent to \S+@\S+|if you (don.t|no longer) want to receive|references\s+visible links|copyright \(c\) \d{4}|\ball rights reserved\b|this email was intended for \S+@\S+|sorry, replies to this message can.t be delivered|connect with .{1,40} on linkedin|facebook \| twitter|instagram \| linkedin|\*{10,}/i;
+
+/**
+ * Strip noise from a decoded email body before sending it to the classifier.
+ *
+ * Steps (in order):
+ *  1. Re-run stripHtml if the "plain" part contains raw HTML markup (malformed emails).
+ *  2. Decode residual HTML entities (&nbsp; &amp; &rsquo; &zwnj; …).
+ *  3. Remove Unicode invisible / zero-width characters used as email spacers.
+ *  4. Remove known artifact prefixes ("RTF Template", leading "96 ").
+ *  5. Remove [N] link-reference numbers left by plain-text renderers.
+ *  6. Remove all URLs — never needed for company/role/category extraction.
+ *  7. Truncate at the first footer signal (unsubscribe notices, copyright, social links).
+ *  8. Collapse whitespace.
+ */
+function cleanBody(raw: string): string {
+	let text = raw;
+
+	// 1. Re-strip if plain-text part contains raw HTML (e.g. Precision Neuroscience).
+	if (/<[a-z][\s\S]*?>/i.test(text)) text = stripHtml(text);
+
+	// 2. HTML entities.
+	text = text
+		.replace(/&nbsp;/gi,   ' ')
+		.replace(/&amp;/gi,    '&')
+		.replace(/&lt;/gi,     '<')
+		.replace(/&gt;/gi,     '>')
+		.replace(/&#39;/gi,    "'")
+		.replace(/&rsquo;/gi,  "'")
+		.replace(/&lsquo;/gi,  "'")
+		.replace(/&rdquo;/gi,  '"')
+		.replace(/&ldquo;/gi,  '"')
+		.replace(/&hellip;/gi, '...')
+		.replace(/&zwnj;/gi,   '')
+		.replace(/&#\d+;/g,    ' ');
+
+	// 3. Unicode invisible / zero-width characters (email tracking spacers).
+	// Covers: ZWSP, ZWNJ, ZWJ, LRM, RLM, LSEP, PSEP, SHY, BOM, NBSP.
+	text = text.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
+
+	// 4. Artifact prefixes.
+	text = text.replace(/^\s*RTF Template\s*/i, '');  // Oracle/Workday HTML-to-text artifact
+	text = text.replace(/^\s*96\s+/, '');              // HTML preheader number (Walmart, Amazon)
+
+	// 5. [N] link-reference numbers from plain-text email renderers.
+	text = text.replace(/\[\d+\]/g, '');
+
+	// 6. URLs.
+	text = text.replace(/https?:\/\/\S+/g, '');
+
+	// 7. Footer truncation — discard everything from the first boilerplate signal.
+	const footerIdx = text.search(FOOTER_RE);
+	if (footerIdx > 0) text = text.slice(0, footerIdx);
+
+	// 8. Collapse whitespace.
+	return text.replace(/\s+/g, ' ').trim();
+}
+
 /** Prefers text/plain; falls back to stripped text/html. */
 function extractBody(part: gmail_v1.Schema$MessagePart | undefined): string {
 	const plain = findPart(part, 'text/plain');
@@ -86,14 +146,15 @@ function extractHtmlBody(part: gmail_v1.Schema$MessagePart | undefined): string 
  * and prepend it so the classifier immediately sees the employer name.
  */
 function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
-	const part    = msg.payload ?? undefined;
-	const rawBody = extractBody(part);
+	const part = msg.payload ?? undefined;
 
 	if (!from.includes('indeedapply@indeed.com')) {
-		return rawBody.slice(0, BODY_LIMIT);
+		return cleanBody(extractBody(part)).slice(0, BODY_LIMIT);
 	}
 
-	const richBody = extractHtmlBody(part) || rawBody;
+	// Indeed: company name lives in the HTML part, not plain text.
+	// Prepend "Employer: [Company]" so the classifier sees it immediately.
+	const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
 	const sentTo   = richBody.match(/sent to ([^.]+)\./i);
 	const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
 	return prefix + richBody.slice(0, prefix ? 1000 : 3000);
