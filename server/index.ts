@@ -1,6 +1,9 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { enable } from './logger';
+if (process.env.LOG_TO_FILE !== 'false') enable(); // tee console → sync.log; set LOG_TO_FILE=false to silence
+
 const required = ['MONGODB_URI', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
 for (const key of required) {
 	if (!process.env[key]) {
