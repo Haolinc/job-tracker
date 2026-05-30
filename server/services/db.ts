@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Application, CreateApplicationData, MarkSyncedData } from '../types';
+import { buildLookupKey } from '../utils';
 
 // ── Application ────────────────────────────────────────────────────────────
 
@@ -7,6 +8,7 @@ interface AppDoc {
 	_id: mongoose.Types.ObjectId;
 	company: string;
 	role: string;
+	lookup_key: string | null;
 	status: string;
 	interview_step: string | null;
 	date_applied: string | null;
@@ -22,6 +24,9 @@ interface AppDoc {
 const appSchema = new Schema<AppDoc>({
 	company:         { type: String, required: true },
 	role:            { type: String, required: true },
+	// Pre-computed compound key: normalize(company)::normalize(role).
+	// Indexed for O(1) lookup when matching emails to existing applications.
+	lookup_key:      { type: String, index: true, default: null },
 	status:          { type: String, default: 'applied' },
 	interview_step:  { type: String, default: null },
 	date_applied:    { type: String, default: null },
@@ -39,6 +44,7 @@ function toApp(doc: AppDoc): Application {
 		id:              doc._id.toString(),
 		company:         doc.company,
 		role:            doc.role,
+		lookup_key:      doc.lookup_key ?? null,
 		status:          doc.status as Application['status'],
 		interview_step:  (doc.interview_step ?? null) as Application['interview_step'],
 		date_applied:    doc.date_applied,
@@ -55,8 +61,8 @@ function toApp(doc: AppDoc): Application {
 // ── Synced Emails ──────────────────────────────────────────────────────────
 
 const syncedEmailSchema = new Schema({
-	thread_id:     { type: String, unique: true, required: true },
-	message_id:    { type: String, required: true },
+	thread_id:     { type: String, required: true },           // not unique — many messages share a thread
+	message_id:    { type: String, unique: true, required: true }, // dedup key: one record per Gmail message
 	classified_as: String,
 	synced_at:     { type: Date, default: () => new Date() },
 });
@@ -70,8 +76,30 @@ const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ── Connection ─────────────────────────────────────────────────────────────
 
-export const connect = (): Promise<typeof mongoose> =>
-	mongoose.connect(process.env.MONGODB_URI!);
+export const connect = async (): Promise<typeof mongoose> => {
+	const m = await mongoose.connect(process.env.MONGODB_URI!);
+
+	// Migration 1: drop old thread_id unique index (replaced by message_id unique index).
+	try {
+		await SyncedEmailModel.collection.dropIndex('thread_id_1');
+	} catch { /* already dropped or never existed */ }
+
+	// Migration 2: backfill lookup_key for existing application entries that predate the field.
+	const toBackfill = await AppModel
+		.find({ lookup_key: { $exists: false } })
+		.lean<AppDoc[]>();
+	if (toBackfill.length > 0) {
+		await Promise.all(toBackfill.map(e =>
+			AppModel.updateOne(
+				{ _id: e._id },
+				{ $set: { lookup_key: buildLookupKey(e.company, e.role) } },
+			),
+		));
+		console.log(`[db] backfilled lookup_key for ${toBackfill.length} application(s)`);
+	}
+
+	return m;
+};
 
 // ── DB Functions ───────────────────────────────────────────────────────────
 
@@ -89,7 +117,10 @@ export const getAll = async (filters: GetAllFilters = {}): Promise<Application[]
 };
 
 export const create = async (data: CreateApplicationData): Promise<Application> => {
-	const doc = await AppModel.create(data);
+	const doc = await AppModel.create({
+		...data,
+		lookup_key: buildLookupKey(data.company, data.role),
+	});
 	const lean = doc.toObject() as AppDoc;
 	return toApp(lean);
 };
@@ -105,6 +136,13 @@ export const remove = async (id: string): Promise<boolean> => {
 	return !!doc;
 };
 
+/** Fast O(1) lookup by pre-computed compound key (preferred path). */
+export const findByLookupKey = async (key: string): Promise<Application | undefined> => {
+	const doc = await AppModel.findOne({ lookup_key: key }).lean<AppDoc>();
+	return doc ? toApp(doc) : undefined;
+};
+
+/** Regex fallback used when lookup_key is unavailable (manual entries, legacy data). */
 export const findByCompanyRole = async (company: string, role: string): Promise<Application | undefined> => {
 	const doc = await AppModel.findOne({
 		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
@@ -121,17 +159,17 @@ export const findByCompany = async (company: string): Promise<Application[]> => 
 	return docs.map(toApp);
 };
 
-export const getSyncedThreadIds = async (threadIds: string[]): Promise<Set<string>> => {
+export const getSyncedMessageIds = async (messageIds: string[]): Promise<Set<string>> => {
 	const docs = await SyncedEmailModel
-		.find({ thread_id: { $in: threadIds } }, 'thread_id')
-		.lean<{ thread_id: string }[]>();
-	return new Set(docs.map(d => d.thread_id));
+		.find({ message_id: { $in: messageIds } }, 'message_id')
+		.lean<{ message_id: string }[]>();
+	return new Set(docs.map(d => d.message_id));
 };
 
 export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
 	await SyncedEmailModel.updateOne(
-		{ thread_id: data.thread_id },
-		{ $setOnInsert: { message_id: data.message_id, classified_as: data.classified_as } },
+		{ message_id: data.message_id },
+		{ $setOnInsert: { thread_id: data.thread_id, classified_as: data.classified_as } },
 		{ upsert: true },
 	);
 };
