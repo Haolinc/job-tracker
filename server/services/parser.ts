@@ -23,11 +23,13 @@ function parseLinkedInApplied(subject: string, from: string, body: string): Clas
 
 	const company = companyMatch[1].trim();
 
-	// Role is the first non-empty line after "Your application was sent to [Company]".
-	// Body structure (after stripping): line0="Your application was sent to X", line1=Role, line2=Company, line3=Location
-	const lines = body.split('\n').map(l => l.trim()).filter(Boolean);
-	const headerIdx = lines.findIndex(l => /^your application was sent to /i.test(l));
-	const role = headerIdx >= 0 ? (lines[headerIdx + 1] ?? null) : null;
+	// cleanBody() always collapses whitespace before the body reaches the parser, so the
+	// LinkedIn body arrives as a single line:
+	//   "Your application was sent to [Company] [Role] [Company] [Location] ..."
+	// Extract the role as the text between the first and second occurrence of the company name.
+	const esc  = company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const m    = body.match(new RegExp(`was sent to\\s+${esc}\\s+(.+?)\\s+${esc}`, 'i'));
+	const role = m?.[1]?.trim() ?? null;
 
 	return { category: 'applied', company, role, classifier_code: 'linkedin_applied' };
 }

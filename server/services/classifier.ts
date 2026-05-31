@@ -40,12 +40,17 @@ Job board recommendation rules (classify as "ignored"):
 Indeed rule for company extraction: the subject is "Indeed Application: [Role]" with no company. Look in the body for the employer name — it typically appears near "applied to", "position at", or the job listing header.
 
 Company extraction tips (in order of reliability):
-1. Look for explicit company mentions in the subject or body:
-   - "at [Company]" or "with [Company]"
-   - "applying to [Company]", "applied to [Company]", "thanks for applying to [Company]"
+1. Look for explicit company mentions in the subject or body (highest priority):
+   - Subject "Thank you for applying to [Company]" or "Thanks for applying to [Company]" →
+     company is [Company]. This is the most reliable signal — extract it literally even if
+     the name is a short or common word like "Loop", "Fora", "Chalk", "Spot & Tango".
+   - "at [Company]" or "with [Company]" in subject or body
+   - "applying to [Company]", "applied to [Company]"
    - "Thank you for your interest in [Company]", "welcome to [Company]"
-   These phrases directly name the employer — always prefer them over domain guessing.
-2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart")
+   Always prefer these explicit phrases over domain guessing.
+2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart").
+   When the display name is "[Company] @ [ATS]" (e.g. "General Dynamics Mission Systems @ icims"),
+   extract the part BEFORE " @ " as the company — the ATS suffix is not the company name.
 3. Extract the domain from the sender email and convert to a company name
    (e.g. "noreply@greenhouse.io" means the ATS is Greenhouse — look elsewhere;
     "jobs@stripe.com" → "Stripe"; "talent@anthropic.com" → "Anthropic";
@@ -76,7 +81,15 @@ Role extraction tips:
   Only include a code if it is explicitly in the email; do not invent one.
 - LinkedIn subjects like "Your application to [Role] at [Company]" → role is [Role], company is [Company]
 - A generic "Thank you for applying" with no title → return null (caller will store "Unknown Role")
-- Do not invent a role; only return what is explicitly stated.`;
+- Do not invent a role; only return what is explicitly stated.
+- Strip location/workplace modifiers from the end of role titles only when they are clearly
+  geographic (a recognisable city, state, or country name follows the modifier):
+    "Software Engineer Onsite Great River, NY"  → "Software Engineer"
+    "Software Engineer - Remote Austin, TX"     → "Software Engineer"
+    "Data Analyst Hybrid Chicago"               → "Data Analyst"
+  Do NOT strip if what follows is a number (requisition IDs look like "Remote 376141" — keep it)
+  or a non-geographic word ("Evergreen" is a posting type, not a city — keep it).
+  When in doubt, keep the original text.`;
 
 const VALID_CATEGORIES = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
 

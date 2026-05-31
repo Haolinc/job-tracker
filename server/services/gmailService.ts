@@ -204,8 +204,8 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 	const days  = parseInt(process.env.GMAIL_SCAN_DAYS ?? '30', 10);
 
 	// Positive OR group: restrict results to threads that contain at least one
-	// job-related phrase. Without this, unrelated mail fills the quota and pushes
-	// real application emails past the maxResults cutoff.
+	// job-related phrase. Without this, unrelated mail bloats the result set
+	// and slows down thread fetching.
 	const keywordFilter = `{${[
 		'"your application"',
 		'"recent application"',       // iCIMS ATS: "your recent application" — "your application" alone won't match
@@ -233,6 +233,7 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		'"welcome aboard"',
 		'"job offer"',
 		'"offer letter"',
+        '"thank you for your interest"',
 	].join(' ')}}`;
 
 	const query = [
@@ -264,13 +265,28 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		// Draft application reminder emails — ATS prompts to complete an unfinished application.
 		// "Continue to apply for the job..." is always about a draft, never a submitted app.
 		'-subject:"continue to apply"',
+        '-subject:"incomplete"',
+        '-subject:"your application was viewed"',
+        '-subject:"draft"',
+        // ATS "still reviewing" status pings — no new information, just noise.
+        // Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
+        '-subject:"Quick Update!"',  //TODO: need to verify later
 		keywordFilter,
 	].join(' ');
 
-	const listRes = await gmail.users.threads.list({ userId: 'me', q: query, maxResults: 1000 });
-	const threads = listRes.data.threads ?? [];
-	const results: EmailResult[] = [];
+	const threads: gmail_v1.Schema$Thread[] = [];
+	let pageToken: string | undefined;
+	do {
+		const listRes = await gmail.users.threads.list({
+			userId: 'me', q: query, maxResults: 500, pageToken,
+		});
+		threads.push(...(listRes.data.threads ?? []));
+		pageToken = listRes.data.nextPageToken ?? undefined;
+	} while (pageToken);
 
+	console.log(`[sync] fetched ${threads.length} threads across ${Math.ceil(threads.length / 500) || 1} page(s)`);
+
+	const results: EmailResult[] = [];
 	for (let i = 0; i < threads.length; i += BATCH_SIZE) {
 		const batch        = threads.slice(i, i + BATCH_SIZE);
 		const batchResults = await Promise.all(batch.map(t => fetchThread(gmail, t.id!)));

@@ -31,6 +31,9 @@ const AUTOMATED_SUBJECT = new RegExp(
 		// already excludes by subject, but these emails DO match the keywordFilter
 		// ("your application"), so a fetched straggler would still be skipped here.
 		'quick question about your application at',
+		// Jacobs generic portal-reminder emails — subject is exactly "Jacobs - Application Update"
+		// with no role after it. The valid Jacobs emails always have ", [Role]" after "Update".
+		'jacobs - application update(?!,)',
 	].join('|'),
 	'i',
 );
@@ -38,7 +41,7 @@ const AUTOMATED_FROM = /calendly\./i;
 
 // ATS platforms and generic mail providers — never treat their domain as a company name.
 const ATS_DOMAINS = new Set([
-	'greenhouse.io', 'lever.co', 'icims.com', 'taleo.net', 'bamboohr.com',
+	'greenhouse.io', 'greenhouse-mail.io', 'lever.co', 'icims.com', 'taleo.net', 'bamboohr.com',
 	'smartrecruiters.com', 'jobvite.com', 'jazz.co', 'breezy.hr',
 	'workday.com', 'myworkday.com', 'successfactors.com', 'applytojob.com',
 	'recruitingbypaycor.com', 'paylocity.com', 'adp.com', 'ultipro.com',
@@ -56,8 +59,9 @@ function normalizeCompany(name: string): string {
 	return name.replace(COMPANY_SUFFIX_RE, '').trim();
 }
 
-// Generic local-part prefixes that identify the ATS, not the employer.
-const GENERIC_LOCAL = /^(no.?reply|noreply|donotreply|workday|notifications?|info|support|careers|talent|hr|recruiting|jobs?)$/i;
+// Generic local-part prefixes that identify the ATS or HR function, not the employer.
+// "globalhr" is RTX's shared HR Workday address — not a company slug.
+const GENERIC_LOCAL = /^(no.?reply|noreply|donotreply|workday|notifications?|info|support|careers|talent|hr|recruiting|jobs?|globalhr)$/i;
 
 /**
  * Last-resort fallback: parse the employer name from the sender domain.
@@ -75,14 +79,19 @@ function extractCompanyFromSender(from: string): string | null {
 	if (!domain) return null;
 
 	// Workday branded subdomains: "cableone@myworkday.com" → company slug is "cableone".
+	// Slugs ≤ 2 chars (e.g. "ms" for Morgan Stanley) are abbreviations the fallback
+	// can't meaningfully expand — return null and let the LLM extract from the body.
 	if (domain === 'myworkday.com') {
-		if (!localPart || GENERIC_LOCAL.test(localPart)) return null;
+		if (!localPart || GENERIC_LOCAL.test(localPart) || localPart.length <= 2) return null;
 		return localPart.charAt(0).toUpperCase() + localPart.slice(1);
 	}
 
 	if (ATS_DOMAINS.has(domain)) return null;
+	// Also check parent domain for subdomained ATS hosts (e.g. "us.greenhouse-mail.io").
+	const labels = domain.split('.');
+	if (labels.length >= 3 && ATS_DOMAINS.has(labels.slice(1).join('.'))) return null;
+
 	// "careers.walmart.com" → "walmart";  "walmart.com" → "walmart"
-	const labels      = domain.split('.');
 	const companySlug = labels.length >= 3 ? labels[labels.length - 2] : labels[0];
 	return companySlug.charAt(0).toUpperCase() + companySlug.slice(1);
 }
@@ -108,7 +117,18 @@ async function findExisting(
 		if (byKey) return byKey;
 		// Fallback: regex scan for entries that predate the lookup_key field
 		// (manually added records, or entries created before the migration ran).
-		return db.findByCompanyRole(company, role);
+		const byCompanyRole = await db.findByCompanyRole(company, role);
+		if (byCompanyRole) return byCompanyRole;
+
+		// Last resort: if the only existing entry for this company is "Unknown Role",
+		// this email is providing the role that was missing from the confirmation email
+		// (e.g. BAE Systems sends a generic confirmation with no role, then a follow-up
+		// "Application Update" that names the role). Upgrade rather than duplicate.
+		const allForCompany = await db.findByCompany(company);
+		if (allForCompany.length === 1 && allForCompany[0].role === 'Unknown Role') {
+			return allForCompany[0];
+		}
+		return undefined;
 	}
 
 	const matches = await db.findByCompany(company);
@@ -195,9 +215,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			if (existing) {
 				// The most recent email wins — it reflects the true current status.
 				const isNewer = email.lastMessageDate >= (existing.last_activity ?? '');
+				// Also upgrade "Unknown Role" when this email provides a specific role
+				// (e.g. a BAE Systems status update naming the role after a generic confirmation).
+				const roleUpgrade = existing.role === 'Unknown Role' && role
+					? { role, lookup_key: buildLookupKey(company, role) }
+					: {};
 				await db.update(existing.id, {
 					status:        isNewer ? category : existing.status,
 					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
+					...roleUpgrade,
 				});
 				updated++;
 			} else {
