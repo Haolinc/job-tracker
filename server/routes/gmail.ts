@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { fetchJobEmails } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
-import { parseEmail }    from '../services/parser';
+import { parseEmail, extractGeneralCompanyRole } from '../services/parser';
 import * as db from '../services/db';
 import { errMsg, buildLookupKey } from '../utils';
 import type { Application } from '../types';
@@ -139,9 +139,10 @@ async function findExisting(
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
+        const start = Date.now();
 		const emails    = await fetchJobEmails(req.session.tokens!);
 		const syncedIds = await db.getSyncedMessageIds(emails.map(e => e.messageId));
-		let added = 0, updated = 0, skipped = 0, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0;
+		let added = 0, updated = 0, skipped = 0, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
 
 		for (const email of emails) {
 			const { threadId, messageId, subject, from, body } = email;
@@ -174,6 +175,16 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					skipped++;
 					continue;
 				}
+
+				// The LLM decided status; trust deterministic regex for company/role when it
+				// can extract them (preserves exact req numbers, no hallucination).
+				if (classification.category !== 'ignored') {
+					const ext = extractGeneralCompanyRole(subject, body);
+					if (ext) {
+						classification.company = ext.company;
+						if (ext.role) classification.role = ext.role;
+					}
+				}
 			}
 
 			const { category, role, classifier_code } = classification;
@@ -182,6 +193,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
             if (classifier_code === 'linkedin_applied') linkedinApplyParsed++;
             if (classifier_code === 'linkedin_rejected') linkedinRejectParsed++;
             if (classifier_code === 'indeed_applied') indeedParsed++;
+            if (classifier_code === 'general_template') generalParsed++;
 
 			// If the LLM couldn't identify the company, fall back to parsing the sender domain
 			// (e.g. "noreply@walmart.com" → "Walmart").
@@ -248,7 +260,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
 		}
-        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed})`);
+        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
+        console.log(`[sync] duration: ${duration} seconds`);
         
 		res.json({ added, updated, skipped });
 	} catch (err) {

@@ -5,6 +5,34 @@ import type { EmailResult } from '../types';
 
 const BODY_LIMIT = 800;
 const BATCH_SIZE = 10;
+// Pause between batches to stay under Gmail's quota (15,000 units/min/user; threads.get = 10
+// units each → ~1,500/min max). 10 concurrent every ~600ms ≈ 1,000/min, comfortably under.
+const BATCH_PAUSE_MS = 400;
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/** True for Gmail rate-limit responses (403 rateLimitExceeded / 429) — which gaxios does NOT auto-retry. */
+function isRateLimitError(err: unknown): boolean {
+	const e = err as { code?: number; status?: number; errors?: { reason?: string }[]; response?: { status?: number; data?: { error?: { errors?: { reason?: string }[] } } } };
+	const code = e?.code ?? e?.status ?? e?.response?.status;
+	const reason = e?.errors?.[0]?.reason ?? e?.response?.data?.error?.errors?.[0]?.reason ?? '';
+	return code === 429 || (code === 403 && /rate.?limit|userRateLimitExceeded/i.test(reason));
+}
+
+/** Retry a Gmail call with exponential backoff when rate-limited. */
+async function withRateLimitRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+	let delay = 1000;
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			if (!isRateLimitError(err) || attempt >= 6) throw err;
+			console.warn(`[sync] rate limited on ${label}; backing off ${delay}ms (attempt ${attempt + 1})`);
+			await sleep(delay);
+			delay = Math.min(delay * 2, 30_000);
+		}
+	}
+}
 
 function getOAuthClient() {
 	return new google.auth.OAuth2(
@@ -172,7 +200,10 @@ async function fetchThread(
 	gmail: gmail_v1.Gmail,
 	threadId: string,
 ): Promise<EmailResult[]> {
-	const thread   = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+	const thread   = await withRateLimitRetry(
+		() => gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' }),
+		`thread ${threadId}`,
+	);
 	const messages = thread.data.messages;
 	if (!messages?.length) return [];
 
@@ -271,8 +302,10 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
         // ATS "still reviewing" status pings — no new information, just noise.
         // Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
         '-subject:"Quick Update!"',  //TODO: need to verify later
-		keywordFilter,
+        '-subject:"Demographic Survey"',
+        keywordFilter,
 	].join(' ');
+    console.log(`[sync] searching Gmail with query: ${query}`);
 
 	const threads: gmail_v1.Schema$Thread[] = [];
 	let pageToken: string | undefined;
@@ -291,6 +324,8 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		const batch        = threads.slice(i, i + BATCH_SIZE);
 		const batchResults = await Promise.all(batch.map(t => fetchThread(gmail, t.id!)));
 		results.push(...batchResults.flat());
+		// Pace batches so a large backfill stays under the per-minute quota.
+		if (i + BATCH_SIZE < threads.length) await sleep(BATCH_PAUSE_MS);
 	}
 
 	return results;
