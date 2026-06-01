@@ -305,6 +305,18 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
         // Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
         '-subject:"Quick Update!"',  //TODO: need to verify later
         '-subject:"Demographic Survey"',
+		// Pre-filter the AUTOMATED_SUBJECT patterns that DO match the OR group (so they'd
+		// otherwise be fetched and dropped at runtime). Saves the thread fetch. The runtime
+		// AUTOMATED_SUBJECT check stays as the precise backstop — these Gmail terms are fuzzy
+		// (word-tokenized, no anchors/lookahead), and patterns like "jacobs ...(?!,)" or
+		// "\d+ new jobs" can't be expressed here at all.
+		'-subject:reminder',                          // re-announcements, never a new state (interview reminders match "interview for")
+		'-subject:"career opportunities at"',         // recruitment marketing ("Your career opportunities at Travelers!")
+		'-subject:"interview confirmation"',
+		'-subject:"interview confirmed"',
+		'-subject:"has been scheduled"',              // "Your interview has been scheduled" — calendar noise, matches OR "your interview"
+		'-subject:"calendar invite"',
+		'-subject:"meeting confirmed"',
         keywordFilter,
 	].join(' ');
     console.log(`[sync] searching Gmail with query: ${query}`);
