@@ -5,9 +5,11 @@ import type { EmailResult } from '../types';
 
 const BODY_LIMIT = 800;
 const BATCH_SIZE = 10;
-// Pause between batches to stay under Gmail's quota (15,000 units/min/user; threads.get = 10
-// units each → ~1,500/min max). 10 concurrent every ~600ms ≈ 1,000/min, comfortably under.
-const BATCH_PAUSE_MS = 400;
+// Minimum spacing between batch *starts* (not a flat post-batch sleep). messages.get costs 20
+// quota units; at 10 per 450ms (~22/sec) we stay well within the per-user/minute ceiling, with
+// the exponential backoff as a backstop for spikes. Measuring from the batch start means a slow
+// batch consumes the interval itself, so we don't sleep on top of it — we run at the ceiling.
+const MIN_BATCH_INTERVAL_MS = 450;
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -188,57 +190,43 @@ function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
 	return prefix + richBody.slice(0, prefix ? 1000 : 3000);
 }
 
-/**
- * Returns one EmailResult per message in the thread so that multiple
- * application confirmations stacked into the same Gmail thread (e.g. two
- * City-of-New-York roles) are each classified independently.
- *
- * Subject and From are taken from the first message (thread-level metadata);
- * body and date come from each individual message.
- */
-async function fetchThread(
-	gmail: gmail_v1.Gmail,
-	threadId: string,
-): Promise<EmailResult[]> {
-	const thread   = await withRateLimitRetry(
-		() => gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' }),
-		`thread ${threadId}`,
-	);
-	const messages = thread.data.messages;
-	if (!messages?.length) return [];
-
-	// Subject / From are thread-level — use first message's headers.
-	const firstMsg = messages[0];
-	const headers  = firstMsg.payload?.headers ?? [];
-	const subject  = headers.find(h => h.name === 'Subject')?.value ?? '';
-	const from     = headers.find(h => h.name === 'From')?.value    ?? '';
-
-	return messages.map(msg => {
-		const internalDate = msg.internalDate ? parseInt(msg.internalDate) : Date.now();
-		return {
-			threadId,
-			messageId:       msg.id!,
-			subject,
-			from,
-			body:            buildBody(msg, from),
-			internalDate,
-			lastMessageDate: new Date(internalDate).toISOString().split('T')[0],
-		};
-	});
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
-
-async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
+function getGmail(tokens: Credentials): gmail_v1.Gmail {
 	const client = getOAuthClient();
 	client.setCredentials(tokens);
+	return google.gmail({ version: 'v1', auth: client });
+}
 
-	const gmail = google.gmail({ version: 'v1', auth: client });
-	const days  = parseInt(process.env.GMAIL_SCAN_DAYS ?? '30', 10);
+/** Build one EmailResult from a single message using its own headers (each email stands alone). */
+function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
+	const headers      = msg.payload?.headers ?? [];
+	const subject      = headers.find(h => h.name === 'Subject')?.value ?? '';
+	const from         = headers.find(h => h.name === 'From')?.value    ?? '';
+	const internalDate = msg.internalDate ? parseInt(msg.internalDate) : Date.now();
+	return {
+		threadId:        msg.threadId ?? '',
+		messageId:       msg.id!,
+		subject,
+		from,
+		body:            buildBody(msg, from),
+		internalDate,
+		lastMessageDate: new Date(internalDate).toISOString().split('T')[0],
+	};
+}
 
-	// Positive OR group: restrict results to threads that contain at least one
-	// job-related phrase. Without this, unrelated mail bloats the result set
-	// and slows down thread fetching.
+async function fetchMessage(gmail: gmail_v1.Gmail, id: string): Promise<EmailResult | null> {
+	const res = await withRateLimitRetry(
+		() => gmail.users.messages.get({ userId: 'me', id, format: 'full' }),
+		`message ${id}`,
+	);
+	return res.data ? messageToEmailResult(res.data) : null;
+}
+
+/** The Gmail search query — positive job-phrase OR group plus noise exclusions. */
+function buildJobQuery(): string {
+	const days = parseInt(process.env.GMAIL_SCAN_DAYS ?? '30', 10);
+
+	// Positive OR group: a thread must contain at least one job-related phrase, otherwise
+	// unrelated mail bloats the result set.
 	const keywordFilter = `{${[
 		'"your application"',
 		'"recent application"',       // iCIMS ATS: "your recent application" — "your application" alone won't match
@@ -271,10 +259,15 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		'"schedule your interview"',
 	].join(' ')}}`;
 
-	const query = [
+	return [
 		`newer_than:${days}d`,
 		'-category:promotions',
 		'-category:social',
+		// Exclude your own sent mail — replies / follow-ups ("Re: Interview Request …") are not
+		// employer status updates. Without this, per-message processing classifies them and the
+		// recruiter's quoted subject leaks through (e.g. company "SS&C Incer"). Employer emails
+		// are never from:me, so nothing legitimate is lost.
+		'-from:me',
 		// LinkedIn recommendation emails — cause false-positive "applied" entries.
 		'-subject:"you may be a fit for"',
 		'-subject:"new jobs similar to"',
@@ -321,30 +314,51 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		'-subject:"meeting confirmed"',
         keywordFilter,
 	].join(' ');
-    console.log(`[sync] searching Gmail with query: ${query}`);
+}
 
-	const threads: gmail_v1.Schema$Thread[] = [];
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * List the message IDs matching the job query, newest-first (Gmail's order). Cheap —
+ * messages.list (5 units/page) returns only ID stubs, no bodies. The caller drops
+ * already-synced IDs before fetching any content, so a routine sync downloads only what's new.
+ */
+async function listJobMessageIds(tokens: Credentials): Promise<string[]> {
+	const gmail = getGmail(tokens);
+	const query = buildJobQuery();
+	console.log(`[sync] searching Gmail with query: ${query}`);
+
+	const ids: string[] = [];
 	let pageToken: string | undefined;
 	do {
-		const listRes = await gmail.users.threads.list({
-			userId: 'me', q: query, maxResults: 500, pageToken,
-		});
-		threads.push(...(listRes.data.threads ?? []));
-		pageToken = listRes.data.nextPageToken ?? undefined;
+		const res = await withRateLimitRetry(
+			() => gmail.users.messages.list({ userId: 'me', q: query, maxResults: 500, pageToken }),
+			'messages.list',
+		);
+		for (const m of res.data.messages ?? []) ids.push(m.id!);
+		pageToken = res.data.nextPageToken ?? undefined;
 	} while (pageToken);
 
-	console.log(`[sync] fetched ${threads.length} threads across ${Math.ceil(threads.length / 500) || 1} page(s)`);
+	console.log(`[sync] listed ${ids.length} message ids across ${Math.ceil(ids.length / 500) || 1} page(s)`);
+	return ids;
+}
 
-	const results: EmailResult[] = [];
-	for (let i = 0; i < threads.length; i += BATCH_SIZE) {
-		const batch        = threads.slice(i, i + BATCH_SIZE);
-		const batchResults = await Promise.all(batch.map(t => fetchThread(gmail, t.id!)));
-		results.push(...batchResults.flat());
-		// Pace batches so a large backfill stays under the per-minute quota.
-		if (i + BATCH_SIZE < threads.length) await sleep(BATCH_PAUSE_MS);
+/**
+ * Stream full message content one batch at a time, yielding a single EmailResult per message.
+ * The caller processes and discards each, so peak memory is one batch — not the whole mailbox.
+ * Uses messages.get (20 units, half of threads.get) and paces batches under the rate ceiling.
+ */
+async function* streamJobMessages(tokens: Credentials, ids: string[]): AsyncGenerator<EmailResult> {
+	const gmail = getGmail(tokens);
+	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+		const batchStart = Date.now();
+		const batch      = ids.slice(i, i + BATCH_SIZE);
+		const results    = await Promise.all(batch.map(id => fetchMessage(gmail, id)));
+		for (const r of results) if (r) yield r;
+		if (i + BATCH_SIZE < ids.length) {
+			await sleep(Math.max(0, MIN_BATCH_INTERVAL_MS - (Date.now() - batchStart)));
+		}
 	}
-
-	return results;
 }
 
 async function revokeTokens(tokens: Credentials): Promise<void> {
@@ -355,4 +369,4 @@ async function revokeTokens(tokens: Credentials): Promise<void> {
 	}
 }
 
-export { getAuthUrl, exchangeCode, fetchJobEmails, revokeTokens };
+export { getAuthUrl, exchangeCode, listJobMessageIds, streamJobMessages, revokeTokens };

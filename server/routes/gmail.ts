@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { fetchJobEmails } from '../services/gmailService';
+import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
 import { parseEmail, extractGeneralCompanyRole } from '../services/parser';
 import * as db from '../services/db';
@@ -174,23 +174,19 @@ async function findExisting(company: string, role: string | null): Promise<Appli
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
         const start = Date.now();
-		const emails    = await fetchJobEmails(req.session.tokens!);
-		// Process oldest → newest. Gmail returns newest-first with no sort option, so we sort here.
-		// The application email (earliest) creates the canonical record with the most accurate
-		// company/role and the correct date_applied; later interview/rejection/offer emails then
-		// land as status updates on that existing entry instead of creating thin duplicates.
-		emails.sort((a, b) => a.internalDate - b.internalDate);
-		const syncedIds = await db.getSyncedMessageIds(emails.map(e => e.messageId));
-		let added = 0, updated = 0, skipped = 0, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
+		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
+		// fetching any bodies, so a routine sync downloads only what's new. 3. Reverse to process
+		// oldest → newest (Gmail lists newest-first), so the application is handled before its
+		// later status emails. 4. Stream bodies one batch at a time and discard each after use —
+		// peak memory is one batch, not the whole mailbox.
+		const allIds   = await listJobMessageIds(req.session.tokens!);
+		const syncedIds = await db.getSyncedMessageIds(allIds);
+		const newIds   = allIds.filter(id => !syncedIds.has(id)).reverse();
+		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
+		console.log(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
-		for (const email of emails) {
+		for await (const email of streamJobMessages(req.session.tokens!, newIds)) {
 			const { threadId, messageId, subject, from, body } = email;
-
-			if (syncedIds.has(messageId)) {
-				console.log(`[sync] skip (already synced) subject="${subject}"`);
-				skipped++;
-				continue;
-			}
 
 			// Hard-filter obvious non-job emails before calling the LLM.
 			if (AUTOMATED_SUBJECT.test(subject) || AUTOMATED_FROM.test(from)) {
@@ -257,9 +253,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			const existing = await findExisting(company, role);
 
 			if (existing) {
-				// The most recent email wins — it reflects the true current status.
-				const isNewer = email.lastMessageDate >= (existing.last_activity ?? '');
-				// Also upgrade "Unknown Role" when this email provides a specific role
+				// Status follows the most-recent-dated email; date_applied follows the EARLIEST.
+				// Both are computed from dates, not processing order, so streaming in any order
+				// still yields the right result.
+				const isNewer  = email.lastMessageDate >= (existing.last_activity ?? '');
+				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
+				// Upgrade "Unknown Role" when this email provides a specific role
 				// (e.g. a BAE Systems status update naming the role after a generic confirmation).
 				const roleUpgrade = existing.role === 'Unknown Role' && role
 					? { role, lookup_key: buildLookupKey(company, role) }
@@ -267,6 +266,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				await db.update(existing.id, {
 					status:        isNewer ? category : existing.status,
 					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
+					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...roleUpgrade,
 				});
 				updated++;
