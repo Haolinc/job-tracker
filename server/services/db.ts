@@ -159,6 +159,18 @@ export const findByCompany = async (company: string): Promise<Application[]> => 
 	return docs.map(toApp);
 };
 
+/**
+ * Candidate name variants: applications whose company starts with `firstWord` on a word
+ * boundary. `^Lila\b` matches "Lila" and "Lila Sciences" but not "Lilac"; the caller then
+ * confirms with a full word-prefix check.
+ */
+export const findByCompanyFirstWord = async (firstWord: string): Promise<Application[]> => {
+	const docs = await AppModel.find({
+		company: new RegExp(`^${escapeRegex(firstWord)}\\b`, 'i'),
+	}).lean<AppDoc[]>();
+	return docs.map(toApp);
+};
+
 export const getSyncedMessageIds = async (messageIds: string[]): Promise<Set<string>> => {
 	const docs = await SyncedEmailModel
 		.find({ message_id: { $in: messageIds } }, 'message_id')

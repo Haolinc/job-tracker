@@ -213,16 +213,18 @@ async function fetchThread(
 	const subject  = headers.find(h => h.name === 'Subject')?.value ?? '';
 	const from     = headers.find(h => h.name === 'From')?.value    ?? '';
 
-	return messages.map(msg => ({
-		threadId,
-		messageId:       msg.id!,
-		subject,
-		from,
-		body:            buildBody(msg, from),
-		lastMessageDate: msg.internalDate
-			? new Date(parseInt(msg.internalDate)).toISOString().split('T')[0]
-			: new Date().toISOString().split('T')[0],
-	}));
+	return messages.map(msg => {
+		const internalDate = msg.internalDate ? parseInt(msg.internalDate) : Date.now();
+		return {
+			threadId,
+			messageId:       msg.id!,
+			subject,
+			from,
+			body:            buildBody(msg, from),
+			internalDate,
+			lastMessageDate: new Date(internalDate).toISOString().split('T')[0],
+		};
+	});
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

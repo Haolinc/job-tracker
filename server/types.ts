@@ -42,7 +42,8 @@ export interface EmailResult {
 	subject: string;
 	from: string;
 	body: string;
-	lastMessageDate: string;
+	lastMessageDate: string;   // "YYYY-MM-DD" — display / date_applied
+	internalDate: number;      // epoch ms — precise sort key (lastMessageDate alone ties same-day emails)
 }
 
 export interface CreateApplicationData {

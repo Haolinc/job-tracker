@@ -98,50 +98,88 @@ function extractCompanyFromSender(from: string): string | null {
 }
 
 /**
- * Find the existing DB entry to update, using the following strategy:
- *  - Role known  → exact company + role match.
- *  - Role unknown, one entry for this company → must be the same application.
- *  - Role unknown, multiple entries → update the "Unknown Role" entry if one exists.
- *
- * Returns:
- *  - Application  → update it
- *  - undefined    → no match, create a new entry
- *  - null         → multiple known-role entries; can't determine which one — skip
+ * Do two role strings plausibly refer to the same posting? True if either side is empty /
+ * the "Unknown Role" placeholder, or one is the other plus appended qualifiers — i.e. the
+ * shorter role's significant words (>2 chars) are all contained in the longer one.
+ * Merges "Software Engineer (L3 BE)" with "Software Engineer" / "… (Req 123)", but keeps
+ * "Software Engineer" vs "QA Automation Engineer" or "Data Analyst" apart (they don't share
+ * the full shorter title, only the generic word "engineer").
  */
-async function findExisting(
-	company: string,
-	role: string | null,
-): Promise<Application | undefined | null> {
-	if (role) {
-		// Primary: O(1) indexed lookup via the pre-computed compound key.
-		const byKey = await db.findByLookupKey(buildLookupKey(company, role));
-		if (byKey) return byKey;
-		// Fallback: regex scan for entries that predate the lookup_key field
-		// (manually added records, or entries created before the migration ran).
-		const byCompanyRole = await db.findByCompanyRole(company, role);
-		if (byCompanyRole) return byCompanyRole;
+function rolesCompatible(a: string | null, b: string | null): boolean {
+	if (!a || !b || a === 'Unknown Role' || b === 'Unknown Role') return true;
+	const tokens = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length > 2));
+	const ta = tokens(a), tb = tokens(b);
+	if (ta.size === 0 || tb.size === 0) return false;
+	const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+	for (const t of small) if (!big.has(t)) return false;   // every word of the shorter title must appear in the longer
+	return true;
+}
 
-		// Last resort: if the only existing entry for this company is "Unknown Role",
-		// this email is providing the role that was missing from the confirmation email
-		// (e.g. BAE Systems sends a generic confirmation with no role, then a follow-up
-		// "Application Update" that names the role). Upgrade rather than duplicate.
-		const allForCompany = await db.findByCompany(company);
-		if (allForCompany.length === 1 && allForCompany[0].role === 'Unknown Role') {
-			return allForCompany[0];
-		}
-		return undefined;
+/**
+ * Same company under a name variant? True when one name's words are a leading prefix of the
+ * other's: "SS&C" ↔ "SS&C Technologies", "Lila" ↔ "Lila Sciences". Keeps "Morgan Stanley" vs
+ * "Morgan Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
+ */
+function companiesCompatible(a: string, b: string): boolean {
+	const words = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+	const wa = words(a), wb = words(b);
+	if (!wa.length || !wb.length) return false;
+	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+	return short.every((w, i) => w === long[i]);
+}
+
+/** The original application for a company: earliest date_applied, id as tiebreak. */
+function oldest(apps: Application[]): Application {
+	return apps.reduce((a, b) => {
+		const da = a.date_applied ?? '', db_ = b.date_applied ?? '';
+		if (da !== db_) return da < db_ ? a : b;
+		return a.id < b.id ? a : b;
+	});
+}
+
+/**
+ * Match an incoming email to an existing application. COMPANY is the primary key: no entry
+ * for the company → it's a new application. Within a company, the ROLE only disambiguates,
+ * and fuzzily — a status email often abbreviates the role ("Software Engineer (L3 BE)" →
+ * "Software Engineer"), so word-for-word matching isn't required.
+ *
+ *  - 0 entries                  → undefined (create new)
+ *  - 1 entry                    → adopt it when the role is compatible (you only applied here
+ *                                  once); a genuinely different role → undefined (separate posting)
+ *  - several entries + role     → exact match, else the oldest role-compatible one, else create
+ *  - several entries + no role  → the oldest (the original application)
+ */
+async function findExisting(company: string, role: string | null): Promise<Application | undefined> {
+	let matches = await db.findByCompany(company);
+	if (matches.length === 0) {
+		// No exact company match — adopt a name variant we ALREADY have an application for
+		// ("Lila" ↔ "Lila Sciences", "SS&C" ↔ "SS&C Technologies"), so a status email under a
+		// shorter/longer company name still lands on the right application instead of duplicating.
+		const candidates = await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company);
+		matches = candidates.filter(m => companiesCompatible(m.company, company));
 	}
-
-	const matches = await db.findByCompany(company);
 	if (matches.length === 0) return undefined;
-	if (matches.length === 1) return matches[0];
-	return matches.find(m => m.role === 'Unknown Role') ?? null;
+	if (matches.length === 1) return rolesCompatible(matches[0].role, role) ? matches[0] : undefined;
+
+	if (role) {
+		const norm = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+		const exact = matches.find(m => norm(m.role) === norm(role));
+		if (exact) return exact;
+		const compatible = matches.filter(m => rolesCompatible(m.role, role));
+		return compatible.length ? oldest(compatible) : undefined;
+	}
+	return oldest(matches);
 }
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
         const start = Date.now();
 		const emails    = await fetchJobEmails(req.session.tokens!);
+		// Process oldest → newest. Gmail returns newest-first with no sort option, so we sort here.
+		// The application email (earliest) creates the canonical record with the most accurate
+		// company/role and the correct date_applied; later interview/rejection/offer emails then
+		// land as status updates on that existing entry instead of creating thin duplicates.
+		emails.sort((a, b) => a.internalDate - b.internalDate);
 		const syncedIds = await db.getSyncedMessageIds(emails.map(e => e.messageId));
 		let added = 0, updated = 0, skipped = 0, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
 
@@ -217,13 +255,6 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			const existing = await findExisting(company, role);
-
-			// null → multiple known-role entries; ambiguous, cannot dedup safely.
-			if (existing === null) {
-				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
-				skipped++;
-				continue;
-			}
 
 			if (existing) {
 				// The most recent email wins — it reflects the true current status.
