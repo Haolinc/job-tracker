@@ -23,6 +23,7 @@ const AUTOMATED_SUBJECT = new RegExp(
 		'has been scheduled',
 		'calendar invite',
 		'meeting confirmed',
+		'reminder',
 		'jobs? alert',
 		'new jobs? for you',
 		'\\d+ new jobs?',

@@ -265,6 +265,8 @@ async function fetchJobEmails(tokens: Credentials): Promise<EmailResult[]> {
 		'"job offer"',
 		'"offer letter"',
         '"thank you for your interest"',
+		'"interview for"',
+		'"schedule your interview"',
 	].join(' ')}}`;
 
 	const query = [
