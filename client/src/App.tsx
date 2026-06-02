@@ -68,9 +68,9 @@ export default function App() {
 		}
 	};
 
-	const handleSync = async () => {
+	const handleSync = async (days: number) => {
 		try {
-			await sync();
+			await sync(days);
 			fetchAll(filters);
 		} catch { /* error shown in GmailSync via syncError */ }
 	};

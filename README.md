@@ -46,4 +46,3 @@ See `.env.example` — copy it to `server/.env` and fill in all values.
 | `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
 | `ANTHROPIC_API_KEY` | From console.anthropic.com |
 | `SESSION_SECRET` | Any long random string |
-| `GMAIL_SCAN_DAYS` | How many days back to scan (default: 30) |

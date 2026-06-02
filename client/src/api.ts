@@ -21,5 +21,5 @@ export const getAuthStatus = (): Promise<{ connected: boolean }> =>
 export const disconnectGmail = (): Promise<{ success: boolean }> =>
 	api.post('/auth/disconnect').then(r => r.data as { success: boolean });
 
-export const syncGmail = (): Promise<SyncResult> =>
-	api.post('/gmail/sync').then(r => r.data as SyncResult);
+export const syncGmail = (days?: number): Promise<SyncResult> =>
+	api.post('/gmail/sync', days ? { days } : {}).then(r => r.data as SyncResult);

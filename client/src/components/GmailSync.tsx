@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import type { SyncResult } from '../types';
+
+const SCAN_WINDOWS = [30, 60, 90, 180];
 
 interface Props {
 	connected: boolean;
@@ -7,16 +10,26 @@ interface Props {
 	error: string | null;
 	onConnect: () => void;
 	onDisconnect: () => void;
-	onSync: () => void;
+	onSync: (days: number) => void;
 }
 
 export default function GmailSync({ connected, syncing, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
+	const [days, setDays] = useState(30);
 	return (
 		<div className="flex items-center gap-3 flex-wrap">
 			{connected ? (
 				<>
+					<select
+						value={days}
+						onChange={e => setDays(Number(e.target.value))}
+						disabled={syncing}
+						title="How far back to scan Gmail"
+						className="px-2 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 bg-white disabled:opacity-60"
+					>
+						{SCAN_WINDOWS.map(d => <option key={d} value={d}>Last {d} days</option>)}
+					</select>
 					<button
-						onClick={onSync}
+						onClick={() => onSync(days)}
 						disabled={syncing}
 						className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
 					>

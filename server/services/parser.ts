@@ -148,6 +148,10 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
 	if (m) { role = m[1]; company = m[2]; }
 
+	// 1b. application to [the] [Role] opening|position|role at|with [Company]
+	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
+	if (!company) { m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
+
 	// 2. your interest in [the] [Role] position at|with [Company]
 	if (!company) { m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+position\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
 

@@ -51,6 +51,7 @@ router.post('/', async (req: Request, res: Response) => {
 			last_activity: last_activity || null,
 			job_url: job_url || null,
 			notes: notes || null,
+			notes_source: 'manual',
 			source: 'manual',
 			gmail_thread_id: null,
 		});
@@ -78,6 +79,8 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 			res.status(400).json({ error: 'Invalid interview_step value' });
 			return;
 		}
+		// A user-edited note is authoritative — flag it so future syncs never overwrite it.
+		if ('notes' in updates) updates.notes_source = 'manual';
 		const updated = await db.update(id, updates);
 		res.json(updated);
 	} catch (err) {

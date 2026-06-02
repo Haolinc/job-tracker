@@ -171,15 +171,29 @@ async function findExisting(company: string, role: string | null): Promise<Appli
 	return oldest(matches);
 }
 
+/** The auto-detection note for an application, flagging when the role still needs manual entry. */
+function gmailNote(subject: string, hasRole: boolean): string {
+	const base = `Auto-detected from Gmail: ${subject}`;
+	return hasRole ? base : `${base}\n⚠️ Role could not be extracted — please update manually.`;
+}
+
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
         const start = Date.now();
 		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
-		// fetching any bodies, so a routine sync downloads only what's new. 3. Reverse to process
-		// oldest → newest (Gmail lists newest-first), so the application is handled before its
-		// later status emails. 4. Stream bodies one batch at a time and discard each after use —
-		// peak memory is one batch, not the whole mailbox.
-		const allIds   = await listJobMessageIds(req.session.tokens!);
+		// fetching any bodies, so a routine sync downloads only what's new. 3. Reverse to oldest →
+		// newest (Gmail lists newest-first); the merge is order-independent — dates decide
+		// status/date_applied/note — but oldest-first keeps a record's create ahead of its updates.
+		// 4. Stream bodies one batch at a time and discard each after use — peak memory is one batch.
+		// Scan window chosen per request (the 30/60/90/180 picker), defaulting to 30. Widening it is
+		// safe — skip-synced backfills only the newly in-range emails. Values outside the allow-list
+		// are ignored to bound fetch cost.
+		const ALLOWED_DAYS = [30, 60, 90, 180];
+		const requested    = Number(req.body?.days ?? req.query?.days);
+		const days         = ALLOWED_DAYS.includes(requested) ? requested : 30;
+		console.log(`[sync] scan window: ${days} days`);
+
+		const allIds   = await listJobMessageIds(req.session.tokens!, days);
 		const syncedIds = await db.getSyncedMessageIds(allIds);
 		const newIds   = allIds.filter(id => !syncedIds.has(id)).reverse();
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
@@ -253,9 +267,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			const existing = await findExisting(company, role);
 
 			if (existing) {
-				// Status follows the most-recent-dated email; date_applied follows the EARLIEST.
-				// Both are computed from dates, not processing order, so streaming in any order
-				// still yields the right result.
+				// Status and the auto note both follow the most-recent-dated email (latest activity);
+				// date_applied follows the EARLIEST (the original application). All are computed from
+				// dates, not processing order, so streaming in any order yields the same result.
 				const isNewer  = email.lastMessageDate >= (existing.last_activity ?? '');
 				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
 				// Upgrade "Unknown Role" when this email provides a specific role
@@ -263,27 +277,30 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				const roleUpgrade = existing.role === 'Unknown Role' && role
 					? { role, lookup_key: buildLookupKey(company, role) }
 					: {};
+				// The newest email's text becomes the note (latest activity). A user-authored ('manual')
+				// note is never overwritten by sync.
+				const effectiveRole = existing.role === 'Unknown Role' && role ? role : existing.role;
+				const noteUpdate = isNewer && existing.notes_source !== 'manual'
+					? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
+					: {};
 				await db.update(existing.id, {
 					status:        isNewer ? category : existing.status,
 					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
+					...noteUpdate,
 					...roleUpgrade,
 				});
 				updated++;
 			} else {
-				const resolvedRole = role ?? 'Unknown Role';
-				const notes = role
-					? `Auto-detected from Gmail: ${subject}`
-					: `Auto-detected from Gmail: ${subject}\n⚠️ Role could not be extracted — please update manually.`;
 				await db.create({
 					company,
-					role:            resolvedRole,
+					role:            role ?? 'Unknown Role',
 					status:          category,
 					interview_step:  null,
 					date_applied:    email.lastMessageDate,
 					last_activity:   email.lastMessageDate,
 					job_url:         null,
-					notes,
+					notes:           gmailNote(subject, !!role),
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});

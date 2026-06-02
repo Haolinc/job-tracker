@@ -12,6 +12,7 @@ export interface Application {
 	last_activity: string | null;
 	job_url: string | null;
 	notes: string | null;
+	notes_source?: 'auto' | 'manual';   // server-managed: 'manual' notes survive syncs
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;

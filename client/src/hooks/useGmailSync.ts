@@ -27,11 +27,11 @@ export function useGmailSync() {
 		}
 	}, []);
 
-	const sync = useCallback(async (): Promise<SyncResult> => {
+	const sync = useCallback(async (days?: number): Promise<SyncResult> => {
 		setSyncing(true);
 		setError(null);
 		try {
-			const result = await syncGmail();
+			const result = await syncGmail(days);
 			setLastResult(result);
 			return result;
 		} catch (e) {

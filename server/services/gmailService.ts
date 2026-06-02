@@ -221,10 +221,8 @@ async function fetchMessage(gmail: gmail_v1.Gmail, id: string): Promise<EmailRes
 	return res.data ? messageToEmailResult(res.data) : null;
 }
 
-/** The Gmail search query — positive job-phrase OR group plus noise exclusions. */
-function buildJobQuery(): string {
-	const days = parseInt(process.env.GMAIL_SCAN_DAYS ?? '30', 10);
-
+/** The Gmail search query — positive job-phrase OR group plus noise exclusions, over the last `days`. */
+function buildJobQuery(days: number): string {
 	// Positive OR group: a thread must contain at least one job-related phrase, otherwise
 	// unrelated mail bloats the result set.
 	const keywordFilter = `{${[
@@ -323,9 +321,9 @@ function buildJobQuery(): string {
  * messages.list (5 units/page) returns only ID stubs, no bodies. The caller drops
  * already-synced IDs before fetching any content, so a routine sync downloads only what's new.
  */
-async function listJobMessageIds(tokens: Credentials): Promise<string[]> {
+async function listJobMessageIds(tokens: Credentials, days: number): Promise<string[]> {
 	const gmail = getGmail(tokens);
-	const query = buildJobQuery();
+	const query = buildJobQuery(days);
 	console.log(`[sync] searching Gmail with query: ${query}`);
 
 	const ids: string[] = [];
