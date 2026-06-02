@@ -167,6 +167,14 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	const cleanCompany = cleanGeneralCompany(company);
 	if (!cleanCompany) return null;
 
+	// Structural guard: if the captured "company" is referred to as a job title in the body
+	// ("...the QA Engineer I position", "...the Software Engineer role"), it's a role mis-parsed as a
+	// company — defer to the LLM, which reads the real company from the body. Keys off the email's own
+	// structure (the trailing position/role/opening) rather than a fixed role vocabulary, so it
+	// catches any title the body confirms (e.g. "Account Executive opening") without a keyword list.
+	const escaped = cleanCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	if (new RegExp(`\\b${escaped}\\s+(?:position|role|opening|opportunity)\\b`, 'i').test(body)) return null;
+
 	// Role recovery: the company-only patterns (4, 5) don't capture a role, but the body
 	// usually names it as "...for/to [the|our] [Role] role|position" or "position of [Role]".
 	// cleanGeneralRole validates the capture, so a bad grab becomes null rather than garbage.

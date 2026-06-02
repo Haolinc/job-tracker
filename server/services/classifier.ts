@@ -47,6 +47,14 @@ Company extraction tips (in order of reliability):
    - "at [Company]" or "with [Company]" in subject or body
    - "applying to [Company]", "applied to [Company]"
    - "Thank you for your interest in [Company]", "welcome to [Company]"
+   - "considering [Company]", "thank you for considering [Company]" (common in rejections)
+   IMPORTANT — company names may START WITH A LOWERCASE LETTER or be fully lowercase/stylized
+   (e.g. "dv01", "thoughtbot", "imgix", "etsy"). Extract such a name literally and PRESERVE its
+   original casing — do NOT dismiss a lowercase token as a code/ID and do NOT skip it. Equally, do
+   NOT mistake a title-cased JOB TITLE for the company: the company is what follows
+   "applying/considering/interest in", while the role is the title-cased phrase before
+   "position"/"role". Example body: "...for considering dv01 ... aligned with the QA Engineer I
+   position" → company "dv01", role "QA Engineer I" (NOT company "QA Engineer I").
    Always prefer these explicit phrases over domain guessing.
 2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart").
    When the display name is "[Company] @ [ATS]" (e.g. "General Dynamics Mission Systems @ icims"),
