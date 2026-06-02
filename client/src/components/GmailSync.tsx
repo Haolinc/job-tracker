@@ -45,6 +45,14 @@ export default function GmailSync({ connected, syncing, lastResult, error, onCon
 					{lastResult && (
 						<span className="text-xs text-gray-500">
 							+{lastResult.added} added · {lastResult.updated} updated · {lastResult.skipped} skipped
+							{lastResult.failed > 0 && (
+								<span
+									className="text-amber-600 font-medium"
+									title="These emails couldn't be read this time (a temporary Gmail error). They were not saved and will be retried automatically on your next sync."
+								>
+									{' '}· ⚠ {lastResult.failed} couldn’t be read (will retry)
+								</span>
+							)}
 						</span>
 					)}
 					{error && <span className="text-xs text-red-500">{error}</span>}

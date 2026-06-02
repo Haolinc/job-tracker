@@ -27,6 +27,9 @@ export interface Application {
 	reached_interview: boolean;
 	date_applied: string | null;
 	last_activity: string | null;
+	// Precise epoch (ms) of the email behind last_activity — the exact ordering key for "newest wins"
+	// (the day-string last_activity ties same-day emails). 0 when unknown.
+	last_activity_ts: number;
 	job_url: string | null;
 	notes: string | null;
 	notes_source: NoteSource;
@@ -61,6 +64,7 @@ export interface CreateApplicationData {
 	reached_interview?: boolean;   // defaults to false when omitted
 	date_applied: string | null;
 	last_activity: string | null;
+	last_activity_ts?: number;     // defaults to 0 when omitted
 	job_url: string | null;
 	notes: string | null;
 	notes_source?: NoteSource;   // defaults to 'auto' when omitted

@@ -346,12 +346,24 @@ async function listJobMessageIds(tokens: Credentials, days: number): Promise<str
  * The caller processes and discards each, so peak memory is one batch — not the whole mailbox.
  * Uses messages.get (20 units, half of threads.get) and paces batches under the rate ceiling.
  */
-async function* streamJobMessages(tokens: Credentials, ids: string[]): AsyncGenerator<EmailResult> {
+async function* streamJobMessages(tokens: Credentials, ids: string[], failedIds: string[]): AsyncGenerator<EmailResult> {
 	const gmail = getGmail(tokens);
 	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
 		const batchStart = Date.now();
 		const batch      = ids.slice(i, i + BATCH_SIZE);
-		const results    = await Promise.all(batch.map(id => fetchMessage(gmail, id)));
+		const results    = await Promise.all(batch.map(async id => {
+			try {
+				return await fetchMessage(gmail, id);
+			} catch (err) {
+				// Don't let one unfetchable message (e.g. 400 failedPrecondition) abort the whole sync.
+				// Record it instead: it is NOT marked synced, so the next sync retries it, and the
+				// caller surfaces the count so the user knows some emails still need reading.
+				const e = err as { code?: number; status?: number; message?: string };
+				console.warn(`[sync] failed to fetch message ${id}: ${e.code ?? e.status ?? ''} ${e.message ?? 'error'}`);
+				failedIds.push(id);
+				return null;
+			}
+		}));
 		for (const r of results) if (r) yield r;
 		if (i + BATCH_SIZE < ids.length) {
 			await sleep(Math.max(0, MIN_BATCH_INTERVAL_MS - (Date.now() - batchStart)));

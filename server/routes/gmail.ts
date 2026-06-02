@@ -150,21 +150,25 @@ function oldest(apps: Application[]): Application {
  *  - several entries + no role  → the oldest (the original application)
  */
 async function findExisting(company: string, role: string | null): Promise<Application | undefined> {
-	let matches = await db.findByCompany(company);
-	if (matches.length === 0) {
-		// No exact company match — adopt a name variant we ALREADY have an application for
-		// ("Lila" ↔ "Lila Sciences", "SS&C" ↔ "SS&C Technologies"), so a status email under a
-		// shorter/longer company name still lands on the right application instead of duplicating.
-		const candidates = await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company);
-		matches = candidates.filter(m => companiesCompatible(m.company, company));
-	}
+	// One first-word lookup covers BOTH the exact company and its name variants ("Lila" ↔ "Lila
+	// Sciences", "SS&C" ↔ "SS&C Technologies"): every record starts with its own first word, and
+	// companiesCompatible (a tokenized word-prefix test) is true for an exact match too. Refining all
+	// candidates together — rather than preferring exact and only falling back to variants — is what
+	// keeps matching order-independent: an exact-name record with an INCOMPATIBLE role
+	// ("SS&C Technologies" / Software Engineer) must not hide a variant with the RIGHT role
+	// ("SS&C" / QA), which would otherwise duplicate depending on processing order. (A substring
+	// "contains" match can't be used here — it ignores word boundaries, so "Lila" would match
+	// "Lilac".)
+	const matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company))
+		.filter(m => companiesCompatible(m.company, company));
+
 	if (matches.length === 0) return undefined;
 	if (matches.length === 1) return rolesCompatible(matches[0].role, role) ? matches[0] : undefined;
 
 	if (role) {
 		const norm = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-		const exact = matches.find(m => norm(m.role) === norm(role));
-		if (exact) return exact;
+		const exactRole = matches.find(m => norm(m.role) === norm(role));
+		if (exactRole) return exactRole;
 		const compatible = matches.filter(m => rolesCompatible(m.role, role));
 		return compatible.length ? oldest(compatible) : undefined;
 	}
@@ -181,10 +185,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	try {
         const start = Date.now();
 		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
-		// fetching any bodies, so a routine sync downloads only what's new. 3. Reverse to oldest →
-		// newest (Gmail lists newest-first); the merge is order-independent — dates decide
-		// status/date_applied/note — but oldest-first keeps a record's create ahead of its updates.
-		// 4. Stream bodies one batch at a time and discard each after use — peak memory is one batch.
+		// fetching any bodies, so a routine sync downloads only what's new. 3. Stream bodies one batch
+		// at a time and discard each after use — peak memory is one batch. Processing order is
+		// irrelevant: the merge keys on each email's precise internalDate (status/note = latest,
+		// date_applied = earliest), so newest- or oldest-first yields the same result.
 		// Scan window chosen per request (the 30/60/90/180 picker), defaulting to 30. Widening it is
 		// safe — skip-synced backfills only the newly in-range emails. Values outside the allow-list
 		// are ignored to bound fetch cost.
@@ -195,11 +199,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 		const allIds   = await listJobMessageIds(req.session.tokens!, days);
 		const syncedIds = await db.getSyncedMessageIds(allIds);
-		const newIds   = allIds.filter(id => !syncedIds.has(id)).reverse();
+		const newIds   = allIds.filter(id => !syncedIds.has(id));
+		const failedIds: string[] = [];   // messages that errored on fetch — not synced, retried next run
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
 		console.log(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
-		for await (const email of streamJobMessages(req.session.tokens!, newIds)) {
+		for await (const email of streamJobMessages(req.session.tokens!, newIds, failedIds)) {
 			const { threadId, messageId, subject, from, body } = email;
 
 			// Hard-filter obvious non-job emails before calling the LLM.
@@ -267,36 +272,44 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			const existing = await findExisting(company, role);
 
 			if (existing) {
-				// Status and the auto note both follow the most-recent-dated email (latest activity);
-				// date_applied follows the EARLIEST (the original application). All are computed from
-				// dates, not processing order, so streaming in any order yields the same result.
-				const isNewer  = email.lastMessageDate >= (existing.last_activity ?? '');
+				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
+				// decided by the email's precise internalDate, not the day-string — so same-day emails
+				// order correctly and processing order never matters.
+				// Newest wins by precise send time (epoch), so same-day emails order correctly and
+				// processing order never matters. ts 0 means "no recorded activity", so any email is
+				// correctly treated as newer.
+				const isNewer   = email.internalDate >= existing.last_activity_ts;
 				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
 				// Upgrade "Unknown Role" when this email provides a specific role
 				// (e.g. a BAE Systems status update naming the role after a generic confirmation).
 				const roleUpgrade = existing.role === 'Unknown Role' && role
 					? { role, lookup_key: buildLookupKey(company, role) }
 					: {};
-				// The newest email's text becomes the note (latest activity). A user-authored ('manual')
-				// note is never overwritten by sync.
 				const effectiveRole = existing.role === 'Unknown Role' && role ? role : existing.role;
-				const noteUpdate = isNewer && existing.notes_source !== 'manual'
-					? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
+				// The newest email owns status, last_activity, and the auto note (a 'manual' note is
+				// never overwritten).
+				const newerUpdate = isNewer
+					? {
+						status: category,
+						last_activity: email.lastMessageDate,
+						last_activity_ts: email.internalDate,
+						...(existing.notes_source !== 'manual'
+							? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
+							: {}),
+					}
 					: {};
 				// Sticky: any interview/offer email marks the app as having reached interview — even if
-				// a later rejection becomes the current status, and regardless of processing order.
-				// Only ever set true; the guard skips a redundant write when already set.
+				// a later rejection becomes the current status. Only ever set true.
 				const reachedUpdate = (category === 'interview' || category === 'offer') && !existing.reached_interview
 					? { reached_interview: true }
 					: {};
-				await db.update(existing.id, {
-					status:        isNewer ? category : existing.status,
-					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
+				const merged = {
+					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
-					...noteUpdate,
 					...roleUpgrade,
 					...reachedUpdate,
-				});
+				};
+				if (Object.keys(merged).length) await db.update(existing.id, merged);
 				updated++;
 			} else {
 				await db.create({
@@ -307,6 +320,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					reached_interview: category === 'interview' || category === 'offer',
 					date_applied:    email.lastMessageDate,
 					last_activity:   email.lastMessageDate,
+					last_activity_ts: email.internalDate,
 					job_url:         null,
 					notes:           gmailNote(subject, !!role),
 					source:          'gmail',
@@ -318,10 +332,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
 		}
         const duration = ((Date.now() - start) / 1000).toFixed(2);
-        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
+        const failed = failedIds.length;
+        if (failed) console.warn(`[sync] ${failed} message(s) could not be fetched — NOT marked synced, will be retried next sync: ${failedIds.join(', ')}`);
+        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
         console.log(`[sync] duration: ${duration} seconds`);
-        
-		res.json({ added, updated, skipped });
+
+		res.json({ added, updated, skipped, failed });
 	} catch (err) {
 		console.error('Sync error:', err);
 		res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });

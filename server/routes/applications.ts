@@ -52,6 +52,7 @@ router.post('/', async (req: Request, res: Response) => {
 			reached_interview: reached_interview === true || finalStatus === 'interview' || finalStatus === 'offer',
 			date_applied: date_applied || null,
 			last_activity: last_activity || null,
+			last_activity_ts: last_activity ? Date.parse(last_activity) || 0 : 0,
 			job_url: job_url || null,
 			notes: notes || null,
 			notes_source: 'manual',
@@ -86,6 +87,8 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 		if ('notes' in updates) updates.notes_source = 'manual';
 		// Interview/offer status implies the app has interviewed — enforce the sticky flag.
 		if (updates.status === 'interview' || updates.status === 'offer') updates.reached_interview = true;
+		// Keep the precise ordering key in sync with a manually-edited last_activity date.
+		if ('last_activity' in updates) updates.last_activity_ts = updates.last_activity ? Date.parse(updates.last_activity as string) || 0 : 0;
 		const updated = await db.update(id, updates);
 		res.json(updated);
 	} catch (err) {

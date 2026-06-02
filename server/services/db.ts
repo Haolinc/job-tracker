@@ -14,6 +14,7 @@ interface AppDoc {
 	reached_interview: boolean;
 	date_applied: string | null;
 	last_activity: string | null;
+	last_activity_ts: number;
 	job_url: string | null;
 	notes: string | null;
 	notes_source: string;
@@ -34,6 +35,7 @@ const appSchema = new Schema<AppDoc>({
 	reached_interview: { type: Boolean, default: false },
 	date_applied:    { type: String, default: null },
 	last_activity:   { type: String, default: null },
+	last_activity_ts: { type: Number, default: 0 },
 	job_url:         { type: String, default: null },
 	notes:           { type: String, default: null },
 	notes_source:    { type: String, default: 'auto' },
@@ -54,6 +56,7 @@ function toApp(doc: AppDoc): Application {
 		reached_interview: doc.reached_interview ?? false,
 		date_applied:    doc.date_applied,
 		last_activity:   doc.last_activity,
+		last_activity_ts: doc.last_activity_ts ?? 0,
 		job_url:         doc.job_url,
 		notes:           doc.notes,
 		notes_source:    (doc.notes_source ?? 'auto') as Application['notes_source'],
@@ -155,14 +158,6 @@ export const findByCompanyRole = async (company: string, role: string): Promise<
 		role:    new RegExp(`^${escapeRegex(role)}$`, 'i'),
 	}).lean<AppDoc>();
 	return doc ? toApp(doc) : undefined;
-};
-
-// Returns all applications for a company — used when role is unknown to avoid duplicates
-export const findByCompany = async (company: string): Promise<Application[]> => {
-	const docs = await AppModel.find({
-		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
-	}).lean<AppDoc[]>();
-	return docs.map(toApp);
 };
 
 /**

@@ -24,6 +24,7 @@ export interface SyncResult {
 	added: number;
 	updated: number;
 	skipped: number;
+	failed: number;   // emails that errored on fetch this run; not synced, retried next sync
 }
 
 export interface Filters {
