@@ -3,7 +3,7 @@ import type { ApplicationFormData, Status, InterviewStep } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 
 const EMPTY: ApplicationFormData = {
-	company: '', role: '', status: 'applied',
+	company: '', role: '', status: 'applied', reached_interview: false,
 	interview_step: '', date_applied: '', last_activity: '', job_url: '', notes: '',
 };
 
@@ -47,7 +47,16 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 							required className={inputCls} placeholder="Software Engineer" />
 					</Field>
 					<Field label="Status">
-						<select value={form.status} onChange={e => set('status', e.target.value as Status)} className={inputCls}>
+						<select
+							value={form.status}
+							onChange={e => {
+								const status = e.target.value as Status;
+								set('status', status);
+								// Reaching interview/offer means the app has interviewed — auto-check (sticky; never auto-unchecks).
+								if (status === 'interview' || status === 'offer') set('reached_interview', true);
+							}}
+							className={inputCls}
+						>
 							{(Object.entries(STATUS_LABELS) as [Status, string][]).map(([v, label]) => (
 								<option key={v} value={v}>{label}</option>
 							))}
@@ -62,6 +71,17 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 								))}
 							</select>
 						</Field>
+					)}
+					{form.status === 'rejected' && (
+						<label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+							<input
+								type="checkbox"
+								checked={form.reached_interview}
+								onChange={e => set('reached_interview', e.target.checked)}
+								className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400"
+							/>
+							Interviewed before rejection <span className="text-gray-400">(counts toward interview rate)</span>
+						</label>
 					)}
 					<div className="grid grid-cols-2 gap-3">
 						<Field label="Date Applied">

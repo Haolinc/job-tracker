@@ -26,7 +26,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
 	try {
-		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes } = req.body as {
+		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview } = req.body as {
 			company: string;
 			role: string;
 			status?: Status;
@@ -35,6 +35,7 @@ router.post('/', async (req: Request, res: Response) => {
 			last_activity?: string;
 			job_url?: string;
 			notes?: string;
+			reached_interview?: boolean;
 		};
 
 		if (!company || !role) {
@@ -42,11 +43,13 @@ router.post('/', async (req: Request, res: Response) => {
 			return;
 		}
 
+		const finalStatus = status || 'applied';
 		const app = await db.create({
 			company,
 			role,
-			status: status || 'applied',
+			status: finalStatus,
 			interview_step: interview_step || null,
+			reached_interview: reached_interview === true || finalStatus === 'interview' || finalStatus === 'offer',
 			date_applied: date_applied || null,
 			last_activity: last_activity || null,
 			job_url: job_url || null,
@@ -64,7 +67,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
 		const { id } = req.params;
-		const allowed = ['company', 'role', 'status', 'interview_step', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
+		const allowed = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
 		const updates: Record<string, unknown> = {};
 		for (const key of allowed) {
 			if ((req.body as Record<string, unknown>)[key] !== undefined) {
@@ -81,6 +84,8 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 		}
 		// A user-edited note is authoritative — flag it so future syncs never overwrite it.
 		if ('notes' in updates) updates.notes_source = 'manual';
+		// Interview/offer status implies the app has interviewed — enforce the sticky flag.
+		if (updates.status === 'interview' || updates.status === 'offer') updates.reached_interview = true;
 		const updated = await db.update(id, updates);
 		res.json(updated);
 	} catch (err) {

@@ -8,6 +8,7 @@ export interface Application {
 	role: string;
 	status: Status;
 	interview_step: InterviewStep | null;
+	reached_interview: boolean;          // sticky: ever reached interview/offer
 	date_applied: string | null;
 	last_activity: string | null;
 	job_url: string | null;
@@ -35,6 +36,7 @@ export interface ApplicationFormData {
 	role: string;
 	status: Status;
 	interview_step: InterviewStep | '';
+	reached_interview: boolean;
 	date_applied: string;
 	last_activity: string;
 	job_url: string;

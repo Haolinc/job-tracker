@@ -22,6 +22,9 @@ export interface Application {
 	lookup_key: string | null;
 	status: Status;
 	interview_step: InterviewStep | null;
+	// Sticky: true once the application ever reached interview/offer, even if later rejected.
+	// Set by sync (any interview/offer email) or manually; never auto-cleared.
+	reached_interview: boolean;
 	date_applied: string | null;
 	last_activity: string | null;
 	job_url: string | null;
@@ -55,6 +58,7 @@ export interface CreateApplicationData {
 	role: string;
 	status: Status;
 	interview_step: InterviewStep | null;
+	reached_interview?: boolean;   // defaults to false when omitted
 	date_applied: string | null;
 	last_activity: string | null;
 	job_url: string | null;

@@ -11,6 +11,7 @@ interface AppDoc {
 	lookup_key: string | null;
 	status: string;
 	interview_step: string | null;
+	reached_interview: boolean;
 	date_applied: string | null;
 	last_activity: string | null;
 	job_url: string | null;
@@ -30,6 +31,7 @@ const appSchema = new Schema<AppDoc>({
 	lookup_key:      { type: String, index: true, default: null },
 	status:          { type: String, default: 'applied' },
 	interview_step:  { type: String, default: null },
+	reached_interview: { type: Boolean, default: false },
 	date_applied:    { type: String, default: null },
 	last_activity:   { type: String, default: null },
 	job_url:         { type: String, default: null },
@@ -49,6 +51,7 @@ function toApp(doc: AppDoc): Application {
 		lookup_key:      doc.lookup_key ?? null,
 		status:          doc.status as Application['status'],
 		interview_step:  (doc.interview_step ?? null) as Application['interview_step'],
+		reached_interview: doc.reached_interview ?? false,
 		date_applied:    doc.date_applied,
 		last_activity:   doc.last_activity,
 		job_url:         doc.job_url,

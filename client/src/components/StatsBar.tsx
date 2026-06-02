@@ -9,7 +9,10 @@ export default memo(function StatsBar({ applications }: Props) {
 	const total = applications.length;
 	const active = applications.filter(a => a.status !== 'rejected').length;
 	const offers = applications.filter(a => a.status === 'offer').length;
-	const rate = total > 0 ? ((offers / total) * 100).toFixed(1) : '0.0';
+	// interview/offer are interviewed by definition; the sticky flag only resolves rejected apps
+	// (rejected-after-interview). So interview/offer count even if the flag was never set.
+	const interviewed = applications.filter(a => a.status === 'interview' || a.status === 'offer' || a.reached_interview).length;
+	const rate = total > 0 ? ((interviewed / total) * 100).toFixed(1) : '0.0';
 
 	const stat = (label: string, value: string | number, color: string) => (
 		<div className="flex flex-col items-center px-6 py-3 bg-white rounded-xl shadow-sm border border-gray-100">
@@ -23,7 +26,7 @@ export default memo(function StatsBar({ applications }: Props) {
 			{stat('Total', total, 'text-gray-800')}
 			{stat('Active', active, 'text-blue-600')}
 			{stat('Offers', offers, 'text-green-600')}
-			{stat('Offer Rate', `${rate}%`, 'text-purple-600')}
+			{stat('Interview Rate', `${rate}%`, 'text-purple-600')}
 		</div>
 	);
 });

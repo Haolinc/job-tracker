@@ -283,12 +283,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				const noteUpdate = isNewer && existing.notes_source !== 'manual'
 					? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
 					: {};
+				// Sticky: any interview/offer email marks the app as having reached interview — even if
+				// a later rejection becomes the current status, and regardless of processing order.
+				// Only ever set true; the guard skips a redundant write when already set.
+				const reachedUpdate = (category === 'interview' || category === 'offer') && !existing.reached_interview
+					? { reached_interview: true }
+					: {};
 				await db.update(existing.id, {
 					status:        isNewer ? category : existing.status,
 					last_activity: isNewer ? email.lastMessageDate : existing.last_activity,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...noteUpdate,
 					...roleUpgrade,
+					...reachedUpdate,
 				});
 				updated++;
 			} else {
@@ -297,6 +304,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					role:            role ?? 'Unknown Role',
 					status:          category,
 					interview_step:  null,
+					reached_interview: category === 'interview' || category === 'offer',
 					date_applied:    email.lastMessageDate,
 					last_activity:   email.lastMessageDate,
 					job_url:         null,
