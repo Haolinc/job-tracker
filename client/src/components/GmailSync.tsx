@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import type { SyncResult } from '../types';
+import type { SyncResult, SyncProgress } from '../types';
 
 const SCAN_WINDOWS = [30, 60, 90, 180];
 
 interface Props {
 	connected: boolean;
 	syncing: boolean;
+	progress: SyncProgress | null;
 	lastResult: SyncResult | null;
 	error: string | null;
 	onConnect: () => void;
@@ -13,7 +14,7 @@ interface Props {
 	onSync: (days: number) => void;
 }
 
-export default function GmailSync({ connected, syncing, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
+export default function GmailSync({ connected, syncing, progress, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
 	const [days, setDays] = useState(30);
 	return (
 		<div className="flex items-center gap-3 flex-wrap">
@@ -42,7 +43,24 @@ export default function GmailSync({ connected, syncing, lastResult, error, onCon
 						onClick={onDisconnect}
 						className="text-xs text-gray-400 hover:text-red-500 underline"
 					>Disconnect</button>
-					{lastResult && (
+					{syncing && (
+						progress ? (
+							<div className="flex items-center gap-2 text-xs text-gray-600" title={`${progress.processed} of ${progress.total} emails processed`}>
+								<div className="w-28 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+									<div
+										className="h-full bg-blue-600 transition-all duration-200"
+										style={{ width: `${progress.total ? Math.round((progress.processed / progress.total) * 100) : 0}%` }}
+									/>
+								</div>
+								<span className="tabular-nums whitespace-nowrap">
+									{progress.processed}/{progress.total} · +{progress.added} ~{progress.updated}
+								</span>
+							</div>
+						) : (
+							<span className="text-xs text-gray-500">preparing…</span>
+						)
+					)}
+					{!syncing && lastResult && (
 						<span className="text-xs text-gray-500">
 							+{lastResult.added} added · {lastResult.updated} updated · {lastResult.skipped} skipped
 							{lastResult.failed > 0 && (

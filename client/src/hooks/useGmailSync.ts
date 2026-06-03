@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
 import { getAuthStatus, disconnectGmail, syncGmail } from '../api';
-import type { SyncResult } from '../types';
+import type { SyncResult, SyncProgress } from '../types';
 
 export function useGmailSync() {
 	const [connected, setConnected] = useState(false);
 	const [syncing, setSyncing] = useState(false);
+	const [progress, setProgress] = useState<SyncProgress | null>(null);
 	const [lastResult, setLastResult] = useState<SyncResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
@@ -30,8 +31,9 @@ export function useGmailSync() {
 	const sync = useCallback(async (days?: number): Promise<SyncResult> => {
 		setSyncing(true);
 		setError(null);
+		setProgress(null);
 		try {
-			const result = await syncGmail(days);
+			const result = await syncGmail(days, setProgress);
 			setLastResult(result);
 			return result;
 		} catch (e) {
@@ -41,8 +43,9 @@ export function useGmailSync() {
 			throw e;
 		} finally {
 			setSyncing(false);
+			setProgress(null);
 		}
 	}, []);
 
-	return { connected, syncing, lastResult, error, checkStatus, disconnect, sync };
+	return { connected, syncing, progress, lastResult, error, checkStatus, disconnect, sync };
 }

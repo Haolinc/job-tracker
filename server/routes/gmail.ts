@@ -194,6 +194,11 @@ function gmailNote(subject: string, hasRole: boolean): string {
 }
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
+	// Progress streams to the client as newline-delimited JSON: a 'start' event (with the total), a
+	// 'progress' event per email, and a final 'done' event. Once streaming begins the HTTP status is
+	// already 200, so a later error is reported as an 'error' event instead of a 500.
+	let streaming = false;
+	const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + '\n');
 	try {
         const start = Date.now();
 		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
@@ -216,8 +221,17 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
 		console.log(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
+		res.setHeader('Content-Type', 'application/x-ndjson');
+		res.setHeader('Cache-Control', 'no-cache');
+		res.setHeader('X-Accel-Buffering', 'no');   // don't let a proxy buffer the progress stream
+		streaming = true;
+		send({ phase: 'start', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
+
+		let processed = 0;
 		for await (const email of streamJobMessages(req.session.tokens!, newIds, failedIds)) {
 			const { threadId, messageId, subject, from, body } = email;
+			processed++;
+			send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 
 			// Hard-filter obvious non-job emails before calling the LLM.
 			if (AUTOMATED_SUBJECT.test(subject) || AUTOMATED_FROM.test(from)) {
@@ -365,10 +379,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
         console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
         console.log(`[sync] duration: ${duration} seconds`);
 
-		res.json({ added, updated, skipped, failed });
+		send({ phase: 'done', added, updated, skipped, failed });
+		res.end();
 	} catch (err) {
 		console.error('Sync error:', err);
-		res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
+		if (streaming) { send({ phase: 'error', error: errMsg(err, 'Unknown error') }); res.end(); }
+		else res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
 	}
 });
 

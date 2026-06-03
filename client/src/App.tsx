@@ -13,7 +13,7 @@ type View = 'board' | 'table';
 
 export default function App() {
 	const { applications, loading, fetchAll, add, update, remove } = useApplications();
-	const { connected, syncing, lastResult, error: syncError, checkStatus, disconnect, sync } = useGmailSync();
+	const { connected, syncing, progress, lastResult, error: syncError, checkStatus, disconnect, sync } = useGmailSync();
 
 	const [filters, setFilters] = useState<FiltersType>({ search: '' });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
@@ -83,6 +83,7 @@ export default function App() {
 					<GmailSync
 						connected={connected}
 						syncing={syncing}
+						progress={progress}
 						lastResult={lastResult}
 						error={syncError}
 						onConnect={() => { window.location.href = '/api/auth/google'; }}

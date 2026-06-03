@@ -28,6 +28,14 @@ export interface SyncResult {
 	failed: number;   // emails that errored on fetch this run; not synced, retried next sync
 }
 
+export interface SyncProgress {
+	processed: number;   // emails fetched + processed so far
+	total: number;       // emails to process this run
+	added: number;
+	updated: number;
+	skipped: number;
+}
+
 export interface Filters {
 	search: string;
 }
