@@ -244,6 +244,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
 			// with zero AI cost. Falls back to the LLM for everything else.
 			let classification = parseEmail(subject, from, body);
+			const detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
 
 			if (!classification) {
 				try {
@@ -331,6 +332,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 						status: category,
 						last_activity: email.lastMessageDate,
 						last_activity_ts: email.internalDate,
+						detected_by: detectedBy,   // record how the newest (status-driving) email was classified
 						...(existing.notes_source !== 'manual'
 							? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
 							: {}),
@@ -365,6 +367,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					job_url:         null,
 					notes:           gmailNote(subject, !!role),
 					external_id:     externalId,
+					detected_by:     detectedBy,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});

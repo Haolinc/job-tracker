@@ -23,3 +23,14 @@ export const STEP_LABELS: Record<InterviewStep, string> = {
 
 /** An application whose role couldn't be auto-detected — surfaced with a warning and sorted first. */
 export const isUnknownRole = (role: string | null): boolean => !role || role.trim() === '' || role === 'Unknown Role';
+
+// Auto-detection badges — distinguish the rule-based parser from the AI classifier, for debugging.
+type Detection = 'parser' | 'llm';
+export const DETECTION_BADGE: Record<Detection, { label: string; cls: string; title: string }> = {
+	parser: { label: '⚙️ Dected by Parser', cls: 'bg-emerald-50 text-emerald-700', title: 'Detected by the rule-based parser' },
+	llm:    { label: '🤖 Dected by AI',     cls: 'bg-violet-50 text-violet-700',   title: 'Detected by the AI classifier' },
+};
+
+/** Which detection badge to show, or null when there's none (manual entry, or the user has edited it). */
+export const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean }): Detection | null =>
+	app.edited ? null : (app.detected_by ?? null);

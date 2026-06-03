@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { Application } from '../types';
-import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole } from '../constants';
+import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole, detectionBadge, DETECTION_BADGE } from '../constants';
 
 type SortKey = 'company' | 'role' | 'status' | 'date_applied' | 'last_activity';
 type SortDir = 'asc' | 'desc';
@@ -94,13 +94,23 @@ export default function TableView({ applications, onEdit, onDelete }: Props) {
 							</tr>
 						) : pageData.map(app => (
 							<tr key={app.id} className="hover:bg-gray-50 group">
-								<td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[200px] truncate">
-									<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate w-full">
-										{app.company}
-										{app.source === 'gmail' && (
-											<span className="ml-1.5 text-xs text-blue-400" title="Auto-detected from Gmail">📧</span>
-										)}
-									</button>
+								<td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[260px]">
+									<div className="flex items-center gap-1.5">
+										<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate">
+											{app.company}
+										</button>
+										{(() => {
+											const d = detectionBadge(app);
+											return d && (
+												<span
+													className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${DETECTION_BADGE[d].cls}`}
+													title={`${DETECTION_BADGE[d].title} — edit to confirm and clear the tag`}
+												>
+													{DETECTION_BADGE[d].label}
+												</span>
+											);
+										})()}
+									</div>
 								</td>
 								<td className="px-4 py-3 whitespace-nowrap max-w-[200px] truncate">
 									{isUnknownRole(app.role) ? (

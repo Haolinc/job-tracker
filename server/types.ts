@@ -10,6 +10,9 @@ declare module 'express-session' {
 export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
 export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
 export type Source = 'manual' | 'gmail';
+// How a Gmail-sourced classification was produced — for debugging which path handled an email:
+// 'parser' = the deterministic regex parser, 'llm' = the AI classifier. null for manual entries.
+export type DetectedBy = 'parser' | 'llm';
 // Who last wrote `notes`. 'manual' notes are user-authored and never overwritten by a sync;
 // 'auto' notes are sync-generated and always re-pinned to the oldest (application) email.
 export type NoteSource = 'auto' | 'manual';
@@ -37,6 +40,10 @@ export interface Application {
 	// the confirmation and its later status email share it, so they match even across company-name
 	// spellings. Null when no labelled number was found.
 	external_id: string | null;
+	// True once the user has edited the application's details — used to drop the "auto-detected" tag.
+	edited: boolean;
+	// Which path classified the email that last drove this record (parser vs LLM); null for manual.
+	detected_by: DetectedBy | null;
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;
@@ -73,6 +80,8 @@ export interface CreateApplicationData {
 	notes: string | null;
 	notes_source?: NoteSource;   // defaults to 'auto' when omitted
 	external_id?: string | null;   // ATS req/job number, when present
+	edited?: boolean;              // defaults to false when omitted
+	detected_by?: DetectedBy | null;   // 'parser' | 'llm'; null for manual
 	source: Source;
 	gmail_thread_id: string | null;
 }

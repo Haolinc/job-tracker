@@ -19,6 +19,8 @@ interface AppDoc {
 	notes: string | null;
 	notes_source: string;
 	external_id: string | null;
+	edited: boolean;
+	detected_by: string | null;
 	source: string;
 	gmail_thread_id: string | null;
 	created_at: Date;
@@ -41,6 +43,8 @@ const appSchema = new Schema<AppDoc>({
 	notes:           { type: String, default: null },
 	notes_source:    { type: String, default: 'auto' },
 	external_id:     { type: String, index: true, default: null },
+	edited:          { type: Boolean, default: false },
+	detected_by:     { type: String, default: null },
 	source:          { type: String, default: 'manual' },
 	gmail_thread_id: { type: String, default: null },
 }, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
@@ -63,6 +67,8 @@ function toApp(doc: AppDoc): Application {
 		notes:           doc.notes,
 		notes_source:    (doc.notes_source ?? 'auto') as Application['notes_source'],
 		external_id:     doc.external_id ?? null,
+		edited:          doc.edited ?? false,
+		detected_by:     (doc.detected_by ?? null) as Application['detected_by'],
 		source:          doc.source as Application['source'],
 		gmail_thread_id: doc.gmail_thread_id,
 		created_at:      doc.created_at.toISOString(),

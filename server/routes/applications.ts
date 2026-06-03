@@ -85,6 +85,9 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 		}
 		// A user-edited note is authoritative — flag it so future syncs never overwrite it.
 		if ('notes' in updates) updates.notes_source = 'manual';
+		// The user reviewed/edited the details (the edit form sends company/role) → drop the
+		// "auto-detected" tag. A bare status-only change (e.g. a board drag) is not a detail edit.
+		if ('company' in updates || 'role' in updates) updates.edited = true;
 		// Interview/offer status implies the app has interviewed — enforce the sticky flag.
 		if (updates.status === 'interview' || updates.status === 'offer') updates.reached_interview = true;
 		// Keep the precise ordering key in sync with a manually-edited last_activity date.
