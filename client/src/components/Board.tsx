@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { DndContext, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -26,20 +26,44 @@ interface ColumnProps {
 	onDelete: (id: string) => void;
 }
 
+// How many cards a collapsed column previews before "+ N more". Fixed (not screen-dependent) so the
+// layout is predictable and the "+ N more" count stays correct — bump this one number to taste.
+const COLLAPSED_PREVIEW = 3;
+
 function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
+	const [collapsed, setCollapsed] = useState(true);
 	const { setNodeRef } = useDroppable({ id: col.id });
+	const visible = collapsed ? apps.slice(0, COLLAPSED_PREVIEW) : apps;
+	const hidden = apps.length - visible.length;
 	return (
-		<div className={`flex flex-col rounded-xl border ${col.color} min-w-[200px] flex-1`}>
-			<div className="px-4 py-3 flex items-center justify-between">
-				<span className="font-semibold text-sm text-gray-700">{col.label}</span>
+		<div className={`flex flex-col rounded-xl border ${col.color} min-w-[200px] flex-1 self-start`}>
+			<button
+				onClick={() => setCollapsed(c => !c)}
+				className="px-4 py-3 flex items-center justify-between w-full text-left rounded-xl hover:bg-black/[0.03] transition-colors"
+				title={collapsed ? 'Expand' : 'Collapse'}
+			>
+				<span className="flex items-center gap-2 font-semibold text-sm text-gray-700">
+					<span className="inline-flex items-center justify-center w-4 h-4 text-base leading-none text-gray-500">
+						{collapsed && hidden > 0 ? '+' : '–'}
+					</span>
+					{col.label}
+				</span>
 				<span className="text-xs text-gray-400 bg-white/70 rounded-full px-2 py-0.5">{apps.length}</span>
-			</div>
-			<div ref={setNodeRef} className="flex flex-col gap-2 px-3 pb-3 min-h-[120px]">
-				<SortableContext items={apps.map(a => a.id)} strategy={verticalListSortingStrategy}>
-					{apps.map(app => (
+			</button>
+			<div ref={setNodeRef} className="flex flex-col gap-2 px-3 pb-3 min-h-[60px]">
+				<SortableContext items={visible.map(a => a.id)} strategy={verticalListSortingStrategy}>
+					{visible.map(app => (
 						<Card key={app.id} app={app} onEdit={onEdit} onDelete={onDelete} />
 					))}
 				</SortableContext>
+				{apps.length > COLLAPSED_PREVIEW && (
+					<button
+						onClick={() => setCollapsed(c => !c)}
+						className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg border border-dashed border-gray-300 bg-white/70 text-xs font-semibold text-gray-600 hover:border-blue-400 hover:text-blue-600 hover:bg-white transition-colors"
+					>
+						{collapsed ? `▾  Show ${hidden} more` : '▴  Show less'}
+					</button>
+				)}
 			</div>
 		</div>
 	);
