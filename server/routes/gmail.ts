@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
-import { parseEmail, extractGeneralCompanyRole } from '../services/parser';
+import { parseEmail, extractGeneralCompanyRole, extractJobNumber } from '../services/parser';
 import * as db from '../services/db';
 import { errMsg, buildLookupKey } from '../utils';
 import type { Application } from '../types';
@@ -47,6 +47,8 @@ const ATS_DOMAINS = new Set([
 	'workday.com', 'myworkday.com', 'successfactors.com', 'applytojob.com',
 	'recruitingbypaycor.com', 'paylocity.com', 'adp.com', 'ultipro.com',
 	'indeed.com', 'linkedin.com', 'glassdoor.com', 'ziprecruiter.com',
+	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
+	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
 ]);
 
@@ -149,22 +151,32 @@ function oldest(apps: Application[]): Application {
  *  - several entries + role     → exact match, else the oldest role-compatible one, else create
  *  - several entries + no role  → the oldest (the original application)
  */
-async function findExisting(company: string, role: string | null): Promise<Application | undefined> {
-	// One first-word lookup covers BOTH the exact company and its name variants ("Lila" ↔ "Lila
-	// Sciences", "SS&C" ↔ "SS&C Technologies"): every record starts with its own first word, and
-	// companiesCompatible (a tokenized word-prefix test) is true for an exact match too. Refining all
-	// candidates together — rather than preferring exact and only falling back to variants — is what
-	// keeps matching order-independent: an exact-name record with an INCOMPATIBLE role
-	// ("SS&C Technologies" / Software Engineer) must not hide a variant with the RIGHT role
-	// ("SS&C" / QA), which would otherwise duplicate depending on processing order. (A substring
-	// "contains" match can't be used here — it ignores word boundaries, so "Lila" would match
-	// "Lilac".)
-	const matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company))
+async function findExisting(company: string, role: string | null, externalId: string | null): Promise<Application | undefined> {
+	// COMPANY is the primary key. One first-word lookup covers the exact company AND its name variants
+	// ("Lila" ↔ "Lila Sciences", "SS&C" ↔ "SS&C Technologies"): every record starts with its own first
+	// word, and companiesCompatible (a tokenized word-prefix test) is true for an exact match too.
+	// (A substring "contains" match can't be used — it ignores word boundaries, so "Lila" ⊂ "Lilac".)
+	let matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company))
 		.filter(m => companiesCompatible(m.company, company));
 
+	// No company match → it's a new application/interview. We deliberately do NOT fall back to a
+	// global req-number lookup: req numbers are only unique WITHIN a company, so a global match could
+	// wrongly merge a different employer that reused the same number.
 	if (matches.length === 0) return undefined;
-	if (matches.length === 1) return rolesCompatible(matches[0].role, role) ? matches[0] : undefined;
 
+	// Within the company, the req/job number is the strongest disambiguator.
+	if (externalId) {
+		const byId = matches.find(m => m.external_id === externalId);
+		if (byId) return byId;
+		// This email names a req number none of the existing records share → a DISTINCT posting. Only
+		// records that carry no req of their own can still be the same job (their number may simply not
+		// have been extracted yet); a record with a DIFFERENT req is a different job, so drop it.
+		matches = matches.filter(m => !m.external_id);
+		if (matches.length === 0) return undefined;
+	}
+
+	// Fall back to the role string.
+	if (matches.length === 1) return rolesCompatible(matches[0].role, role) ? matches[0] : undefined;
 	if (role) {
 		const norm = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 		const exactRole = matches.find(m => norm(m.role) === norm(role));
@@ -230,13 +242,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					continue;
 				}
 
-				// The LLM decided status; trust deterministic regex for company/role when it
-				// can extract them (preserves exact req numbers, no hallucination).
+				// The LLM decided status; trust the deterministic regex for the COMPANY (verbatim, no
+				// hallucination/paraphrase). For the ROLE, only override when the regex captured it
+				// CONFIDENTLY (from a primary pattern, which preserves exact req numbers) or the LLM gave
+				// none — a low-confidence body-recovery guess must not clobber a good LLM role.
 				if (classification.category !== 'ignored') {
 					const ext = extractGeneralCompanyRole(subject, body);
 					if (ext) {
 						classification.company = ext.company;
-						if (ext.role) classification.role = ext.role;
+						if (ext.role && (ext.roleConfident || !classification.role)) classification.role = ext.role;
 					}
 				}
 			}
@@ -262,6 +276,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Normalize legal suffixes for consistent dedup.
 			if (company) company = normalizeCompany(company);
 
+			// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an
+			// employer and sometimes names itself as the company. Drop "HackerRank" as a company ONLY
+			// when the email is from that product domain — a genuine application to HackerRank itself
+			// (e.g. careers@hackerrank.com) comes from a different domain and keeps its real name.
+			if (company && /^hacker\s?rank\b/i.test(company) && /hackerrankforwork\.(?:com|io)/i.test(from)) {
+				console.log(`[sync] drop assessment-platform name as company: "${company}" subject="${subject}"`);
+				company = null;
+			}
+
 			if (category === 'ignored' || !company) {
 				console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
@@ -269,7 +292,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				continue;
 			}
 
-			const existing = await findExisting(company, role);
+			const externalId = extractJobNumber(subject, body);
+			const existing = await findExisting(company, role, externalId);
 
 			if (existing) {
 				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
@@ -303,11 +327,14 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				const reachedUpdate = (category === 'interview' || category === 'offer') && !existing.reached_interview
 					? { reached_interview: true }
 					: {};
+				// Backfill the req/job number if this email has one and the record doesn't yet.
+				const externalIdUpdate = externalId && !existing.external_id ? { external_id: externalId } : {};
 				const merged = {
 					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...roleUpgrade,
 					...reachedUpdate,
+					...externalIdUpdate,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
 				updated++;
@@ -323,6 +350,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					last_activity_ts: email.internalDate,
 					job_url:         null,
 					notes:           gmailNote(subject, !!role),
+					external_id:     externalId,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});

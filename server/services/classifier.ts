@@ -39,15 +39,38 @@ Job board recommendation rules (classify as "ignored"):
 
 Indeed rule for company extraction: the subject is "Indeed Application: [Role]" with no company. Look in the body for the employer name — it typically appears near "applied to", "position at", or the job listing header.
 
-Company extraction tips (in order of reliability):
-1. Look for explicit company mentions in the subject or body (highest priority):
-   - Subject "Thank you for applying to [Company]" or "Thanks for applying to [Company]" →
-     company is [Company]. This is the most reliable signal — extract it literally even if
-     the name is a short or common word like "Loop", "Fora", "Chalk", "Spot & Tango".
-   - "at [Company]" or "with [Company]" in subject or body
+Assessment-platform rule (HackerRank, Codility, CodeSignal, HackerEarth): these are technical-test
+invitations → category "interview". The sender is usually "[Platform] for [Company]" (e.g.
+"HackerRank for JPMorganChase") and the subject names the employer and role (e.g. "Your HackerRank
+JPMorganChase - NAMR Software Engineering Program - Campus Hiring - 2026 Invitation"). The company is
+the EMPLOYER (here "JPMorganChase"), NEVER the platform. The role is the program/title from the
+subject (here "NAMR Software Engineering Program - Campus Hiring - 2026"). If the body is an
+unrendered template or code (e.g. it contains "<%" / "<%=" / "I18n.t"), IGNORE the body entirely and
+extract company + role from the SUBJECT and SENDER.
+
+Company extraction — PRIORITY ORDER (read top to bottom, stop at the first that yields a name):
+  (A) the company named in the BODY's PROSE SENTENCES  ← highest priority, most reliable
+  (B) the SUBJECT line
+  (C) the sender display name / email domain  ← last resort
+The body's sentences are the most reliable source: a company writes its everyday WORKING name there
+(e.g. "a career at JPMorganChase") even when the subject is generic ("We received your application")
+or the sender/signature shows a legal or ATS name ("JPMorgan Chase & Co.", "@myworkday.com"). Always
+prefer the body's working name over a legal/ATS/domain form — consistency matters more than formality,
+because the same employer's other emails use that same working name.
+
+1. Explicit company phrases — look in the BODY first, then the subject:
+   - "Thank you for applying to [Company]" / "Thanks for applying to [Company]" → company is
+     [Company]. Extract it literally even if it's a short/common word ("Loop", "Fora", "Chalk").
+   - "at [Company]" or "with [Company]"
    - "applying to [Company]", "applied to [Company]"
    - "Thank you for your interest in [Company]", "welcome to [Company]"
    - "considering [Company]", "thank you for considering [Company]" (common in rejections)
+   SOURCE-OF-TRUTH RULE — the company name as written in the body's PROSE SENTENCES is the highest
+   priority. When the body uses one form in a sentence and a different legal/entity form in an email
+   SIGNATURE, legal FOOTER, or the sender's display name, ALWAYS use the SENTENCE form. Example:
+   body sentence "interested in a career at JPMorganChase" but signature "Sincerely, JPMorgan Chase
+   & Co." and sender "JPMorgan Chase & Co. Human Resources" → use "JPMorganChase" (the working name
+   in the sentence), NOT the legal name from the signature/sender.
    IMPORTANT — company names may START WITH A LOWERCASE LETTER or be fully lowercase/stylized
    (e.g. "dv01", "thoughtbot", "imgix", "etsy"). Extract such a name literally and PRESERVE its
    original casing — do NOT dismiss a lowercase token as a code/ID and do NOT skip it. Equally, do

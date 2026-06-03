@@ -148,12 +148,19 @@ function cleanBody(raw: string): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Prefers text/plain; falls back to stripped text/html. */
+// Markers of an UNRENDERED email template (ERB `<% %>`, Liquid/Handlebars `{{ }}`/`{% %}`, Rails
+// `I18n.t`). Some senders (e.g. HackerRank) ship the raw template as text/plain while the text/html
+// part is correctly rendered — so a plain part containing these is garbage, not the real content.
+const TEMPLATE_MARKERS = /<%|\{\{|\{%|\bI18n\.t\b/;
+
+/** Prefers text/plain — unless it's an unrendered template, in which case the rendered text/html wins. */
 function extractBody(part: gmail_v1.Schema$MessagePart | undefined): string {
 	const plain = findPart(part, 'text/plain');
-	if (plain) return decodePart(plain);
+	const plainText = plain ? decodePart(plain) : null;
+	if (plainText && !TEMPLATE_MARKERS.test(plainText)) return plainText;
 	const html = findPart(part, 'text/html');
-	return html ? stripHtml(decodePart(html)) : '';
+	if (html) return stripHtml(decodePart(html));
+	return plainText ?? '';
 }
 
 /**
@@ -248,6 +255,12 @@ function buildJobQuery(days: number): string {
 		// Legitimate emails using those words also contain tighter phrases above.
 		'"moving forward with other"',// rejection phrase variant
 		'"not be moving forward"',
+		// Soft rejections (T-Mobile/Workday): negated "fit" — a promo says "find the right fit", never
+		// "wasn't the right fit", so the negation keeps marketing out.
+		'"wasn\'t the right fit"',
+		'"isn\'t the best fit"',
+		'"not the right fit"',        // non-contracted variant ("was not the right fit")
+		'"not the best fit"',
 		'"start date"',
 		'"welcome aboard"',
 		'"job offer"',
@@ -310,6 +323,8 @@ function buildJobQuery(days: number): string {
 		'-subject:"has been scheduled"',              // "Your interview has been scheduled" — calendar noise, matches OR "your interview"
 		'-subject:"calendar invite"',
 		'-subject:"meeting confirmed"',
+        '-subject:"you have started an application!"',   // Monster job board noise
+        '-subject:"additional information needed"',
         keywordFilter,
 	].join(' ');
 }

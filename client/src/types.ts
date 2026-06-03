@@ -14,6 +14,7 @@ export interface Application {
 	job_url: string | null;
 	notes: string | null;
 	notes_source?: 'auto' | 'manual';   // server-managed: 'manual' notes survive syncs
+	external_id?: string | null;         // server-managed: ATS req/job number
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;

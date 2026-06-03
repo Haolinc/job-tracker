@@ -104,6 +104,7 @@ function cleanGeneralCompany(s: string | null | undefined): string | null {
 	s = run[0].trim();
 	if (s.length < 2 || s.length > 50) return null;
 	if (/^(?:req)?\d|^[A-Z]{0,4}\d{3,}/.test(s)) return null;             // an uppercase req number ("REQ346977 …"), not a company
+	if (/^req(?:uisition)?\b/i.test(s)) return null;                     // "Req 93091 …" / "Requisition …" is a job ref, not a company (e.g. "applying to Req 93091 - QA Tester")
 	return s;
 }
 
@@ -116,6 +117,7 @@ function cleanGeneralRole(s: string | null | undefined): string | null {
 	s = s.replace(/\s[-–]\s[A-Z][a-zA-Z.]+,\s*[A-Z]{2}\b|\s+(?:onsite|hybrid|remote)\s+[A-Z][a-zA-Z]+(?:,\s*[A-Z]{2})?/gi, '').trim();
 	if (s.length < 2 || s.length > 60) return null;
 	if (/\bposition\b/i.test(s)) return null;                // "Software Engineer II, Off position here" → overran
+	if (/^United\s+(?:States|Kingdom)\b/i.test(s)) return null;   // a location fragment, not a role (e.g. r3 grabbing "United States (April 2026 Start)" after an en-dash split the title)
 	return s;
 }
 
@@ -134,7 +136,7 @@ function cleanGeneralRole(s: string | null | undefined): string | null {
  * matches or the captured company fails validation. Exported so the sync loop can
  * override the LLM's company/role on the AI-status path.
  */
-export function extractGeneralCompanyRole(subject: string, body: string): { company: string; role: string | null } | null {
+export function extractGeneralCompanyRole(subject: string, body: string): { company: string; role: string | null; roleConfident: boolean } | null {
 	const text = `${subject}\n${body}`;
 	// Not applications: demographic surveys and "finish your draft" reminders.
 	if (/\b(demographic|survey)\b/i.test(text)) return null;
@@ -161,6 +163,10 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	// 4. joining our team at [Company]
 	if (!company) { m = text.match(new RegExp(`joining our team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
 
+	// 4b. [a] career [opportunities] at [Company]   (company only) — Workday/Oracle HR confirmations:
+	// "interested in a career at JPMorganChase". Deterministic so it never depends on the LLM's mood.
+	if (!company) { m = text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
+
 	// 5. applying to | application to | apply at [Company]   (company only)
 	if (!company) { m = text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
 
@@ -176,16 +182,40 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	if (new RegExp(`\\b${escaped}\\s+(?:position|role|opening|opportunity)\\b`, 'i').test(body)) return null;
 
 	// Role recovery: the company-only patterns (4, 5) don't capture a role, but the body
-	// usually names it as "...for/to [the|our] [Role] role|position" or "position of [Role]".
+	// usually names it as "position of [Role]" or "...for/to [the|our] [Role] role|position".
 	// cleanGeneralRole validates the capture, so a bad grab becomes null rather than garbage.
 	let cleanRole = cleanGeneralRole(role);
+	// A role captured by a primary pattern (1-3, alongside the company) is high-confidence; a role
+	// scraped by the body-recovery heuristics below is a low-confidence guess. The caller uses this to
+	// decide whether the regex role may override a role the LLM already produced.
+	const roleConfident = !!cleanRole;
 	if (!cleanRole) {
-		// [A-Z] anchor on the capture skips the wrong "for" in "thank you FOR applying TO our [Role]…".
+		// Prefer the explicit "position of [Role]" (r2) over the broader "for/to [Role] position" (r1):
+		// r1 can swallow a company name, e.g. "application to HackerRank for the position of [Role]"
+		// grabs "HackerRank for the". [A-Z] anchor skips the wrong "for" in "thank you FOR applying…".
 		const r1 = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opportunity)\b/);
 		const r2 = body.match(/\b(?:position|role) of\s+([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
-		cleanRole = cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r2?.[1]);
+		// r3: "[Role] [8-9 digit req number]" — Workday/Oracle confirmations list the title right before
+		// the requisition id ("Software Engineer III - Java/Python/AWS 210677860"). Last resort.
+		const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
+		cleanRole = cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r3?.[1]);
 	}
-	return { company: cleanCompany, role: cleanRole };
+	return { company: cleanCompany, role: cleanRole, roleConfident };
+}
+
+/**
+ * Pull the ATS requisition / job number from an email (subject or body) when it is explicitly
+ * labelled — e.g. "Job Number: 210715977", "Job number: 210705462", "Req ID: 210705462",
+ * "Requisition 123456". This is a stable unique key for one posting: the application confirmation
+ * and the later status/rejection email for the same job both carry it, so it matches them reliably
+ * even when the company name is written differently ("JPMorganChase" vs "JPMorgan Chase & Co.").
+ * Returns the digits only, or null when no labelled number is present.
+ */
+export function extractJobNumber(subject: string, body: string): string | null {
+	const m = `${subject}\n${body}`.match(
+		/\b(?:job\s*(?:number|id|no\.?|#)|req(?:uisition)?\s*(?:id|number|no\.?|#)?|requisition)\s*[:#]?\s*([0-9]{5,})/i,
+	);
+	return m ? m[1] : null;
 }
 
 // Strong, unambiguous status phrases mined from the real corpus (each ~0% in the

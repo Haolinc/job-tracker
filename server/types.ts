@@ -33,6 +33,10 @@ export interface Application {
 	job_url: string | null;
 	notes: string | null;
 	notes_source: NoteSource;
+	// ATS requisition/job number when the email carries one. A stable unique key for a posting:
+	// the confirmation and its later status email share it, so they match even across company-name
+	// spellings. Null when no labelled number was found.
+	external_id: string | null;
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;
@@ -68,6 +72,7 @@ export interface CreateApplicationData {
 	job_url: string | null;
 	notes: string | null;
 	notes_source?: NoteSource;   // defaults to 'auto' when omitted
+	external_id?: string | null;   // ATS req/job number, when present
 	source: Source;
 	gmail_thread_id: string | null;
 }
