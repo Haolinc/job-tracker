@@ -19,6 +19,10 @@ export default function App() {
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
 
+	// Ids touched by the most recent sync (created OR updated) — highlighted as "new". In-memory only,
+	// so a page refresh clears the effect. Set once per sync, so later manual edits don't light up.
+	const [newlyAdded, setNewlyAdded] = useState<Set<string>>(new Set());
+
 	useEffect(() => {
 		fetchAll(filters);
 	}, [filters, fetchAll]);
@@ -69,9 +73,13 @@ export default function App() {
 	};
 
 	const handleSync = async (days: number) => {
+		// Snapshot updated_at per id before syncing; after the refetch, anything new or with a bumped
+		// updated_at was touched by this sync and gets the "new" highlight.
+		const before = new Map(applications.map(a => [a.id, a.updated_at]));
 		try {
 			await sync(days);
-			fetchAll(filters);
+			const fresh = await fetchAll(filters);
+			setNewlyAdded(new Set((fresh ?? []).filter(a => before.get(a.id) !== a.updated_at).map(a => a.id)));
 		} catch { /* error shown in GmailSync via syncError */ }
 	};
 
@@ -123,6 +131,7 @@ export default function App() {
 				) : view === 'board' ? (
 					<Board
 						applications={applications}
+						highlightIds={newlyAdded}
 						onEdit={app => setModal(app as Partial<ApplicationFormData>)}
 						onDelete={handleDelete}
 						onStatusChange={handleStatusChange}
@@ -130,6 +139,7 @@ export default function App() {
 				) : (
 					<TableView
 						applications={applications}
+						highlightIds={newlyAdded}
 						onEdit={app => setModal(app as Partial<ApplicationFormData>)}
 						onDelete={handleDelete}
 					/>

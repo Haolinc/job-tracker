@@ -22,6 +22,7 @@ const COLUMNS: Column[] = [
 interface ColumnProps {
 	col: Column;
 	apps: Application[];
+	highlightIds: Set<string>;
 	onEdit: (app: Application) => void;
 	onDelete: (id: string) => void;
 }
@@ -30,7 +31,7 @@ interface ColumnProps {
 // layout is predictable and the "+ N more" count stays correct — bump this one number to taste.
 const COLLAPSED_PREVIEW = 3;
 
-function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
+function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps) {
 	const [collapsed, setCollapsed] = useState(true);
 	const { setNodeRef } = useDroppable({ id: col.id });
 	const visible = collapsed ? apps.slice(0, COLLAPSED_PREVIEW) : apps;
@@ -53,7 +54,7 @@ function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
 			<div ref={setNodeRef} className="flex flex-col gap-2 px-3 pb-3 min-h-[60px]">
 				<SortableContext items={visible.map(a => a.id)} strategy={verticalListSortingStrategy}>
 					{visible.map(app => (
-						<Card key={app.id} app={app} onEdit={onEdit} onDelete={onDelete} />
+						<Card key={app.id} app={app} isNew={highlightIds.has(app.id)} onEdit={onEdit} onDelete={onDelete} />
 					))}
 				</SortableContext>
 				{apps.length > COLLAPSED_PREVIEW && (
@@ -71,12 +72,13 @@ function KanbanColumn({ col, apps, onEdit, onDelete }: ColumnProps) {
 
 interface BoardProps {
 	applications: Application[];
+	highlightIds: Set<string>;
 	onEdit: (app: Application) => void;
 	onDelete: (id: string) => void;
 	onStatusChange: (id: string, status: Status) => void;
 }
 
-export default function Board({ applications, onEdit, onDelete, onStatusChange }: BoardProps) {
+export default function Board({ applications, highlightIds, onEdit, onDelete, onStatusChange }: BoardProps) {
 	const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
 	const byStatus = useMemo(() => {
@@ -108,6 +110,7 @@ export default function Board({ applications, onEdit, onDelete, onStatusChange }
 						key={col.id}
 						col={col}
 						apps={byStatus[col.id] ?? []}
+						highlightIds={highlightIds}
 						onEdit={onEdit}
 						onDelete={onDelete}
 					/>

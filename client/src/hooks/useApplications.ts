@@ -8,14 +8,16 @@ export function useApplications() {
 	const [error, setError] = useState<string | null>(null);
 
 	// useCallback required — used in a useEffect dep array in App.tsx
-	const fetchAll = useCallback(async (filters: Filters = { search: '' }) => {
+	const fetchAll = useCallback(async (filters: Filters = { search: '' }): Promise<Application[] | undefined> => {
 		setLoading(true);
 		setError(null);
 		try {
 			const data = await getApplications(filters);
 			setApplications(data);
+			return data;
 		} catch (e) {
 			setError(e instanceof Error ? e.message : 'Unknown error');
+			return undefined;
 		} finally {
 			setLoading(false);
 		}

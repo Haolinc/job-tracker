@@ -9,6 +9,7 @@ const PAGE_SIZE = 25;
 
 interface Props {
 	applications: Application[];
+	highlightIds: Set<string>;
 	onEdit: (app: Application) => void;
 	onDelete: (id: string) => void;
 }
@@ -36,7 +37,7 @@ function Th({ label, col, sortKey, sortDir, onSort }: ThProps) {
 	);
 }
 
-export default function TableView({ applications, onEdit, onDelete }: Props) {
+export default function TableView({ applications, highlightIds, onEdit, onDelete }: Props) {
 	const [sortKey, setSortKey] = useState<SortKey>('last_activity');
 	const [sortDir, setSortDir] = useState<SortDir>('desc');
 	const [page, setPage] = useState(0);
@@ -93,7 +94,7 @@ export default function TableView({ applications, onEdit, onDelete }: Props) {
 								</td>
 							</tr>
 						) : pageData.map(app => (
-							<tr key={app.id} className="hover:bg-gray-50 group">
+							<tr key={app.id} className={`group ${highlightIds.has(app.id) ? 'bg-emerald-50 border-l-2 border-emerald-400' : 'hover:bg-gray-50'}`}>
 								<td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[260px]">
 									<div className="flex items-center gap-1.5">
 										<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate">

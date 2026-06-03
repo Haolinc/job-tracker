@@ -5,11 +5,12 @@ import { STEP_LABELS, isUnknownRole, detectionBadge, DETECTION_BADGE } from '../
 
 interface Props {
 	app: Application;
+	isNew?: boolean;
 	onEdit: (app: Application) => void;
 	onDelete: (id: string) => void;
 }
 
-export default function Card({ app, onEdit, onDelete }: Props) {
+export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: app.id });
 
 	const style = {
@@ -22,7 +23,9 @@ export default function Card({ app, onEdit, onDelete }: Props) {
 		<div
 			ref={setNodeRef}
 			style={style}
-			className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 cursor-grab active:cursor-grabbing select-none"
+			className={`bg-white rounded-lg shadow-sm p-3 cursor-grab active:cursor-grabbing select-none ${
+				isNew ? 'border-2 border-emerald-400 ring-2 ring-emerald-100' : 'border border-gray-200'
+			}`}
 			{...attributes}
 			{...(listeners ?? {})}
 		>
@@ -54,6 +57,11 @@ export default function Card({ app, onEdit, onDelete }: Props) {
 			</div>
 
 			<div className="mt-2 flex items-center gap-2 flex-wrap">
+				{isNew && (
+					<span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-500 text-white">
+						New
+					</span>
+				)}
 				{app.interview_step && (
 					<span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">
 						{STEP_LABELS[app.interview_step]}
