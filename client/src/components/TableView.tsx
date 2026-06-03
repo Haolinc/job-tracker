@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { Application } from '../types';
-import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS } from '../constants';
+import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole } from '../constants';
 
 type SortKey = 'company' | 'role' | 'status' | 'date_applied' | 'last_activity';
 type SortDir = 'asc' | 'desc';
@@ -37,7 +37,7 @@ function Th({ label, col, sortKey, sortDir, onSort }: ThProps) {
 }
 
 export default function TableView({ applications, onEdit, onDelete }: Props) {
-	const [sortKey, setSortKey] = useState<SortKey>('date_applied');
+	const [sortKey, setSortKey] = useState<SortKey>('last_activity');
 	const [sortDir, setSortDir] = useState<SortDir>('desc');
 	const [page, setPage] = useState(0);
 
@@ -52,6 +52,13 @@ export default function TableView({ applications, onEdit, onDelete }: Props) {
 	};
 
 	const sorted = useMemo(() => [...applications].sort((a, b) => {
+		// When sorting by Role, applications with no detected role have nothing to sort on, so they go
+		// last (lowest priority) regardless of direction. Other sorts — including the default Last
+		// Response — don't special-case them.
+		if (sortKey === 'role') {
+			const au = isUnknownRole(a.role), bu = isUnknownRole(b.role);
+			if (au !== bu) return au ? 1 : -1;
+		}
 		const cmp = String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''));
 		return sortDir === 'asc' ? cmp : -cmp;
 	}), [applications, sortKey, sortDir]);
@@ -95,7 +102,17 @@ export default function TableView({ applications, onEdit, onDelete }: Props) {
 										)}
 									</button>
 								</td>
-								<td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-[200px] truncate">{app.role}</td>
+								<td className="px-4 py-3 whitespace-nowrap max-w-[200px] truncate">
+									{isUnknownRole(app.role) ? (
+										<button
+											onClick={() => onEdit(app)}
+											className="inline-flex items-center gap-1 text-amber-600 font-medium hover:underline"
+											title="Role couldn't be auto-detected — click to edit and add it"
+										>
+											<span aria-hidden>⚠️</span> Unknown role
+										</button>
+									) : <span className="text-gray-600">{app.role}</span>}
+								</td>
 								<td className="px-4 py-3 whitespace-nowrap">
 									<span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[app.status]}`}>
 										{STATUS_LABELS[app.status]}

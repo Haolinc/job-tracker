@@ -20,3 +20,6 @@ export const STEP_LABELS: Record<InterviewStep, string> = {
 	onsite:       'Onsite',
 	final:        'Final Round',
 };
+
+/** An application whose role couldn't be auto-detected — surfaced with a warning and sorted first. */
+export const isUnknownRole = (role: string | null): boolean => !role || role.trim() === '' || role === 'Unknown Role';

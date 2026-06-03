@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Application } from '../types';
-import { STEP_LABELS } from '../constants';
+import { STEP_LABELS, isUnknownRole } from '../constants';
 
 interface Props {
 	app: Application;
@@ -29,7 +29,13 @@ export default function Card({ app, onEdit, onDelete }: Props) {
 			<div className="flex justify-between items-start gap-2">
 				<div className="min-w-0">
 					<p className="font-semibold text-gray-800 truncate">{app.company}</p>
-					<p className="text-sm text-gray-500 truncate">{app.role}</p>
+					{isUnknownRole(app.role) ? (
+						<p className="text-sm text-amber-600 font-medium truncate" title="Role couldn't be auto-detected — edit this card to add it">
+							⚠️ Unknown role
+						</p>
+					) : (
+						<p className="text-sm text-gray-500 truncate">{app.role}</p>
+					)}
 				</div>
 				<div className="flex gap-1 shrink-0">
 					<button

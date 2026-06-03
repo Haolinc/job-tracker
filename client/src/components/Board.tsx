@@ -60,6 +60,10 @@ export default function Board({ applications, onEdit, onDelete, onStatusChange }
 		for (const app of applications) {
 			(groups[app.status] ??= []).push(app);
 		}
+		// Order each column by Last Response, most recent first (empty dates sort last).
+		for (const list of Object.values(groups)) {
+			list?.sort((a, b) => String(b.last_activity ?? '').localeCompare(String(a.last_activity ?? '')));
+		}
 		return groups;
 	}, [applications]);
 
