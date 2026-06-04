@@ -140,6 +140,14 @@ function cleanBody(raw: string): string {
 	// 6. URLs.
 	text = text.replace(/https?:\/\/\S+/g, '');
 
+	// 6b. Decorative divider runs ("*---*---*---*", "======", "- - - -") and do-not-reply notices.
+	// These can appear ANYWHERE — including as the entire body of an unrendered template (City of
+	// Scottsdale) — so they're removed in place rather than only via the trailing-footer truncation.
+	text = text.replace(/(?:[*\-=_~+•]\s?){4,}/g, ' ');
+	text = text.replace(/\b(?:please\s+)?do not (?:reply|respond) to this (?:email|message)\b[^.!?\n]*[.!?]?/gi, ' ');
+	text = text.replace(/\bif you reply to this (?:email|message)\b[^.!?\n]*[.!?]?/gi, ' ');
+	text = text.replace(/\breplies (?:to this (?:message|email) )?(?:are undeliverable|will not (?:be (?:read|delivered)|reach))\b[^.!?\n]*[.!?]?/gi, ' ');
+
 	// 7. Footer truncation — discard everything from the first boilerplate signal.
 	const footerIdx = text.search(FOOTER_RE);
 	if (footerIdx > 0) text = text.slice(0, footerIdx);
@@ -255,6 +263,7 @@ function buildJobQuery(days: number): string {
 		// Legitimate emails using those words also contain tighter phrases above.
 		'"moving forward with other"',// rejection phrase variant
 		'"not be moving forward"',
+        '"regret to"',
 		// Soft rejections (T-Mobile/Workday): negated "fit" — a promo says "find the right fit", never
 		// "wasn't the right fit", so the negation keeps marketing out.
 		'"wasn\'t the right fit"',
@@ -291,6 +300,10 @@ function buildJobQuery(days: number): string {
 		// any job keyword, making OR filtering impossible. Gmail routes these to "Updates", not
 		// "Social", so -category:social doesn't catch them.
 		'-from:updates-noreply@linkedin.com',
+        '-"Glassdoor Community"',
+        '-"Account Verification"',
+        '-from:noreply@newsletters.nyc.gov',
+        '-"Action Required"',
 		// Glassdoor "Apply Now / Apply Soon / is still available" job alert emails.
 		// 16 hits confirmed in 60-day audit.
 		'-subject:"Apply Now"',

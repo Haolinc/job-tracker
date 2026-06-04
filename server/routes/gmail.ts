@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
-import { parseEmail, extractGeneralCompanyRole, extractJobNumber } from '../services/parser';
+import { parseEmail, extractGeneralCompanyRole, extractJobNumber, recoverRoleFromBody, tidyRole } from '../services/parser';
 import * as db from '../services/db';
 import { errMsg, buildLookupKey } from '../utils';
 import type { Application } from '../types';
@@ -28,6 +28,12 @@ const AUTOMATED_SUBJECT = new RegExp(
 		'new jobs? for you',
 		'\\d+ new jobs?',
 		'your career opportunities at',       // recruitment marketing, not application confirmation
+		// Account-activation / email-verification emails from ATS portals — the application is NOT yet
+		// submitted (e.g. Siemens "Email address validation request"), so this isn't an application event.
+		'email address validation',
+		'verify your email',
+		'confirm your email',
+		'activate your account',
 		// Glassdoor post-application feedback survey — runtime backstop; Gmail query
 		// already excludes by subject, but these emails DO match the keywordFilter
 		// ("your application"), so a fetched straggler would still be skipped here.
@@ -47,6 +53,11 @@ const ATS_DOMAINS = new Set([
 	'workday.com', 'myworkday.com', 'successfactors.com', 'applytojob.com',
 	'recruitingbypaycor.com', 'paylocity.com', 'adp.com', 'ultipro.com',
 	'indeed.com', 'linkedin.com', 'glassdoor.com', 'ziprecruiter.com',
+	// More ATS / applicant-mail platforms that send "on behalf of" the employer — the platform
+	// domain is never the company, so the body/sender-name must supply the real name instead.
+	'rippling.com', 'brassring.com', 'ashbyhq.com', 'applyresponse.com', 'workablemail.com', 'kula.ai',
+	'candidatecare.com',   // iCIMS Candidate Care portal — a shared ATS host, never the employer's own domain
+	'governmentjobs.com', 'clearcompany.com',   // NEOGOV gov-jobs board & ClearCompany ATS — shared hosts, not the employer
 	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
 	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
@@ -58,7 +69,13 @@ const ATS_DOMAINS = new Set([
 // leave a broken trailing "&") — only strip when preceded by a word character.
 const COMPANY_SUFFIX_RE = /(?<=\w)[,.]?\s+(?:company|incorporated|inc\.?|llc|ltd\.?|corp\.?|corporation|co\.)$/i;
 
+// LinkedIn company-page qualifiers appended after a spaced dash ("CLEAR - Corporate" → "CLEAR").
+const LINKEDIN_QUALIFIER_RE = /\s+[-–]\s+(?:Corporate|Corp|HQ|Headquarters|Global|US|USA|U\.S\.A?\.?|North America|EMEA|APAC|Worldwide)\.?$/i;
+
 function normalizeCompany(name: string): string {
+	// "X dba Y" / "X d/b/a Y" → Y, the trade name people actually use ("CP Payroll, LLC dba ConnectPay" → "ConnectPay").
+	name = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
+	name = name.replace(LINKEDIN_QUALIFIER_RE, '').trim();
 	return name.replace(COMPANY_SUFFIX_RE, '').trim();
 }
 
@@ -99,6 +116,33 @@ function extractCompanyFromSender(from: string): string | null {
 	return companySlug.charAt(0).toUpperCase() + companySlug.slice(1);
 }
 
+// HR/ATS-function words that get appended to a corporate sender's display name. Their presence is the
+// signal that the display name is a COMPANY (not a person), so we only trust the name when one strips off.
+const SENDER_NAME_SUFFIX = /[\s,]*(?:[-–|]\s*)?(?:(?:p&o|people(?:\s*&\s*organization)?)\s+)?(?:workday\s+)?(?:talent acquisition(?:\s+team)?|talent team|career opportunities|careers|recruit(?:ing|ment)(?:\s+team)?|human resources|hiring(?:\s+team)?|notifications?)\s*$/i;
+
+/**
+ * Fallback for ATS senders whose body omits the company: recover it from the sender DISPLAY NAME.
+ * Only trusted when the name (a) carries an HR/ATS suffix we can strip ("RTX Workday Notifications" →
+ * "RTX", "Siemens P&O Talent Acquisition" → "Siemens") or (b) uses the icims " @ " form ("Charles
+ * Schwab Corporation @ icims" → "Charles Schwab Corporation"). A plain personal/company name with no
+ * such marker is ignored — it's as likely to be a recruiter's name as an employer.
+ */
+function extractCompanyFromSenderName(from: string): string | null {
+	let name = (from.split('<')[0] ?? '').trim().replace(/^["']|["']$/g, '').trim();
+	if (!name) return null;
+
+	// icims form: "<Company> @ icims" — the part after " @ " is the ATS, not the company.
+	const atIdx = name.indexOf(' @ ');
+	if (atIdx > 0) return name.slice(0, atIdx).trim() || null;
+	if (name.includes('@')) return null;   // a raw address slipped through — no usable display name
+
+	// Strip one or more trailing HR/ATS suffix runs ("Siemens P&O Talent Acquisition" → "Siemens").
+	let stripped = name;
+	for (let prev = ''; prev !== stripped; ) { prev = stripped; stripped = stripped.replace(SENDER_NAME_SUFFIX, '').trim(); }
+	if (stripped === name || stripped.length < 2) return null;   // nothing stripped → likely a person, not a company
+	return stripped;
+}
+
 /**
  * Do two role strings plausibly refer to the same posting? True if either side is empty /
  * the "Unknown Role" placeholder, or one is the other plus appended qualifiers — i.e. the
@@ -117,17 +161,72 @@ function rolesCompatible(a: string | null, b: string | null): boolean {
 	return true;
 }
 
+// Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
+// is the same entity under a fuller name ("SS&C" → "SS&C Technologies"). A non-descriptor extra word
+// ("Epic" → "Epic Kids") signals a DIFFERENT company that merely shares a first word.
+const COMPANY_DESCRIPTOR = new Set([
+	// corporate structure / generic
+	'group', 'holdings', 'capital', 'partners', 'ventures', 'international', 'global', 'worldwide',
+	'industries', 'enterprises', 'company', 'brands', 'labs', 'studios', 'inc', 'llc', 'ltd', 'plc',
+	'corp', 'corporation', 'co', 'management', 'advisors', 'advisory', 'asset', 'investments',
+	// tech / functional descriptors
+	'technologies', 'technology', 'tech', 'sciences', 'science', 'systems', 'solutions', 'software',
+	'hardware', 'digital', 'services', 'consulting', 'networks', 'communications', 'analytics',
+	'security', 'cloud', 'data', 'robotics', 'semiconductor', 'semiconductors', 'electronics',
+	// industry sectors — "Fora Travel" is the same company as "Fora"; "Travel" is its sector, not a new brand
+	'financial', 'finance', 'health', 'healthcare', 'bank', 'media', 'pharmaceuticals', 'pharma',
+	'bio', 'biosciences', 'therapeutics', 'diagnostics', 'energy', 'power', 'retail', 'foods', 'food',
+	'motors', 'automotive', 'aerospace', 'travel', 'hospitality', 'insurance', 'mortgage', 'realty',
+	'logistics', 'transport', 'transportation', 'education', 'learning', 'payments', 'lending',
+	'entertainment', 'games', 'gaming', 'sports', 'fitness', 'apparel', 'beverages', 'restaurants',
+	'hotels', 'airlines', 'telecom', 'telecommunications', 'mobility', 'space', 'defense', 'materials',
+]);
+
 /**
- * Same company under a name variant? True when one name's words are a leading prefix of the
- * other's: "SS&C" ↔ "SS&C Technologies", "Lila" ↔ "Lila Sciences". Keeps "Morgan Stanley" vs
- * "Morgan Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
+ * The sender's real company domain, or null. Returns null for ATS / job-board / generic-provider
+ * senders (LinkedIn, Indeed, Workday, Greenhouse, gmail.com…) so only a genuine company talent-team
+ * address ("careers@epic.com" → "epic.com") is kept. Stored on the application and used to
+ * disambiguate companies that share a first word during matching.
+ */
+function companyDomainFromSender(from: string): string | null {
+	const rawEmail = from.match(/<([^>]+)>/)?.[1] ?? from.match(/\S+@\S+/)?.[0];
+	const domain = rawEmail?.toLowerCase().split('@')[1];
+	if (!domain) return null;
+	if (ATS_DOMAINS.has(domain)) return null;
+	const labels = domain.split('.');
+	// registrable domain ≈ last two labels ("careers.epic.com" → "epic.com"). Good enough for the
+	// common .com/.io/.ai/.co single-suffix TLDs these emails use.
+	const registrable = labels.length >= 2 ? labels.slice(-2).join('.') : domain;
+	if (ATS_DOMAINS.has(registrable)) return null;   // subdomained ATS host ("us.greenhouse-mail.io")
+	return registrable;
+}
+
+const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+
+/**
+ * LOOSE name match — one name's words are a leading prefix of the other's ("Epic" ⊂ "Epic Kids",
+ * "Lila" ⊂ "Lila Sciences"). Used only to GATHER candidates cheaply; findExisting then confirms the
+ * real employer with the sender domain and companiesSameEntity. Keeps "Morgan Stanley" vs "Morgan
+ * Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
  */
 function companiesCompatible(a: string, b: string): boolean {
-	const words = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
-	const wa = words(a), wb = words(b);
+	const wa = companyWords(a), wb = companyWords(b);
 	if (!wa.length || !wb.length) return false;
 	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
 	return short.every((w, i) => w === long[i]);
+}
+
+/**
+ * STRICT same-employer check — a prefix match where the longer name only ADDS generic
+ * corporate/industry descriptors ("SS&C" ↔ "SS&C Technologies", "Fora" ↔ "Fora Travel"). A distinct
+ * proper noun in the extra words means a DIFFERENT company sharing a first word ("Epic" ✗ "Epic Kids").
+ * This is the fallback when the sender domain can't decide (e.g. both records came from ATS senders).
+ */
+function companiesSameEntity(a: string, b: string): boolean {
+	if (!companiesCompatible(a, b)) return false;
+	const wa = companyWords(a), wb = companyWords(b);
+	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+	return long.slice(short.length).every(w => COMPANY_DESCRIPTOR.has(w));
 }
 
 /** The original application for a company: earliest date_applied, id as tiebreak. */
@@ -151,18 +250,34 @@ function oldest(apps: Application[]): Application {
  *  - several entries + role     → exact match, else the oldest role-compatible one, else create
  *  - several entries + no role  → the oldest (the original application)
  */
-async function findExisting(company: string, role: string | null, externalId: string | null): Promise<Application | undefined> {
-	// COMPANY is the primary key. One first-word lookup covers the exact company AND its name variants
-	// ("Lila" ↔ "Lila Sciences", "SS&C" ↔ "SS&C Technologies"): every record starts with its own first
-	// word, and companiesCompatible (a tokenized word-prefix test) is true for an exact match too.
-	// (A substring "contains" match can't be used — it ignores word boundaries, so "Lila" ⊂ "Lilac".)
+async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null): Promise<Application | undefined> {
+	// Step 1 — gather candidates by company name (loose word-prefix match). One first-word lookup covers
+	// the exact company and its name variants. (A substring "contains" match can't be used — it ignores
+	// word boundaries, so "Lila" ⊂ "Lilac".)
 	let matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company))
 		.filter(m => companiesCompatible(m.company, company));
 
-	// No company match → it's a new application/interview. We deliberately do NOT fall back to a
+	// No name candidate → it's a new application/interview. We deliberately do NOT fall back to a
 	// global req-number lookup: req numbers are only unique WITHIN a company, so a global match could
 	// wrongly merge a different employer that reused the same number.
 	if (matches.length === 0) return undefined;
+
+	// Confirm which candidates are the SAME employer, not just first-word twins ("Epic" vs "Epic Kids"):
+	//   Step 2 — the sender's real company domain matches a candidate's stored domain (strongest signal;
+	//            also bridges name spellings, e.g. "JPMorgan" ↔ "JPMorganChase" from jpmorgan.com).
+	//   Step 3 — otherwise, same entity by name (exact, or differ only by a generic corporate/industry
+	//            descriptor). A candidate with a DIFFERENT real domain is a hard "different company" —
+	//            descriptor similarity must not override it.
+	//   Step 4 — nothing confirmed → undefined (new entry).
+	const byDomain = domain ? matches.filter(m => m.company_domain === domain) : [];
+	if (byDomain.length) {
+		matches = byDomain;
+	} else {
+		matches = matches.filter(m =>
+			companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
+		);
+		if (matches.length === 0) return undefined;
+	}
 
 	// Within the company, the req/job number is the strongest disambiguator.
 	if (externalId) {
@@ -257,19 +372,20 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					continue;
 				}
 
-				// The LLM decided status; trust the deterministic regex for the COMPANY (verbatim, no
-				// hallucination/paraphrase). For the ROLE, only override when the regex captured it
-				// CONFIDENTLY (from a primary pattern, which preserves exact req numbers) or the LLM gave
-				// none — a low-confidence body-recovery guess must not clobber a good LLM role.
-				if (classification.category !== 'ignored') {
+				// The LLM is the SOURCE OF TRUTH for company/role on this path. The deterministic regex only
+				// FILLS GAPS — when the LLM returned null — and never overrides a value the LLM produced.
+				// (Overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa".) The
+				// normalize/tidy/fallback steps below then canonicalize whatever value we end up with.
+				if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
 					const ext = extractGeneralCompanyRole(subject, body);
-					if (ext) {
-						classification.company = ext.company;
-						if (ext.role && (ext.roleConfident || !classification.role)) classification.role = ext.role;
-					}
+					if (!classification.company && ext) classification.company = ext.company;
+					if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
 				}
 			}
 
+			// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
+			// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
+			if (classification.role) classification.role = tidyRole(classification.role) || null;
 			const { category, role, classifier_code } = classification;
 			let { company } = classification;
 
@@ -285,6 +401,14 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				if (domainCompany) {
 					console.log(`[sync] company from domain fallback: "${domainCompany}" subject="${subject}"`);
 					company = domainCompany;
+				} else {
+					// Domain is an ATS/generic host. Last resort: the sender's display name with its
+					// HR/ATS suffix stripped ("RTX Workday Notifications" → "RTX").
+					const nameCompany = extractCompanyFromSenderName(from);
+					if (nameCompany) {
+						console.log(`[sync] company from sender-name fallback: "${nameCompany}" subject="${subject}"`);
+						company = nameCompany;
+					}
 				}
 			}
 
@@ -308,7 +432,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			const externalId = extractJobNumber(subject, body);
-			const existing = await findExisting(company, role, externalId);
+			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
+			// stored signal that disambiguates first-word twins on future syncs.
+			const senderDomain = companyDomainFromSender(from);
+			const existing = await findExisting(company, role, externalId, senderDomain);
 
 			if (existing) {
 				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
@@ -345,12 +472,16 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					: {};
 				// Backfill the req/job number if this email has one and the record doesn't yet.
 				const externalIdUpdate = externalId && !existing.external_id ? { external_id: externalId } : {};
+				// Backfill the company domain once a real company email arrives for a record first created
+				// from an ATS/job-board sender (so later syncs can match by domain).
+				const domainUpdate = senderDomain && !existing.company_domain ? { company_domain: senderDomain } : {};
 				const merged = {
 					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...roleUpgrade,
 					...reachedUpdate,
 					...externalIdUpdate,
+					...domainUpdate,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
 				updated++;
@@ -368,6 +499,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					notes:           gmailNote(subject, !!role),
 					external_id:     externalId,
 					detected_by:     detectedBy,
+					company_domain:  senderDomain,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});

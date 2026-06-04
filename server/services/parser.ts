@@ -90,8 +90,11 @@ function parseIndeed(subject: string, from: string, body: string): Classificatio
 //   "Public Health Solutions has been…"   → "Public Health Solutions"  (stops at "has")
 //   "Bank of America was received"        → "Bank of America"          (keeps "of" connector)
 //   "The New York Times - Software Eng…"  → "The New York Times"       (stops at " - ")
+//   "Sherpa 6. We really…"                → "Sherpa 6"                  (keeps a numeric token)
+// Continuation tokens may start with a DIGIT so number-bearing names survive ("Sherpa 6", "Section 8");
+// otherwise "Sherpa 6" truncated to "Sherpa" and failed to merge with the un-truncated form.
 // The trim is case-SENSITIVE on purpose, so it must not run under a /i regex.
-const PROPER_NOUN_RUN = /^[A-Z][\w.&'()/-]*(?:\s+(?:(?:and|of|the|&)\s+)?[A-Z][\w.&'()/-]*)*/;
+const PROPER_NOUN_RUN = /^[A-Z][\w.&'()/-]*(?:\s+(?:(?:and|of|the|&)\s+)?[A-Z0-9][\w.&'()/-]*)*/;
 
 const GEN_CO  = '([^.,!?\\n]+?)';                            // capture stays within one sentence
 const GEN_END = '(?=[.,!?\\n]|$)';
@@ -108,17 +111,79 @@ function cleanGeneralCompany(s: string | null | undefined): string | null {
 	return s;
 }
 
-/** Role: Title-cased, with trailing location modifiers stripped (requisition numbers kept). */
+/**
+ * Cosmetic role cleanup applied to EVERY final role (parser- or LLM-sourced): strips trailing ID /
+ * requisition parentheticals and work-mode / location tails, while keeping meaningful qualifiers like
+ * "(Java)", "(Maritime)", "(Remote)". Never rejects — returns the tidied string.
+ */
+export function tidyRole(s: string): string {
+	s = s.trim();
+	s = s.replace(/\s*\(\s*(?:ref(?:erence)?|requisition|req|job|id|no)\b[^)]*\)\s*$/i, '').trim();   // "(reference number: 771221)", "(Req ID: …)", "(ID: 3208334)"
+	s = s.replace(/\s*\(\s*#?[A-Za-z]{0,5}[-_: ]?\d[\dA-Za-z._\-/ ]*\)\s*$/, '').trim();               // pure-ID parenthetical "(500544)", "(124432BR)", "(2026-75736)"
+	// trailing DASH-separated requisition id ("… Developer Platform Team - 2026-75736", "… - R28486").
+	// Excludes a bare year ("- 2026") and short levels ("- L3"): needs a hyphenated number, letters+≥2 digits, or ≥5 digits.
+	s = s.replace(/\s*[-–]\s*#?(?:\d{1,4}[-_]\d{2,}|[A-Za-z]{1,6}[-_]?\d{2,}|\d{5,})[A-Za-z]{0,3}$/, '').trim();
+	s = s.replace(/\s+(?:onsite|hybrid|remote)\b.*$/i, '').trim();                                     // work-mode + everything after ("… Onsite Great River, NY"); "(Remote)" is safe (paren breaks the \s+ anchor)
+	s = s.replace(/\s*[-–,]\s*[A-Z][A-Za-z. ]+?,\s*[A-Z]{2}\b.*$/, '').trim();                         // trailing "- City, ST" / ", City, ST"
+	s = s.replace(/\s+(?:United\s+(?:States|Kingdom)|USA?|UK)\b(?:\s*\([A-Za-z]{2,3}\))?$/i, '').trim();   // trailing "… United States (US)"
+	return s.replace(/[\s,\-–]+$/, '').trim();   // leftover trailing separators
+}
+
+/** Role: Title-cased, with trailing location/ID noise stripped (via tidyRole). */
 function cleanGeneralRole(s: string | null | undefined): string | null {
 	if (!s) return null;
 	s = s.replace(/^(?:the|an?|our|your)\s+/i, '').trim();
 	s = s.replace(/^[A-Z][\w&.]*'s\s+/, '').trim();          // drop a company possessive: "Vestwell's QA Engineer" → "QA Engineer"
-	if (!/^[A-Z0-9]/.test(s)) return null;                   // kills gerund leaks like "exploring the…"
-	s = s.replace(/\s[-–]\s[A-Z][a-zA-Z.]+,\s*[A-Z]{2}\b|\s+(?:onsite|hybrid|remote)\s+[A-Z][a-zA-Z]+(?:,\s*[A-Z]{2})?/gi, '').trim();
-	if (s.length < 2 || s.length > 60) return null;
+	if (!/^(?:\([^)]*\)\s*)?[A-Z0-9]/.test(s)) return null;  // kills gerund leaks ("exploring the…"); a leading "(Entry level)" qualifier is allowed
+	s = tidyRole(s);
+	if (s.length < 2 || s.length > 80) return null;          // 80 (not 60) so long real titles survive ("(Entry level) Full Stack Software Engineer (LLM application Development)")
 	if (/\bposition\b/i.test(s)) return null;                // "Software Engineer II, Off position here" → overran
+	// Reject sentence fragments where a recovery pattern over-captured prose — verbs/auxiliaries/pronouns
+	// never appear in a real job title ("Talent Acquisition team will be evaluating applications for this").
+	// Case-SENSITIVE on purpose: it targets lowercase prose words, not Title-Cased role words.
+	if (/\b(?:will|would|shall|be|been|being|are|is|was|were|do|does|did|have|has|had|we|us|our|you|your|they|them|their|this|that|these|those|evaluating|reviewing|received|receive|submitted|considering|currently|please|thanks)\b/.test(s)) return null;
 	if (/^United\s+(?:States|Kingdom)\b/i.test(s)) return null;   // a location fragment, not a role (e.g. r3 grabbing "United States (April 2026 Start)" after an en-dash split the title)
 	return s;
+}
+
+/**
+ * Best-effort ROLE recovery from body prose, for emails where the company is already known but the
+ * title wasn't captured by a primary structure. Patterns run most- to least-specific; cleanGeneralRole
+ * validates each capture so a bad grab degrades to null rather than garbage. The result is LOW
+ * CONFIDENCE by nature — callers only use it to FILL a missing role, never to override one already set.
+ */
+export function recoverRoleFromBody(body: string, subject = ''): string | null {
+	// Subject form: "New Application Received [Role]" / "Application Received [for|:] [Role]" — the title
+	// trails the phrase, often with a location tail cleanGeneralRole strips ("… United States (US)").
+	const s1 = subject.match(/\b(?:new application received|application received(?:\s+for)?)\s*:?\s+(.+)$/i);
+	// Subject form: "(We have received your) application for [Role]" — the title follows "application for"
+	// and may carry a trailing "- <req>" (tidyRole strips it): "…application for Software Engineer, Developer Platform Team - 2026-75736".
+	const s2 = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
+	// "...position|role of [req#] [Role]" — Workday/Oracle sometimes print a req number before the title
+	const r2 = body.match(/\b(?:position|role) of\s+(?:\d{5,}\s+)?([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
+	// "...for|to [the|our] [Role] role|position|opportunity|opening" (skip the wrong "for" in "thank you FOR applying").
+	// The optional "(…)" lets a leading qualifier through ("…to the (Entry level) Full Stack Software Engineer … position").
+	const r1 = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opportunity|opening)\b/);
+	// "...in|for the [Role] role|position" — "interest in the Associate, Software Engineer position" (r1's for/to anchor sits too far left)
+	const r9 = body.match(/\b(?:in|for)\s+the\s+((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
+	// "...our [open] [Role] role|position|opening" — the "interest in our … role" phrasing r1's for/to anchor misses
+	const r4 = body.match(/\bour\s+(?:open\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
+	// "...application for the [Role] job …" — Workable confirmations ("application for the QA Automation Engineer job was submitted")
+	const r5 = body.match(/\bapplication for the\s+([A-Z][^.!?\n]*?)\s+(?:job|position|role)\b/);
+	// "...applying to|application for [our] [Role], [req#]" — icims lists the title before a short req id
+	// ("Specialist - Jr. Java Software Engineer, 2026-119847"). [^!?\n] (allows ".") so an abbreviation
+	// period inside the title ("Jr.") doesn't truncate it — the trailing req number bounds the capture.
+	const r6 = body.match(/\b(?:applying to|application for)\s+(?:the\s+|our\s+)?([A-Z][^!?\n]*?),?\s+(?:20\d{2}-)?\d{4,}\b/);
+	// "...application for [Role]," — title terminated by a comma or a clause word, not a "position"/"role"
+	// keyword ("received your application for Quality Assurance Automation Engineer, and we…"). Lower
+	// priority than the keyword-anchored patterns above, so it only fills when they find nothing.
+	const r10 = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
+	// "...applying for: [Role]" — MathWorks ("Thank you for applying for: Software Engineer in Test")
+	const r7 = body.match(/\bapplying for:\s*([A-Z][^.!?\n]*?)(?=\s+(?:Dear|Hi|Hello)\b|[.!?\n]|$)/);
+	// "[Role] [8-9 digit req number]" — title right before the requisition id ("Software Engineer III - Java 210677860")
+	const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
+	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
+		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r6?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(r7?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r3?.[1]);
 }
 
 /**
@@ -146,6 +211,11 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	let role:    string | null = null;
 	let m: RegExpMatchArray | null;
 
+	// 0. "[Company]: Thank you for applying to [the] [Role] job" — Workday system emails whose BODY is an
+	// unrendered stub ("THIS IS A SYSTEM-GENERATED EMAIL"); the subject carries both company and role.
+	m = subject.match(/^(.+?):\s*Thank you for applying to (?:the\s+)?(.+?)\s+job\b/i);
+	if (m) { company = m[1]; role = m[2]; }
+
 	// 1. applying for [the] [role|position of] [Role] [position|role] at|with [Company]
 	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
 	if (m) { role = m[1]; company = m[2]; }
@@ -160,15 +230,46 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	// 3. employment with [Company] in our [Role] position
 	if (!company) { m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i')); if (m) { company = m[1]; role = m[2]; } }
 
+	// 3c. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
+	// often holds a comma the sentence-bounded patterns above can't keep ("The New York Times - Software
+	// Engineer, Programming"). Spaces around the dash are required, so hyphenated names ("Coca-Cola") don't split.
+	if (!company) { m = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i); if (m) { company = m[1]; role = m[2]; } }
+
+	// 3d. "Application received by [Company]" (subject) — for emails whose BODY is an unrendered junk
+	// template ("*---*---*"); the subject still names the employer ("Application received by City of Scottsdale").
+	if (!company) { m = text.match(new RegExp(`\\breceived by\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+
+	// 3b. [Company] has received your application   (company only) — Ashby/greenhouse confirmations
+	// ("Thank You for Applying! Pinecone Has Received Your Application"). Runs BEFORE the "joining"
+	// patterns: the clean subject signal beats a body where HTML-stripping glued words ("joining Pineconeon").
+	if (!company) { m = text.match(new RegExp(`${GEN_CO}\\s+has received your application`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+
 	// 4. joining our team at [Company]
-	if (!company) { m = text.match(new RegExp(`joining our team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
+	if (!company) { m = text.match(new RegExp(`joining our team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+
+	// 4c. joining [the] [Company] [team]   (company only) — "interest in joining Luma!", "joining the Deltek team"
+	if (!company) { m = text.match(new RegExp(`joining (?:the\\s+)?${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
 	// 4b. [a] career [opportunities] at [Company]   (company only) — Workday/Oracle HR confirmations:
 	// "interested in a career at JPMorganChase". Deterministic so it never depends on the LLM's mood.
-	if (!company) { m = text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
+	if (!company) { m = text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
-	// 5. applying to | application to | apply at [Company]   (company only)
-	if (!company) { m = text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = m[1]; }
+	// 5. signature sign-off — some emails name the company ONLY in the closing line. Two forms:
+	//   (a) "[Recruiting|Talent Acquisition] Team at [Company]"   ("Best, The Recruiting Team at Precision Neuroscience")
+	//   (b) "[Salutation], [Company] Talent Acquisition|Recruiting" ("Kind Regards, Morgan Stanley Talent Acquisition")
+	// Runs BEFORE the bare "applying to" pattern: a subject like "applying to Software Engineer" (a ROLE,
+	// no company) would otherwise make that pattern grab the role and the structural guard nullify everything,
+	// hiding the real company in the sign-off ("Thank you, PMC Talent Acquisition Team").
+	if (!company) { m = text.match(new RegExp(`(?:Talent Acquisition|Recruiting)\\s+Team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+	if (!company) { m = text.match(new RegExp(`(?:Regards|Kind Regards|Best Regards|Warm Regards|Sincerely|Best|Warmly|Cheers|Thanks|Thanks again|Thank you|Many thanks|All the best),\\s+(?!(?:The|Talent|Recruiting|Recruitment|Human|People)\\b)${GEN_CO}\\s+(?:Talent Acquisition|Talent Team|Recruiting Team|Recruiting)\\b`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+
+	// 6. applying to | application to | apply at [Company]   (company only)
+	if (!company) { m = text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+
+	// 7. [your] interest in [Company]   (company only, LAST — broadest) — "interest in Lockheed Martin",
+	// "interest in Blue Mountain Quality Resources, LLC and our …". The proper-noun-run trim + the
+	// structural guard below keep this from grabbing a role phrase ("interest in the Software Engineer …").
+	if (!company) { m = text.match(new RegExp(`\\b(?:your |the )?interest in ${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
 	const cleanCompany = cleanGeneralCompany(company);
 	if (!cleanCompany) return null;
@@ -181,25 +282,12 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	const escaped = cleanCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	if (new RegExp(`\\b${escaped}\\s+(?:position|role|opening|opportunity)\\b`, 'i').test(body)) return null;
 
-	// Role recovery: the company-only patterns (4, 5) don't capture a role, but the body
-	// usually names it as "position of [Role]" or "...for/to [the|our] [Role] role|position".
-	// cleanGeneralRole validates the capture, so a bad grab becomes null rather than garbage.
+	// A role captured by a primary pattern (0-3, alongside the company) is high-confidence; a role
+	// scraped by the body-recovery heuristics is a low-confidence guess. The caller uses this to decide
+	// whether the regex role may override a role the LLM already produced.
 	let cleanRole = cleanGeneralRole(role);
-	// A role captured by a primary pattern (1-3, alongside the company) is high-confidence; a role
-	// scraped by the body-recovery heuristics below is a low-confidence guess. The caller uses this to
-	// decide whether the regex role may override a role the LLM already produced.
 	const roleConfident = !!cleanRole;
-	if (!cleanRole) {
-		// Prefer the explicit "position of [Role]" (r2) over the broader "for/to [Role] position" (r1):
-		// r1 can swallow a company name, e.g. "application to HackerRank for the position of [Role]"
-		// grabs "HackerRank for the". [A-Z] anchor skips the wrong "for" in "thank you FOR applying…".
-		const r1 = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opportunity)\b/);
-		const r2 = body.match(/\b(?:position|role) of\s+([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
-		// r3: "[Role] [8-9 digit req number]" — Workday/Oracle confirmations list the title right before
-		// the requisition id ("Software Engineer III - Java/Python/AWS 210677860"). Last resort.
-		const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
-		cleanRole = cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r3?.[1]);
-	}
+	if (!cleanRole) cleanRole = recoverRoleFromBody(body, subject);
 	return { company: cleanCompany, role: cleanRole, roleConfident };
 }
 
@@ -223,7 +311,7 @@ export function extractJobNumber(subject: string, body: string): string | null {
 // applied confirmations routinely say "if you're not selected…".
 // NOTE: bare "unfortunately" is deliberately NOT here — it appears in applied emails too
 // ("unfortunately we can't give status updates"). Rejection needs an explicit action phrase.
-const GENERAL_REJECT  = /regret to inform|not be proceeding|other candidates|pursue other|mov(?:e|ing) forward with (?:other )?(?:candidates|applicants)|\b(?:not|won'?t|will not|unable to|cannot|can'?t)\s+(?:be\s+|to\s+)?(?:mov(?:e|ing)\s+forward|progress|proceed)\b|\bnot\s+selected\b|decided to (?:go|proceed) with|will not be progressing|selected (?:a|the|another) candidate|position has (?:now )?been filled/i;
+const GENERAL_REJECT  = /regret to inform|not be proceeding|other candidates|pursue other|mov(?:e|ing) forward with (?:other )?(?:candidates|applicants)|\b(?:not|won'?t|will not|unable to|cannot|can'?t)\s+(?:be\s+|to\s+)?(?:mov(?:e|ing)\s+forward|progress|proceed)\b|\bnot\s+selected\b|decided to (?:go|proceed) with|will not be progressing|selected (?:a|the|another) candidate|\bbeen filled\b|\b(?:is|was|now)\s+filled\b|\bno longer hiring\b/i;
 const GENERAL_APPLIED = /received your application|application (?:has been|was) received|we will review|we'?ll review|under review|currently reviewing|reviewing your (?:application|profile)|will be in touch|get back to you|look forward to reviewing|if your (?:qualifications|skills|background|experience)|if there (?:is|'?s) a (?:match|fit|potential)|confirm receipt|has been (?:submitted|received)|status of your application|successfully (?:submitted|received|applied)/i;
 
 /** Returns a status only when keywords are decisive; null means "ask the LLM". */

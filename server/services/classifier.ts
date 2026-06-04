@@ -17,6 +17,13 @@ Categories:
 - rejected: application declined or position filled
 - ignored: everything else — newsletters, cold outreach, unrelated emails, automated scheduling confirmations (Calendly, Google Meet invites, "your interview is confirmed"), calendar invites, automatic replies, out-of-office replies, or anything ambiguous where you cannot confidently determine the category
 
+REJECTION SIGNALS — these phrases mean "rejected", NOT "ignored", even when the email is padded with
+encouraging marketing fluff (career pages, job alerts, "keep an eye on our openings", "stay connected"):
+"the position/role has been filled", "this role has been filled", "(we are) no longer hiring for",
+"position is now filled", "moving forward with other candidates", "not be proceeding". An email that
+names the role you applied for and then says it was filled or they're no longer hiring is a REJECTION —
+do not let the surrounding "explore other opportunities" boilerplate downgrade it to "ignored".
+
 INTERVIEW RULES — only classify as "interview" if at least ONE of these is present:
 1. Explicit scheduling language: "schedule an interview", "phone screen", "video call", "speak with you", "call with you", "set up a time"
 2. A technical assessment or test invitation with a link or platform name (e.g. HackerRank, Codility, Intervue, TestGorilla)
@@ -79,6 +86,13 @@ because the same employer's other emails use that same working name.
    "position"/"role". Example body: "...for considering dv01 ... aligned with the QA Engineer I
    position" → company "dv01", role "QA Engineer I" (NOT company "QA Engineer I").
    Always prefer these explicit phrases over domain guessing.
+   MORE company phrases to catch (the body often uses ONLY one of these): "interest in joining
+   [Company]", "joining the [Company] team", "[Company] has received your application", and a bare
+   "interest in [Company]" / "interest in employment at [Company]".
+   SIGNATURE-ONLY RULE — sometimes the company appears NOWHERE in the body prose except the closing
+   sign-off ("Kind Regards, Morgan Stanley Talent Acquisition" / "Best, The Recruiting Team at
+   Precision Neuroscience"). In that case use that name. Do NOT return null when the signature names a
+   company — strip the trailing HR words ("Talent Acquisition", "Recruiting Team", "Careers").
 2. Use the sender name from the From header (e.g. "Walmart Careers <...>" → "Walmart").
    When the display name is "[Company] @ [ATS]" (e.g. "General Dynamics Mission Systems @ icims"),
    extract the part BEFORE " @ " as the company — the ATS suffix is not the company name.
@@ -105,11 +119,9 @@ because the same employer's other emails use that same working name.
    not the employer. Return null if only the ATS domain is available.
 
 Role extraction tips:
-- Look for job titles in the subject or body (e.g. "Application for Software Engineer")
-- If a reference number, requisition ID, or job code appears alongside the title, append it
-  in parentheses so the same role at the same company can be distinguished by application:
-    e.g. "Java Developer (reference number: 779128)", "SWE (Req ID: ABC-123)"
-  Only include a code if it is explicitly in the email; do not invent one.
+- Look for job titles in the subject or body (e.g. "Application for Software Engineer", "Application Success: Space Force - Software Engineer")
+- Keep the title CLEAN: do NOT append reference/requisition numbers, job IDs, or location tails — the
+  requisition number is tracked separately. "Java Developer (reference number: 779128)" → "Java Developer".
 - LinkedIn subjects like "Your application to [Role] at [Company]" → role is [Role], company is [Company]
 - A generic "Thank you for applying" with no title → return null (caller will store "Unknown Role")
 - Do not invent a role; only return what is explicitly stated.
@@ -120,7 +132,23 @@ Role extraction tips:
     "Data Analyst Hybrid Chicago"               → "Data Analyst"
   Do NOT strip if what follows is a number (requisition IDs look like "Remote 376141" — keep it)
   or a non-geographic word ("Evergreen" is a posting type, not a city — keep it).
-  When in doubt, keep the original text.`;
+  When in doubt, keep the original text.
+
+WORKED EXAMPLES (input cue → output). These are the source of truth for the tricky decisions; when a
+new case is classified wrong, ADD a short example here rather than relying on prose rules alone:
+1. From "JPMorgan Chase & Co. <noreply@cloud.oracle.com>", body "...interested in a career at JPMorganChase..."
+   → {"category":"applied","company":"JPMorganChase","role":null}
+   (the body's working name wins over BOTH the legal signature name and the Oracle ATS sender domain)
+2. Subject "Thank you for your Resume", body "...your application for the Test Engineer at Sherpa 6. We..."
+   → {"category":"applied","company":"Sherpa 6","role":"Test Engineer"}   (keep the number — it is part of the name)
+3. Body "...Thanks for applying! ... Thank you, PMC Talent Acquisition Team"  (company appears ONLY in the sign-off)
+   → {"category":"applied","company":"PMC","role":null}
+4. Subject "Application received by City of Scottsdale", body is unrendered junk ("*---*---*---*")
+   → {"category":"applied","company":"City of Scottsdale","role":null}   (body is junk → take the company from the SUBJECT)
+5. Body "...Thank you for your interest in employment at CP Payroll, LLC dba ConnectPay..."
+   → {"category":"applied","company":"ConnectPay","role":null}   (use the "dba" trade name, not the legal entity)
+6. Subject "Your HackerRank for Acme Corp - Backend Engineer Invitation", from "HackerRank <...>"
+   → {"category":"interview","company":"Acme Corp","role":"Backend Engineer"}   (the EMPLOYER, never the assessment platform)`;
 
 const VALID_CATEGORIES = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
 

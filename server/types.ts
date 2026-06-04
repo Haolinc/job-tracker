@@ -44,6 +44,10 @@ export interface Application {
 	edited: boolean;
 	// Which path classified the email that last drove this record (parser vs LLM); null for manual.
 	detected_by: DetectedBy | null;
+	// Registrable domain of the sender when the email came from a REAL company address ("epic.com").
+	// Null for ATS / job-board senders (LinkedIn, Indeed, Workday, Greenhouse…) and manual entries.
+	// Used to disambiguate companies that merely share a first word ("Epic" vs "Epic Kids") when matching.
+	company_domain: string | null;
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;
@@ -82,6 +86,7 @@ export interface CreateApplicationData {
 	external_id?: string | null;   // ATS req/job number, when present
 	edited?: boolean;              // defaults to false when omitted
 	detected_by?: DetectedBy | null;   // 'parser' | 'llm'; null for manual
+	company_domain?: string | null;    // real company domain of the sender; null for ATS/job-board/manual
 	source: Source;
 	gmail_thread_id: string | null;
 }
