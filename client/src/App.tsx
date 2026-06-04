@@ -7,6 +7,7 @@ import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
+import { downloadApplicationsCsv } from './utils/exportCsv';
 import type { Application, ApplicationFormData, Filters as FiltersType } from './types';
 
 type View = 'board' | 'table';
@@ -107,6 +108,15 @@ export default function App() {
 								className={`px-3 py-2 border-l border-gray-200 ${view === 'table' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
 							>☰ Table</button>
 						</div>
+                        <div className="w-px h-6 bg-gray-300 mx-4"></div>
+						<button
+							onClick={() => downloadApplicationsCsv(applications)}
+							disabled={applications.length === 0}
+							className="px-3 py-2 border border-blue-400 bg-blue-100 text-blue-800 text-sm font-medium rounded-lg hover:bg-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
+							title="Download the current applications as a CSV file"
+						>
+							⤓ Export CSV
+						</button>
 						<button
 							onClick={() => setModal({})}
 							className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
