@@ -1,8 +1,4 @@
 import { useMemo, useState } from 'react';
-import { DndContext, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type { DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { useDroppable } from '@dnd-kit/core';
 import Card from './Card';
 import type { Application, Status } from '../types';
 
@@ -27,13 +23,12 @@ interface ColumnProps {
 	onDelete: (id: string) => void;
 }
 
-// How many cards a collapsed column previews before "+ N more". Fixed (not screen-dependent) so the
-// layout is predictable and the "+ N more" count stays correct — bump this one number to taste.
+// How many cards a collapsed column previews before "Show N more". Fixed (not screen-dependent) so the
+// layout is predictable and the "Show N more" count stays correct — bump this one number to taste.
 const COLLAPSED_PREVIEW = 3;
 
 function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps) {
 	const [collapsed, setCollapsed] = useState(true);
-	const { setNodeRef } = useDroppable({ id: col.id });
 	const visible = collapsed ? apps.slice(0, COLLAPSED_PREVIEW) : apps;
 	const hidden = apps.length - visible.length;
 	return (
@@ -51,12 +46,10 @@ function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps
 				</span>
 				<span className="text-xs text-gray-400 bg-white/70 rounded-full px-2 py-0.5">{apps.length}</span>
 			</button>
-			<div ref={setNodeRef} className="flex flex-col gap-2 px-3 pb-3 min-h-[60px]">
-				<SortableContext items={visible.map(a => a.id)} strategy={verticalListSortingStrategy}>
-					{visible.map(app => (
-						<Card key={app.id} app={app} isNew={highlightIds.has(app.id)} onEdit={onEdit} onDelete={onDelete} />
-					))}
-				</SortableContext>
+			<div className="flex flex-col gap-2 px-3 pb-3 min-h-[60px]">
+				{visible.map(app => (
+					<Card key={app.id} app={app} isNew={highlightIds.has(app.id)} onEdit={onEdit} onDelete={onDelete} />
+				))}
 				{apps.length > COLLAPSED_PREVIEW && (
 					<button
 						onClick={() => setCollapsed(c => !c)}
@@ -75,12 +68,9 @@ interface BoardProps {
 	highlightIds: Set<string>;
 	onEdit: (app: Application) => void;
 	onDelete: (id: string) => void;
-	onStatusChange: (id: string, status: Status) => void;
 }
 
-export default function Board({ applications, highlightIds, onEdit, onDelete, onStatusChange }: BoardProps) {
-	const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
-
+export default function Board({ applications, highlightIds, onEdit, onDelete }: BoardProps) {
 	const byStatus = useMemo(() => {
 		const groups: Partial<Record<Status, Application[]>> = {};
 		for (const app of applications) {
@@ -93,29 +83,18 @@ export default function Board({ applications, highlightIds, onEdit, onDelete, on
 		return groups;
 	}, [applications]);
 
-	const handleDragEnd = ({ active, over }: DragEndEvent) => {
-		if (!over) return;
-		const app = applications.find(a => a.id === active.id);
-		const newStatus = COLUMNS.find(c => c.id === over.id)?.id;
-		if (app && newStatus && app.status !== newStatus) {
-			onStatusChange(app.id, newStatus);
-		}
-	};
-
 	return (
-		<DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-			<div className="flex gap-4 overflow-x-auto pb-4">
-				{COLUMNS.map(col => (
-					<KanbanColumn
-						key={col.id}
-						col={col}
-						apps={byStatus[col.id] ?? []}
-						highlightIds={highlightIds}
-						onEdit={onEdit}
-						onDelete={onDelete}
-					/>
-				))}
-			</div>
-		</DndContext>
+		<div className="flex gap-4 overflow-x-auto pb-4">
+			{COLUMNS.map(col => (
+				<KanbanColumn
+					key={col.id}
+					col={col}
+					apps={byStatus[col.id] ?? []}
+					highlightIds={highlightIds}
+					onEdit={onEdit}
+					onDelete={onDelete}
+				/>
+			))}
+		</div>
 	);
 }

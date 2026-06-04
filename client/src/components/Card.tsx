@@ -1,5 +1,3 @@
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import type { Application } from '../types';
 import { STEP_LABELS, isUnknownRole, detectionBadge, DETECTION_BADGE } from '../constants';
 
@@ -11,23 +9,11 @@ interface Props {
 }
 
 export default function Card({ app, isNew, onEdit, onDelete }: Props) {
-	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: app.id });
-
-	const style = {
-		transform: CSS.Transform.toString(transform),
-		transition,
-		opacity: isDragging ? 0.5 : 1,
-	};
-
 	return (
 		<div
-			ref={setNodeRef}
-			style={style}
-			className={`bg-white rounded-lg shadow-sm p-3 cursor-grab active:cursor-grabbing select-none ${
+			className={`bg-white rounded-lg shadow-sm p-3 ${
 				isNew ? 'border-2 border-emerald-400 ring-2 ring-emerald-100' : 'border border-gray-200'
 			}`}
-			{...attributes}
-			{...(listeners ?? {})}
 		>
 			<div className="flex justify-between items-start gap-2">
 				<div className="min-w-0">
@@ -42,14 +28,12 @@ export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 				</div>
 				<div className="flex gap-1 shrink-0">
 					<button
-						onPointerDown={e => e.stopPropagation()}
-						onClick={e => { e.stopPropagation(); onEdit(app); }}
+						onClick={() => onEdit(app)}
 						className="text-gray-400 hover:text-blue-500 text-xs px-1"
 						title="Edit"
 					>✏️</button>
 					<button
-						onPointerDown={e => e.stopPropagation()}
-						onClick={e => { e.stopPropagation(); onDelete(app.id); }}
+						onClick={() => onDelete(app.id)}
 						className="text-gray-400 hover:text-red-500 text-xs px-1"
 						title="Delete"
 					>🗑️</button>

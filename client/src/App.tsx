@@ -7,7 +7,7 @@ import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
-import type { Application, ApplicationFormData, Filters as FiltersType, Status } from './types';
+import type { Application, ApplicationFormData, Filters as FiltersType } from './types';
 
 type View = 'board' | 'table';
 
@@ -61,14 +61,6 @@ export default function App() {
 			} catch {
 				alert('Failed to delete. Please try again.');
 			}
-		}
-	};
-
-	const handleStatusChange = async (id: string, status: Status) => {
-		try {
-			await update(id, { status });
-		} catch {
-			alert('Failed to update status. Please try again.');
 		}
 	};
 
@@ -134,7 +126,6 @@ export default function App() {
 						highlightIds={newlyAdded}
 						onEdit={app => setModal(app as Partial<ApplicationFormData>)}
 						onDelete={handleDelete}
-						onStatusChange={handleStatusChange}
 					/>
 				) : (
 					<TableView
