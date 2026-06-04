@@ -63,6 +63,12 @@ const ATS_DOMAINS = new Set([
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
 ]);
 
+// Brand labels of the ATS_DOMAINS above ("icims", "greenhouse", "workday"…). Lets us reject regional /
+// alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
+// even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
+// company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
+const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
+
 // Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
 // "Sun West Mortgage" resolve to the same dedup key.
 // The lookbehind (?<=\w) prevents matching " Co." in "Foo & Co." (which would
@@ -143,22 +149,34 @@ function extractCompanyFromSenderName(from: string): string | null {
 	return stripped;
 }
 
+// Generic role nouns + connectors/seniority that don't identify the KIND of role. Two titles that share
+// ONLY these (e.g. just "engineer") are NOT the same posting — "QA Engineer" ≠ "Data Quality Assurance Engineer".
+const GENERIC_ROLE_WORD = new Set([
+	'of', 'the', 'and', 'for', 'in', 'to', 'at', 'on', 'an',
+	'senior', 'junior', 'principal', 'staff', 'lead', 'entry', 'level', 'associate', 'sr', 'jr', 'mid',
+	'engineer', 'engineering', 'developer', 'development', 'analyst', 'manager', 'management', 'specialist',
+	'consultant', 'architect', 'designer', 'administrator', 'coordinator', 'scientist', 'technician',
+	'programmer', 'professional', 'representative', 'officer', 'director', 'intern', 'internship', 'member',
+	'position', 'role', 'opening',
+]);
+
 /**
- * Do two role strings plausibly refer to the same posting? True if either side is empty /
- * the "Unknown Role" placeholder, or one is the other plus appended qualifiers — i.e. the
- * shorter role's significant words (>2 chars) are all contained in the longer one.
- * Merges "Software Engineer (L3 BE)" with "Software Engineer" / "… (Req 123)", but keeps
- * "Software Engineer" vs "QA Automation Engineer" or "Data Analyst" apart (they don't share
- * the full shorter title, only the generic word "engineer").
+ * Do two role strings plausibly refer to the same posting? True if either side is empty / "Unknown Role",
+ * or the shorter title's words are all contained in the longer AND they share a DISTINCTIVE (non-generic)
+ * word — so "Software Engineer" merges with "Software Engineer (L3 BE)", but "QA Engineer" does NOT merge
+ * with "Data Quality Assurance Engineer" (they'd only share the bare noun "engineer"). When the shorter
+ * title is entirely generic ("Engineer"), it merges only with an identical one.
  */
 function rolesCompatible(a: string | null, b: string | null): boolean {
 	if (!a || !b || a === 'Unknown Role' || b === 'Unknown Role') return true;
-	const tokens = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length > 2));
+	// Keep 2-char tokens ("QA", "ML", "AI") — they identify the role; only single letters ("I", "a") drop out.
+	const tokens = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length >= 2));
 	const ta = tokens(a), tb = tokens(b);
 	if (ta.size === 0 || tb.size === 0) return false;
 	const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
-	for (const t of small) if (!big.has(t)) return false;   // every word of the shorter title must appear in the longer
-	return true;
+	for (const t of small) if (!big.has(t)) return false;          // the shorter title's words are all in the longer
+	if ([...small].some(t => !GENERIC_ROLE_WORD.has(t))) return true;   // they share a distinctive (non-generic) word
+	return small.size === big.size;                                // both all-generic → only if identical
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
@@ -194,10 +212,14 @@ function companyDomainFromSender(from: string): string | null {
 	if (!domain) return null;
 	if (ATS_DOMAINS.has(domain)) return null;
 	const labels = domain.split('.');
-	// registrable domain ≈ last two labels ("careers.epic.com" → "epic.com"). Good enough for the
-	// common .com/.io/.ai/.co single-suffix TLDs these emails use.
-	const registrable = labels.length >= 2 ? labels.slice(-2).join('.') : domain;
-	if (ATS_DOMAINS.has(registrable)) return null;   // subdomained ATS host ("us.greenhouse-mail.io")
+	// registrable domain ≈ last two labels ("careers.epic.com" → "epic.com"), but last THREE for multi-part
+	// TLDs ("careers.acme.co.uk" → "acme.co.uk", not the shared "co.uk").
+	let registrable = labels.length >= 2 ? labels.slice(-2).join('.') : domain;
+	if (labels.length >= 3 && /^(?:co|com|org|net|gov|edu|ac|or|ne|go)\.[a-z]{2}$/.test(registrable)) {
+		registrable = labels.slice(-3).join('.');
+	}
+	if (ATS_DOMAINS.has(registrable)) return null;            // subdomained ATS host ("us.greenhouse-mail.io")
+	if (ATS_BRANDS.has(registrable.split('.')[0])) return null;   // regional/alternate TLD of a known ATS ("icims.eu")
 	return registrable;
 }
 
@@ -251,33 +273,23 @@ function oldest(apps: Application[]): Application {
  *  - several entries + no role  → the oldest (the original application)
  */
 async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null): Promise<Application | undefined> {
-	// Step 1 — gather candidates by company name (loose word-prefix match). One first-word lookup covers
-	// the exact company and its name variants. (A substring "contains" match can't be used — it ignores
-	// word boundaries, so "Lila" ⊂ "Lilac".)
-	let matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company))
-		.filter(m => companiesCompatible(m.company, company));
+	// Step 1 — DOMAIN FIRST. A real company domain (companyDomainFromSender already excludes ATS/job-board
+	// hosts) is unique to one employer, so a domain match IS the company — and it bridges name spellings
+	// for free ("SS&C" ↔ "SS&C Technologies" from sscinc.com, "JPMorgan" ↔ "JPMorganChase").
+	let matches: Application[] = domain ? await db.findByCompanyDomain(domain) : [];
 
-	// No name candidate → it's a new application/interview. We deliberately do NOT fall back to a
-	// global req-number lookup: req numbers are only unique WITHIN a company, so a global match could
-	// wrongly merge a different employer that reused the same number.
-	if (matches.length === 0) return undefined;
-
-	// Confirm which candidates are the SAME employer, not just first-word twins ("Epic" vs "Epic Kids"):
-	//   Step 2 — the sender's real company domain matches a candidate's stored domain (strongest signal;
-	//            also bridges name spellings, e.g. "JPMorgan" ↔ "JPMorganChase" from jpmorgan.com).
-	//   Step 3 — otherwise, same entity by name (exact, or differ only by a generic corporate/industry
-	//            descriptor). A candidate with a DIFFERENT real domain is a hard "different company" —
-	//            descriptor similarity must not override it.
-	//   Step 4 — nothing confirmed → undefined (new entry).
-	const byDomain = domain ? matches.filter(m => m.company_domain === domain) : [];
-	if (byDomain.length) {
-		matches = byDomain;
-	} else {
-		matches = matches.filter(m =>
+	// Step 2 — no domain on this email, or no stored record carries it yet: fall back to the company NAME.
+	// Gather first-word candidates, keep only same-entity names ("Epic" ✗ "Epic Kids"), and reject any
+	// candidate that carries a DIFFERENT real domain (a known different employer the name resembles).
+	if (matches.length === 0) {
+		matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company)).filter(m =>
 			companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
 		);
-		if (matches.length === 0) return undefined;
 	}
+
+	// No candidate → new application. We deliberately do NOT fall back to a global req-number lookup: req
+	// numbers are only unique WITHIN a company, so a global match could wrongly merge a different employer.
+	if (matches.length === 0) return undefined;
 
 	// Within the company, the req/job number is the strongest disambiguator.
 	if (externalId) {
@@ -436,6 +448,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// stored signal that disambiguates first-word twins on future syncs.
 			const senderDomain = companyDomainFromSender(from);
 			const existing = await findExisting(company, role, externalId, senderDomain);
+
+			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
+			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
+			if (existing && senderDomain && existing.company_domain === senderDomain && !companiesSameEntity(existing.company, company)) {
+				console.log(`[sync] domain-bridged merge: "${company}" → existing "${existing.company}" (domain ${senderDomain})`);
+			}
 
 			if (existing) {
 				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are

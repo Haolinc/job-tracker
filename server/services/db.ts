@@ -184,6 +184,12 @@ export const findByCompanyFirstWord = async (firstWord: string): Promise<Applica
 	return docs.map(toApp);
 };
 
+/** All applications from the same real company domain — the strongest dedup key (one domain = one employer). */
+export const findByCompanyDomain = async (domain: string): Promise<Application[]> => {
+	const docs = await AppModel.find({ company_domain: domain }).lean<AppDoc[]>();
+	return docs.map(toApp);
+};
+
 export const getSyncedMessageIds = async (messageIds: string[]): Promise<Set<string>> => {
 	const docs = await SyncedEmailModel
 		.find({ message_id: { $in: messageIds } }, 'message_id')
