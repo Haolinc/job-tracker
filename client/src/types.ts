@@ -1,6 +1,6 @@
 export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
 export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
-export type Source = 'manual' | 'gmail';
+export type Source = 'manual' | 'gmail' | 'csv';
 
 export interface Application {
 	id: string;

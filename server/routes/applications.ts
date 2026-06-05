@@ -2,10 +2,12 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import * as db from '../services/db';
 import { errMsg } from '../utils';
-import type { Status, InterviewStep } from '../types';
+import type { Status, InterviewStep, Source } from '../types';
 
 const VALID_STATUSES    = new Set<string>(['applied', 'interview', 'offer', 'rejected']);
 const VALID_STEPS       = new Set<string>(['phone_screen', 'technical', 'onsite', 'final']);
+// User-creatable sources. 'gmail' is reserved for the sync pipeline and can't be set via this route.
+const VALID_SOURCES     = new Set<string>(['manual', 'csv']);
 
 const router = Router();
 
@@ -26,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
 	try {
-		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview } = req.body as {
+		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview, source } = req.body as {
 			company: string;
 			role: string;
 			status?: Status;
@@ -36,6 +38,7 @@ router.post('/', async (req: Request, res: Response) => {
 			job_url?: string;
 			notes?: string;
 			reached_interview?: boolean;
+			source?: string;
 		};
 
 		if (!company || !role) {
@@ -43,20 +46,23 @@ router.post('/', async (req: Request, res: Response) => {
 			return;
 		}
 
-		const finalStatus = status || 'applied';
+		// Reaching an interview is incompatible with an "applied" status — promote it (an interviewed
+		// app is at least at the interview stage). Interview/offer already imply reached, below.
+		const reached = reached_interview === true || status === 'interview' || status === 'offer';
+		const finalStatus = (reached && (!status || status === 'applied')) ? 'interview' : (status || 'applied');
 		const app = await db.create({
 			company,
 			role,
 			status: finalStatus,
 			interview_step: interview_step || null,
-			reached_interview: reached_interview === true || finalStatus === 'interview' || finalStatus === 'offer',
+			reached_interview: reached,
 			date_applied: date_applied || null,
 			last_activity: last_activity || null,
 			last_activity_ts: last_activity ? Date.parse(last_activity) || 0 : 0,
 			job_url: job_url || null,
 			notes: notes || null,
 			notes_source: 'manual',
-			source: 'manual',
+			source: source && VALID_SOURCES.has(source) ? source as Source : 'manual',
 			gmail_thread_id: null,
 		});
 		res.status(201).json(app);

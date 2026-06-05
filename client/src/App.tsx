@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Board from './components/Board';
 import TableView from './components/TableView';
 import AddModal from './components/AddModal';
 import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
+import ImportResultModal, { type ImportOutcome } from './components/ImportResultModal';
+import { getApplications } from './api';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
 import { downloadApplicationsCsv } from './utils/exportCsv';
+import { parseApplicationsCsv, CsvImportError } from './utils/importCsv';
 import type { Application, ApplicationFormData, Filters as FiltersType } from './types';
 
 type View = 'board' | 'table';
@@ -20,9 +23,12 @@ export default function App() {
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
 
-	// Ids touched by the most recent sync (created OR updated) — highlighted as "new". In-memory only,
-	// so a page refresh clears the effect. Set once per sync, so later manual edits don't light up.
+	// Ids touched by the most recent sync OR import (created OR updated) — highlighted as "new".
+	// In-memory only, so a page refresh clears the effect; set once, so later edits don't light up.
 	const [newlyAdded, setNewlyAdded] = useState<Set<string>>(new Set());
+
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [importResult, setImportResult] = useState<ImportOutcome | null>(null);
 
 	useEffect(() => {
 		fetchAll(filters);
@@ -63,6 +69,58 @@ export default function App() {
 				alert('Failed to delete. Please try again.');
 			}
 		}
+	};
+
+	const handleImport = async (file: File) => {
+		let parsed;
+		try {
+			parsed = parseApplicationsCsv(await file.text());
+		} catch (e) {
+			// A CsvImportError carries a user-facing reason (no Company column, a row missing a
+			// company, …); the whole sheet is rejected and nothing is imported.
+			setImportResult({
+				tone: 'error',
+				title: 'Import failed',
+				message: e instanceof CsvImportError ? e.message : 'Could not read that file as CSV.',
+			});
+			return;
+		}
+		if (parsed.length === 0) {
+			setImportResult({ tone: 'warning', title: 'Nothing to import', message: 'No applications were found in that CSV.' });
+			return;
+		}
+		// Same company + role (case-insensitive) == same application, so skip it. Dedup against the
+		// COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications` list is
+		// narrowed by an active search filter and can be momentarily stale — AND against earlier rows
+		// in this same file, since a CSV can list the same company+role more than once (e.g. rows that
+		// differ only by date/status). Without the in-file guard, those rows would all be added.
+		const key = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
+		const seen = new Set((await getApplications()).map(a => key(a.company, a.role)));
+		const toAdd = parsed.filter(a => {
+			const k = key(a.company, a.role);
+			if (seen.has(k)) return false;
+			seen.add(k);
+			return true;
+		});
+		const duplicates = parsed.length - toAdd.length;
+
+		const results = await Promise.allSettled(toAdd.map(a => add(a)));
+		const created = results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : []));
+		const failed = results.length - created.length;
+
+		await fetchAll(filters);
+		setNewlyAdded(new Set(created.map(a => a.id)));
+
+		setImportResult({
+			tone: failed > 0 || created.length === 0 ? 'warning' : 'success',
+			title: created.length > 0 ? 'Import complete' : 'Nothing new to import',
+			message: created.length === 0 ? 'Every row was already on your board.' : undefined,
+			stats: [
+				{ label: 'Imported', value: created.length, cls: 'text-emerald-600' },
+				...(duplicates ? [{ label: 'Skipped (already on board)', value: duplicates, cls: 'text-gray-500' }] : []),
+				...(failed ? [{ label: 'Failed', value: failed, cls: 'text-red-600' }] : []),
+			],
+		});
 	};
 
 	const handleSync = async (days: number) => {
@@ -109,6 +167,24 @@ export default function App() {
 							>☰ Table</button>
 						</div>
                         <div className="w-px h-6 bg-gray-300 mx-4"></div>
+						<input
+							ref={fileInputRef}
+							type="file"
+							accept=".csv,text/csv"
+							className="hidden"
+							onChange={e => {
+								const file = e.target.files?.[0];
+								e.target.value = '';   // reset so re-selecting the same file fires onChange again
+								if (file) handleImport(file);
+							}}
+						/>
+						<button
+							onClick={() => fileInputRef.current?.click()}
+							className="px-3 py-2 border border-blue-400 bg-white text-blue-800 text-sm font-medium rounded-lg hover:bg-blue-50"
+							title="Import applications from a CSV file"
+						>
+							⤒ Import CSV
+						</button>
 						<button
 							onClick={() => downloadApplicationsCsv(applications)}
 							disabled={applications.length === 0}
@@ -154,6 +230,10 @@ export default function App() {
 					onSave={handleSave}
 					onClose={() => setModal(null)}
 				/>
+			)}
+
+			{importResult && (
+				<ImportResultModal outcome={importResult} onClose={() => setImportResult(null)} />
 			)}
 		</div>
 	);

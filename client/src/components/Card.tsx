@@ -1,5 +1,5 @@
 import type { Application } from '../types';
-import { STEP_LABELS, isUnknownRole, detectionBadge, DETECTION_BADGE } from '../constants';
+import { STEP_LABELS, isUnknownRole, provenanceBadges } from '../constants';
 
 interface Props {
 	app: Application;
@@ -51,17 +51,15 @@ export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 						{STEP_LABELS[app.interview_step]}
 					</span>
 				)}
-				{(() => {
-					const d = detectionBadge(app);
-					return d && (
-						<span
-							className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${DETECTION_BADGE[d].cls}`}
-							title={`${DETECTION_BADGE[d].title} — edit this card to confirm and clear the tag`}
-						>
-							{DETECTION_BADGE[d].label}
-						</span>
-					);
-				})()}
+				{provenanceBadges(app).map(b => (
+					<span
+						key={b.label}
+						className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${b.cls}`}
+						title={b.title}
+					>
+						{b.label}
+					</span>
+				))}
 			</div>
 
 			<div className="mt-2 flex flex-col gap-0.5">

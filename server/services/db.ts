@@ -173,13 +173,15 @@ export const findByCompanyRole = async (company: string, role: string): Promise<
 };
 
 /**
- * Candidate name variants: applications whose company starts with `firstWord` on a word
- * boundary. `^Lila\b` matches "Lila" and "Lila Sciences" but not "Lilac"; the caller then
- * confirms with a full word-prefix check.
+ * Candidate name variants: applications whose company starts with `firstWord`, bounded so the next
+ * character isn't alphanumeric. `^Lila(?![a-z0-9])` matches "Lila" and "Lila Sciences" but not
+ * "Lilac"; the caller then confirms with a full word-prefix check. A negative lookahead is used
+ * instead of `\b` so a first word ENDING in punctuation still matches — `\b` has no word boundary
+ * after the trailing "." of "U.S.", which silently dropped every "U.S. Bank" candidate.
  */
 export const findByCompanyFirstWord = async (firstWord: string): Promise<Application[]> => {
 	const docs = await AppModel.find({
-		company: new RegExp(`^${escapeRegex(firstWord)}\\b`, 'i'),
+		company: new RegExp(`^${escapeRegex(firstWord)}(?![a-z0-9])`, 'i'),
 	}).lean<AppDoc[]>();
 	return docs.map(toApp);
 };

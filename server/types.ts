@@ -9,7 +9,7 @@ declare module 'express-session' {
 
 export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
 export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
-export type Source = 'manual' | 'gmail';
+export type Source = 'manual' | 'gmail' | 'csv';
 // How a Gmail-sourced classification was produced — for debugging which path handled an email:
 // 'parser' = the deterministic regex parser, 'llm' = the AI classifier. null for manual entries.
 export type DetectedBy = 'parser' | 'llm';

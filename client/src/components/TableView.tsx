@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { Application } from '../types';
-import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole, detectionBadge, DETECTION_BADGE } from '../constants';
+import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole, provenanceBadges } from '../constants';
 
 type SortKey = 'company' | 'role' | 'status' | 'date_applied' | 'last_activity';
 type SortDir = 'asc' | 'desc';
@@ -100,17 +100,15 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 										<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate">
 											{app.company}
 										</button>
-										{(() => {
-											const d = detectionBadge(app);
-											return d && (
-												<span
-													className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${DETECTION_BADGE[d].cls}`}
-													title={`${DETECTION_BADGE[d].title} — edit to confirm and clear the tag`}
-												>
-													{DETECTION_BADGE[d].label}
-												</span>
-											);
-										})()}
+										{provenanceBadges(app).map(b => (
+											<span
+												key={b.label}
+												className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${b.cls}`}
+												title={b.title}
+											>
+												{b.label}
+											</span>
+										))}
 									</div>
 								</td>
 								<td className="px-4 py-3 whitespace-nowrap max-w-[200px] truncate">

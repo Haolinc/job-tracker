@@ -161,22 +161,27 @@ const GENERIC_ROLE_WORD = new Set([
 ]);
 
 /**
- * Do two role strings plausibly refer to the same posting? True if either side is empty / "Unknown Role",
- * or the shorter title's words are all contained in the longer AND they share a DISTINCTIVE (non-generic)
- * word — so "Software Engineer" merges with "Software Engineer (L3 BE)", but "QA Engineer" does NOT merge
- * with "Data Quality Assurance Engineer" (they'd only share the bare noun "engineer"). When the shorter
- * title is entirely generic ("Engineer"), it merges only with an identical one.
+ * Does an INCOMING email's role belong to an EXISTING application? DIRECTIONAL: `existing` is the
+ * stored role, `incoming` the email's. True only when the incoming role is the SAME as, or an
+ * ABBREVIATION of, the existing one — every incoming word appears in the existing role, and they
+ * share a DISTINCTIVE (non-generic) word. A MORE specific incoming role (carrying extra distinctive
+ * words the existing record lacks) is a DIFFERENT posting and does NOT match.
+ *
+ * So a "Software Engineer" status update folds into an existing "Software Engineer (L3 BE)", but four
+ * distinct "Software Engineer 1 - Mobile / 2 (Backend) / 1 (React…)" confirmations stay SEPARATE
+ * instead of collapsing into a bare "Software Engineer" record. "QA Engineer" still never matches
+ * "Data Quality Assurance Engineer" (neither is a subset of the other). Empty / "Unknown Role" on
+ * either side always matches (a generic confirmation adopts, then the role is upgraded on merge).
  */
-function rolesCompatible(a: string | null, b: string | null): boolean {
-	if (!a || !b || a === 'Unknown Role' || b === 'Unknown Role') return true;
+function rolesCompatible(existing: string | null, incoming: string | null): boolean {
+	if (!existing || !incoming || existing === 'Unknown Role' || incoming === 'Unknown Role') return true;
 	// Keep 2-char tokens ("QA", "ML", "AI") — they identify the role; only single letters ("I", "a") drop out.
 	const tokens = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length >= 2));
-	const ta = tokens(a), tb = tokens(b);
-	if (ta.size === 0 || tb.size === 0) return false;
-	const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
-	for (const t of small) if (!big.has(t)) return false;          // the shorter title's words are all in the longer
-	if ([...small].some(t => !GENERIC_ROLE_WORD.has(t))) return true;   // they share a distinctive (non-generic) word
-	return small.size === big.size;                                // both all-generic → only if identical
+	const te = tokens(existing), ti = tokens(incoming);
+	if (te.size === 0 || ti.size === 0) return false;
+	for (const t of ti) if (!te.has(t)) return false;             // incoming ⊆ existing (same title or an abbreviation)
+	if ([...ti].some(t => !GENERIC_ROLE_WORD.has(t))) return true;   // they share a distinctive (non-generic) word
+	return ti.size === te.size;                                    // both all-generic → only if identical
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
@@ -273,19 +278,22 @@ function oldest(apps: Application[]): Application {
  *  - several entries + no role  → the oldest (the original application)
  */
 async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null): Promise<Application | undefined> {
-	// Step 1 — DOMAIN FIRST. A real company domain (companyDomainFromSender already excludes ATS/job-board
-	// hosts) is unique to one employer, so a domain match IS the company — and it bridges name spellings
-	// for free ("SS&C" ↔ "SS&C Technologies" from sscinc.com, "JPMorgan" ↔ "JPMorganChase").
-	let matches: Application[] = domain ? await db.findByCompanyDomain(domain) : [];
-
-	// Step 2 — no domain on this email, or no stored record carries it yet: fall back to the company NAME.
-	// Gather first-word candidates, keep only same-entity names ("Epic" ✗ "Epic Kids"), and reject any
-	// candidate that carries a DIFFERENT real domain (a known different employer the name resembles).
-	if (matches.length === 0) {
-		matches = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company)).filter(m =>
-			companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
-		);
-	}
+	// COMPANY FIRST — gather every record that could be THIS employer, then disambiguate by role below.
+	// We probe two ways and UNION the results, rather than "domain, else name":
+	//   • by DOMAIN — a real company domain (ATS/job-board hosts already excluded) is unique to one
+	//     employer, and bridges name spellings for free ("JPMorgan" ↔ "JPMorganChase").
+	//   • by NAME   — first-word candidates, kept only when they're the same entity ("Epic" ✗ "Epic
+	//     Kids") and don't carry a DIFFERENT real domain (a known other employer the name resembles).
+	// Both are needed because one employer's records can be split across them: some carry the sender
+	// domain, others don't yet (CSV imports, manual/legacy entries, or siblings whose domain hasn't been
+	// backfilled). If the name probe were skipped whenever the domain probe found even one record, those
+	// domain-less siblings would stay invisible and the email would spawn a DUPLICATE of the same employer.
+	const byDomain = domain ? await db.findByCompanyDomain(domain) : [];
+	const byName = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company)).filter(m =>
+		companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
+	);
+	const seen = new Set(byDomain.map(m => m.id));
+	let matches = [...byDomain, ...byName.filter(m => !seen.has(m.id))];
 
 	// No candidate → new application. We deliberately do NOT fall back to a global req-number lookup: req
 	// numbers are only unique WITHIN a company, so a global match could wrongly merge a different employer.
@@ -309,7 +317,11 @@ async function findExisting(company: string, role: string | null, externalId: st
 		const exactRole = matches.find(m => norm(m.role) === norm(role));
 		if (exactRole) return exactRole;
 		const compatible = matches.filter(m => rolesCompatible(m.role, role));
-		return compatible.length ? oldest(compatible) : undefined;
+		// Exactly one plausible posting → adopt it. If SEVERAL distinct postings all look compatible
+		// (e.g. a bare "Software Engineer" against "…1 - Mobile", "…2 (Backend)", "…(React)"), we can't
+		// tell which it belongs to — guessing the oldest would silently mis-merge, so treat it as a new
+		// posting instead. (A single-posting company still merges via the matches.length === 1 path above.)
+		return compatible.length === 1 ? compatible[0] : undefined;
 	}
 	return oldest(matches);
 }
