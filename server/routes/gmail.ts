@@ -58,6 +58,12 @@ const ATS_DOMAINS = new Set([
 	'rippling.com', 'brassring.com', 'ashbyhq.com', 'applyresponse.com', 'workablemail.com', 'kula.ai',
 	'candidatecare.com',   // iCIMS Candidate Care portal — a shared ATS host, never the employer's own domain
 	'governmentjobs.com', 'clearcompany.com',   // NEOGOV gov-jobs board & ClearCompany ATS — shared hosts, not the employer
+	// Recruiting CRMs / shared mail hosts / multi-tenant clouds that send for many UNRELATED employers —
+	// each can't be a company key. (gem.com → Narmi/FanDuel/Bilt; oracle.com = Oracle Recruiting Cloud;
+	// ns2cloud.com = SAP NS2 multi-tenant cloud; applicantemails.com = a shared applicant-mail host.)
+	// NOTE: highalpha.com is deliberately NOT here — it's a venture-studio domain whose mail is about its
+	// own portfolio (Backstroke), so letting it bridge "High Alpha" ↔ "Backstroke" is desired.
+	'gem.com', 'oracle.com', 'ns2cloud.com', 'applicantemails.com',
 	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
 	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
@@ -134,7 +140,7 @@ const SENDER_NAME_SUFFIX = /[\s,]*(?:[-–|]\s*)?(?:(?:p&o|people(?:\s*&\s*organ
  * such marker is ignored — it's as likely to be a recruiter's name as an employer.
  */
 function extractCompanyFromSenderName(from: string): string | null {
-	let name = (from.split('<')[0] ?? '').trim().replace(/^["']|["']$/g, '').trim();
+	const name = (from.split('<')[0] ?? '').trim().replace(/^["']|["']$/g, '').trim();
 	if (!name) return null;
 
 	// icims form: "<Company> @ icims" — the part after " @ " is the ATS, not the company.
@@ -149,40 +155,19 @@ function extractCompanyFromSenderName(from: string): string | null {
 	return stripped;
 }
 
-// Generic role nouns + connectors/seniority that don't identify the KIND of role. Two titles that share
-// ONLY these (e.g. just "engineer") are NOT the same posting — "QA Engineer" ≠ "Data Quality Assurance Engineer".
-const GENERIC_ROLE_WORD = new Set([
-	'of', 'the', 'and', 'for', 'in', 'to', 'at', 'on', 'an',
-	'senior', 'junior', 'principal', 'staff', 'lead', 'entry', 'level', 'associate', 'sr', 'jr', 'mid',
-	'engineer', 'engineering', 'developer', 'development', 'analyst', 'manager', 'management', 'specialist',
-	'consultant', 'architect', 'designer', 'administrator', 'coordinator', 'scientist', 'technician',
-	'programmer', 'professional', 'representative', 'officer', 'director', 'intern', 'internship', 'member',
-	'position', 'role', 'opening',
-]);
+// Normalize a role for comparison: lower-case, strip everything but letters/digits. So "Software
+// Engineer 2 (Backend)" and "software engineer 2 - backend" compare equal, but "Software Engineer"
+// and "Software Engineer 2 (Backend)" do NOT — they're distinct postings.
+const normRole = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-/**
- * Does an INCOMING email's role belong to an EXISTING application? DIRECTIONAL: `existing` is the
- * stored role, `incoming` the email's. True only when the incoming role is the SAME as, or an
- * ABBREVIATION of, the existing one — every incoming word appears in the existing role, and they
- * share a DISTINCTIVE (non-generic) word. A MORE specific incoming role (carrying extra distinctive
- * words the existing record lacks) is a DIFFERENT posting and does NOT match.
- *
- * So a "Software Engineer" status update folds into an existing "Software Engineer (L3 BE)", but four
- * distinct "Software Engineer 1 - Mobile / 2 (Backend) / 1 (React…)" confirmations stay SEPARATE
- * instead of collapsing into a bare "Software Engineer" record. "QA Engineer" still never matches
- * "Data Quality Assurance Engineer" (neither is a subset of the other). Empty / "Unknown Role" on
- * either side always matches (a generic confirmation adopts, then the role is upgraded on merge).
- */
-function rolesCompatible(existing: string | null, incoming: string | null): boolean {
-	if (!existing || !incoming || existing === 'Unknown Role' || incoming === 'Unknown Role') return true;
-	// Keep 2-char tokens ("QA", "ML", "AI") — they identify the role; only single letters ("I", "a") drop out.
-	const tokens = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length >= 2));
-	const te = tokens(existing), ti = tokens(incoming);
-	if (te.size === 0 || ti.size === 0) return false;
-	for (const t of ti) if (!te.has(t)) return false;             // incoming ⊆ existing (same title or an abbreviation)
-	if ([...ti].some(t => !GENERIC_ROLE_WORD.has(t))) return true;   // they share a distinctive (non-generic) word
-	return ti.size === te.size;                                    // both all-generic → only if identical
-}
+// Signals that an email is a STATUS UPDATE on an EXISTING application (not a fresh confirmation), used
+// to override an "applied" classification. The SUBJECT can be loose — a short subject mentioning
+// "update" almost always means a status change. The BODY must be TIGHT: it requires "update" right
+// next to "your application", because the bare phrase "your application status" appears as portal-link
+// boilerplate in CONFIRMATION emails ("Check your application status and manage your profile") and
+// would otherwise misread every such confirmation as an update.
+const UPDATE_SUBJECT = /\bupdate\b/i;
+const UPDATE_BODY = /\bupdate (?:on|regarding|about|to) (?:the status of )?your application\b|\bapplication status update\b/i;
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
 // is the same entity under a fuller name ("SS&C" → "SS&C Technologies"). A non-descriptor extra word
@@ -266,18 +251,19 @@ function oldest(apps: Application[]): Application {
 }
 
 /**
- * Match an incoming email to an existing application. COMPANY is the primary key: no entry
- * for the company → it's a new application. Within a company, the ROLE only disambiguates,
- * and fuzzily — a status email often abbreviates the role ("Software Engineer (L3 BE)" →
- * "Software Engineer"), so word-for-word matching isn't required.
+ * Match an incoming email to an existing application, or undefined to create a new one. COMPANY is
+ * the primary key (gathered by domain ∪ name above); within a company the req number then the ROLE
+ * disambiguate, and the email's CATEGORY decides intent:
  *
- *  - 0 entries                  → undefined (create new)
- *  - 1 entry                    → adopt it when the role is compatible (you only applied here
- *                                  once); a genuinely different role → undefined (separate posting)
- *  - several entries + role     → exact match, else the oldest role-compatible one, else create
- *  - several entries + no role  → the oldest (the original application)
+ *  - req number present         → the record with that req; a different req is a different posting
+ *  - role present, exact match  → that posting (re-confirmation / status update for it)
+ *  - role present, no exact     → a STATUS email upgrades a single still-roleless record; a
+ *                                  CONFIRMATION ("applied") is a new application → create new
+ *  - no role, CONFIRMATION      → new application (so role-less confirmations don't all collapse —
+ *                                  e.g. several Google "Thanks for applying" emails stay separate)
+ *  - no role, STATUS update     → the company's original application (oldest)
  */
-async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null): Promise<Application | undefined> {
+async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null, isConfirmation: boolean, date: string): Promise<Application | undefined> {
 	// COMPANY FIRST — gather every record that could be THIS employer, then disambiguate by role below.
 	// We probe two ways and UNION the results, rather than "domain, else name":
 	//   • by DOMAIN — a real company domain (ATS/job-board hosts already excluded) is unique to one
@@ -310,19 +296,36 @@ async function findExisting(company: string, role: string | null, externalId: st
 		if (matches.length === 0) return undefined;
 	}
 
-	// Fall back to the role string.
-	if (matches.length === 1) return rolesCompatible(matches[0].role, role) ? matches[0] : undefined;
-	if (role) {
-		const norm = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-		const exactRole = matches.find(m => norm(m.role) === norm(role));
-		if (exactRole) return exactRole;
-		const compatible = matches.filter(m => rolesCompatible(m.role, role));
-		// Exactly one plausible posting → adopt it. If SEVERAL distinct postings all look compatible
-		// (e.g. a bare "Software Engineer" against "…1 - Mobile", "…2 (Backend)", "…(React)"), we can't
-		// tell which it belongs to — guessing the oldest would silently mis-merge, so treat it as a new
-		// posting instead. (A single-posting company still merges via the matches.length === 1 path above.)
-		return compatible.length === 1 ? compatible[0] : undefined;
+	// Resolve the role. A CONFIRMATION ("applied") is a NEW application, so it only adopts an existing
+	// record on an EXACT role (the same posting re-confirmed / a fast-apply pair) — it never folds into
+	// a sibling. A STATUS update (interview/offer/rejected) is about an EXISTING application, so it may
+	// also carry the role an earlier role-less confirmation lacked and upgrade it.
+	const incomingHasRole = !!role && role !== 'Unknown Role';
+	if (incomingHasRole) {
+		// Exact title = same posting (also catches an awaiting record whose role this email matches —
+		// the merge then clears its awaiting flag).
+		const exact = matches.find(m => normRole(m.role) === normRole(role));
+		if (exact) return exact;
+		if (!isConfirmation) {
+			// A status update fills in the role on a still-roleless record — only if there's exactly one.
+			const roleless = matches.filter(m => !m.role || m.role === 'Unknown Role');
+			if (roleless.length === 1) return roleless[0];
+		}
+		return undefined;
 	}
+	// Incoming email has NO role.
+	if (isConfirmation) {
+		// A role-less confirmation is normally a brand-new application (so several Google "Thanks for
+		// applying" don't collapse into one) — BUT it first backfills an "awaiting" record: a status
+		// update that arrived before its (older, out-of-window) confirmation. Its role came from that
+		// update; this confirmation just supplies the application date and clears the flag.
+		// DATE GUARD: only backfill a record whose status update is NOT older than this application — an
+		// application that POSTDATES a rejection is a NEW application to the company, not the confirmation
+		// that rejection was waiting for, so it must keep its own record.
+		const awaiting = matches.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
+		return awaiting.length ? oldest(awaiting) : undefined;
+	}
+	// A role-less status update attaches to the company's original application (oldest).
 	return oldest(matches);
 }
 
@@ -459,7 +462,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
 			// stored signal that disambiguates first-word twins on future syncs.
 			const senderDomain = companyDomainFromSender(from);
-			const existing = await findExisting(company, role, externalId, senderDomain);
+			// A fresh application confirmation vs a status update. Interview/offer/rejected are always
+			// updates; an "applied" email is a confirmation UNLESS its subject OR body marks it as a
+			// status update (the classifier sometimes defaults those to "applied").
+			const isConfirmation = category === 'applied' && !UPDATE_SUBJECT.test(subject) && !UPDATE_BODY.test(body);
+			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, email.lastMessageDate);
 
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
@@ -505,6 +512,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// Backfill the company domain once a real company email arrives for a record first created
 				// from an ATS/job-board sender (so later syncs can match by domain).
 				const domainUpdate = senderDomain && !existing.company_domain ? { company_domain: senderDomain } : {};
+				// A confirmation arriving for an "awaiting" record (one created by an earlier update) supplies
+				// the original application and closes the wait — clear the flag so nothing else claims it.
+				const awaitingClear = isConfirmation && existing.awaiting_application ? { awaiting_application: false } : {};
 				const merged = {
 					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
@@ -512,6 +522,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...reachedUpdate,
 					...externalIdUpdate,
 					...domainUpdate,
+					...awaitingClear,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
 				updated++;
@@ -530,6 +541,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					external_id:     externalId,
 					detected_by:     detectedBy,
 					company_domain:  senderDomain,
+					// A status update creating its own record means its confirmation isn't here yet (older
+					// than the scan window, or simply not synced) — mark it so a later confirmation backfills it.
+					awaiting_application: !isConfirmation,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});

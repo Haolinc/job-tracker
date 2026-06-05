@@ -28,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
 	try {
-		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview, source } = req.body as {
+		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview, source, company_domain, external_id } = req.body as {
 			company: string;
 			role: string;
 			status?: Status;
@@ -39,6 +39,8 @@ router.post('/', async (req: Request, res: Response) => {
 			notes?: string;
 			reached_interview?: boolean;
 			source?: string;
+			company_domain?: string;
+			external_id?: string;
 		};
 
 		if (!company || !role) {
@@ -62,6 +64,10 @@ router.post('/', async (req: Request, res: Response) => {
 			job_url: job_url || null,
 			notes: notes || null,
 			notes_source: 'manual',
+			// Dedup keys from a re-imported export (so the next sync re-merges instead of duplicating);
+			// null for manual entry or a hand-made CSV.
+			external_id: external_id || null,
+			company_domain: company_domain || null,
 			source: source && VALID_SOURCES.has(source) ? source as Source : 'manual',
 			gmail_thread_id: null,
 		});

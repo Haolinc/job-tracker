@@ -48,6 +48,12 @@ export interface Application {
 	// Null for ATS / job-board senders (LinkedIn, Indeed, Workday, Greenhouse…) and manual entries.
 	// Used to disambiguate companies that merely share a first word ("Epic" vs "Epic Kids") when matching.
 	company_domain: string | null;
+	// True when this record was created by a STATUS UPDATE email (interview/offer/rejected, or an
+	// "…update…" subject) whose original application confirmation wasn't synced yet — e.g. the
+	// confirmation is older than the chosen scan window. A later confirmation for the same company
+	// backfills the record (filling in date_applied) and clears this flag, so the two don't end up as
+	// two separate records. False for normal records.
+	awaiting_application: boolean;
 	source: Source;
 	gmail_thread_id: string | null;
 	created_at: string;
@@ -87,6 +93,7 @@ export interface CreateApplicationData {
 	edited?: boolean;              // defaults to false when omitted
 	detected_by?: DetectedBy | null;   // 'parser' | 'llm'; null for manual
 	company_domain?: string | null;    // real company domain of the sender; null for ATS/job-board/manual
+	awaiting_application?: boolean;     // status-update record waiting for its (older) confirmation; defaults false
 	source: Source;
 	gmail_thread_id: string | null;
 }

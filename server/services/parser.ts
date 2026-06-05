@@ -159,6 +159,11 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	// Subject form: "(We have received your) application for [Role]" — the title follows "application for"
 	// and may carry a trailing "- <req>" (tidyRole strips it): "…application for Software Engineer, Developer Platform Team - 2026-75736".
 	const s2 = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
+	// Subject form: "... Update for [Role], Req #..." — status emails (BAE, T-Mobile) put the title after
+	// "Update for", terminated by a comma/req-label/end rather than a "position"/"role" keyword, and may
+	// prefix a req id ("Update for REQ347505 SDET Engineer"). "BAE Systems - Application Update for Entry
+	// Level Software Engineer, Req #124432BR" → "Entry Level Software Engineer".
+	const s3 = subject.match(/\b[Uu]pdate for\s+(?:the\s+)?(?:REQ\w*\s+)?([A-Z][^\n]*?)(?=\s*,?\s*(?:[Rr]eq|[Rr]equisition|[Jj]ob)\b|[.!?]|$)/);
 	// "...position|role of [req#] [Role]" — Workday/Oracle sometimes print a req number before the title
 	const r2 = body.match(/\b(?:position|role) of\s+(?:\d{5,}\s+)?([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
 	// "...for|to [the|our] [Role] role|position|opportunity|opening" (skip the wrong "for" in "thank you FOR applying").
@@ -182,7 +187,7 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	const r7 = body.match(/\bapplying for:\s*([A-Z][^.!?\n]*?)(?=\s+(?:Dear|Hi|Hello)\b|[.!?\n]|$)/);
 	// "[Role] [8-9 digit req number]" — title right before the requisition id ("Software Engineer III - Java 210677860")
 	const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
-	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
+	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(s3?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
 		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r6?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(r7?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r3?.[1]);
 }
 
@@ -288,6 +293,14 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	let cleanRole = cleanGeneralRole(role);
 	const roleConfident = !!cleanRole;
 	if (!cleanRole) cleanRole = recoverRoleFromBody(body, subject);
+
+	// Structural guard 2: the captured "company" IS the role — e.g. "…your interest in Software
+	// Engineer" names no employer, so pattern 7 grabbed the role as the company. (Guard 1 misses it
+	// because the role phrase has no trailing "position/role/…" marker, and it came from the subject,
+	// not the body.) Defer to the LLM, which reads the real company from the body/sender.
+	const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+	if (cleanRole && norm(cleanCompany) === norm(cleanRole)) return null;
+
 	return { company: cleanCompany, role: cleanRole, roleConfident };
 }
 

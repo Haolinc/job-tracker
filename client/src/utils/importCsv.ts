@@ -8,7 +8,7 @@ export type ImportableApplication = Omit<Application, 'id' | 'created_at' | 'upd
 export class CsvImportError extends Error {}
 
 // The application fields a CSV column can fill. Everything else is server-assigned.
-type Field = 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes';
+type Field = 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes' | 'company_domain' | 'external_id';
 
 // Map a NORMALIZED header (see normalizeHeader: lower-cased, underscores/hyphens → spaces) to the
 // field it fills. Keys mirror exportCsv's column headers 1:1 (in normalized form) so a re-imported
@@ -24,6 +24,8 @@ const HEADER_TO_FIELD: Record<string, Field> = {
 	'last response': 'last_activity',
 	'job url': 'job_url',
 	'notes': 'notes',
+	'company domain': 'company_domain',
+	'job id': 'external_id',
 };
 
 // Accept either the human label ("Applied") or the raw value ("applied"), case-insensitively.
@@ -148,6 +150,10 @@ export function parseApplicationsCsv(text: string): ImportableApplication[] {
 			last_activity: toIsoDate(cell(row, 'last_activity')),
 			job_url: cell(row, 'job_url') || null,
 			notes: cell(row, 'notes') || null,
+			// Dedup keys carried over from a prior export, so the next sync re-merges instead of
+			// duplicating. Absent in a hand-made CSV → null (sync falls back to name + role).
+			company_domain: cell(row, 'company_domain') || null,
+			external_id: cell(row, 'external_id') || null,
 			source: 'csv',
 			gmail_thread_id: null,
 		};

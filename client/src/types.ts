@@ -15,6 +15,7 @@ export interface Application {
 	notes: string | null;
 	notes_source?: 'auto' | 'manual';   // server-managed: 'manual' notes survive syncs
 	external_id?: string | null;         // server-managed: ATS req/job number
+	company_domain?: string | null;      // server-managed: real employer domain (null for ATS/manual)
 	edited?: boolean;                    // server-managed: true once the user edits the details
 	detected_by?: 'parser' | 'llm' | null;   // server-managed: how the email was classified
 	source: Source;

@@ -18,6 +18,10 @@ const COLUMNS: { header: string; value: (a: Application) => string }[] = [
 	{ header: 'Job URL',           value: a => a.job_url ?? '' },
 	{ header: 'Notes',             value: a => a.notes ?? '' },
 	{ header: 'Source',            value: a => a.source },
+	// Technical dedup keys — kept so a re-imported export still merges cleanly on the next Gmail sync
+	// (employer domain = the company key; req/job id = the within-company posting key).
+	{ header: 'Company Domain',    value: a => a.company_domain ?? '' },
+	{ header: 'Job ID',            value: a => a.external_id ?? '' },
 ];
 
 /** Build a CSV (with header row) from a list of applications. */
