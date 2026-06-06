@@ -17,7 +17,7 @@ interface Props {
 export default function GmailSync({ connected, syncing, progress, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
 	const [days, setDays] = useState(30);
 	return (
-		<div className="flex items-center gap-3 flex-wrap">
+		<div className="flex items-center gap-2 flex-wrap">
 			{connected ? (
 				<>
 					<select
@@ -36,7 +36,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					>
 						{syncing
 							? <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-							: '📧'}
+							: '\u{1F4E7}'}
 						{syncing ? 'Syncing...' : 'Sync Gmail'}
 					</button>
 					<button
@@ -45,35 +45,35 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					>Disconnect</button>
 					{syncing && (
 						progress ? (
-							<div className="flex items-center gap-2 text-xs text-gray-600" title={`${progress.processed} of ${progress.total} emails processed`}>
-								<div className="w-28 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+							<div className="flex items-center gap-2 text-xs text-gray-600 w-full sm:w-auto" title={`${progress.processed} of ${progress.total} emails processed`}>
+								<div className="flex-1 sm:w-28 sm:flex-none h-1.5 bg-gray-200 rounded-full overflow-hidden">
 									<div
 										className="h-full bg-blue-600 transition-all duration-200"
 										style={{ width: `${progress.total ? Math.round((progress.processed / progress.total) * 100) : 0}%` }}
 									/>
 								</div>
 								<span className="tabular-nums whitespace-nowrap">
-									{progress.processed}/{progress.total} · +{progress.added} ~{progress.updated}
+									{progress.processed}/{progress.total} &middot; +{progress.added} ~{progress.updated}
 								</span>
 							</div>
 						) : (
-							<span className="text-xs text-gray-500">preparing…</span>
+							<span className="text-xs text-gray-500">preparing&hellip;</span>
 						)
 					)}
 					{!syncing && lastResult && (
-						<span className="text-xs text-gray-500">
-							+{lastResult.added} added · {lastResult.updated} updated · {lastResult.skipped} skipped
+						<span className="text-xs text-gray-500 w-full sm:w-auto">
+							+{lastResult.added} added &middot; {lastResult.updated} updated &middot; {lastResult.skipped} skipped
 							{lastResult.failed > 0 && (
 								<span
 									className="text-amber-600 font-medium"
 									title="These emails couldn't be read this time (a temporary Gmail error). They were not saved and will be retried automatically on your next sync."
 								>
-									{' '}· ⚠ {lastResult.failed} couldn’t be read (will retry)
+									{' '}&middot; &#x26A0; {lastResult.failed} couldn&apos;t be read (will retry)
 								</span>
 							)}
 						</span>
 					)}
-					{error && <span className="text-xs text-red-500">{error}</span>}
+					{error && <span className="text-xs text-red-500 w-full sm:w-auto">{error}</span>}
 				</>
 			) : (
 				<button

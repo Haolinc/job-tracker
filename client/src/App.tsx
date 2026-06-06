@@ -150,8 +150,8 @@ export default function App() {
 
 	return (
 		<div className="min-h-screen bg-gray-50">
-			<header className="bg-white border-b border-gray-200 px-6 py-4">
-				<div className="max-w-screen-xl mx-auto flex flex-wrap items-center justify-between gap-4">
+			<header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4">
+				<div className="max-w-screen-xl mx-auto flex flex-wrap items-center justify-between gap-3">
 					<h1 className="text-xl font-bold text-gray-900">Job Tracker</h1>
 					<GmailSync
 						connected={connected}
@@ -166,10 +166,10 @@ export default function App() {
 				</div>
 			</header>
 
-			<main className="max-w-screen-xl mx-auto px-6 py-6 space-y-5">
+			<main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-4">
 				<div className="flex flex-wrap items-center justify-between gap-4">
 					<StatsBar applications={applications} />
-					<div className="flex items-center gap-2">
+					<div className="flex flex-wrap items-center gap-2">
 						<div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium">
 							<button
 								onClick={() => setView('board')}
@@ -180,7 +180,7 @@ export default function App() {
 								className={`px-3 py-2 border-l border-gray-200 ${view === 'table' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
 							>☰ Table</button>
 						</div>
-                        <div className="w-px h-6 bg-gray-300 mx-4"></div>
+						<div className="w-px h-6 bg-gray-300 mx-1" />
 						<input
 							ref={fileInputRef}
 							type="file"
@@ -188,7 +188,7 @@ export default function App() {
 							className="hidden"
 							onChange={e => {
 								const file = e.target.files?.[0];
-								e.target.value = '';   // reset so re-selecting the same file fires onChange again
+								e.target.value = '';
 								if (file) handleImport(file);
 							}}
 						/>

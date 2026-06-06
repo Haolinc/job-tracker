@@ -21,7 +21,7 @@ export default function Filters({ filters, onChange }: Props) {
 				placeholder="Search company or role..."
 				value={search}
 				onChange={e => setSearch(e.target.value)}
-				className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400"
+				className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-400"
 			/>
 		</div>
 	);

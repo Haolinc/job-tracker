@@ -32,7 +32,7 @@ function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps
 	const visible = collapsed ? apps.slice(0, COLLAPSED_PREVIEW) : apps;
 	const hidden = apps.length - visible.length;
 	return (
-		<div className={`flex flex-col rounded-xl border ${col.color} min-w-[200px] flex-1 self-start`}>
+		<div className={`flex flex-col rounded-xl border ${col.color} min-w-[160px] sm:min-w-[200px] flex-1 self-start`}>
 			<button
 				onClick={() => setCollapsed(c => !c)}
 				className="px-4 py-3 flex items-center justify-between w-full text-left rounded-xl hover:bg-black/[0.03] transition-colors"
@@ -84,7 +84,7 @@ export default function Board({ applications, highlightIds, onEdit, onDelete }: 
 	}, [applications]);
 
 	return (
-		<div className="flex gap-4 overflow-x-auto pb-4">
+		<div className="flex gap-3 sm:gap-4 overflow-x-auto pb-4 -mx-4 sm:mx-0 px-4 sm:px-0">
 			{COLUMNS.map(col => (
 				<KanbanColumn
 					key={col.id}

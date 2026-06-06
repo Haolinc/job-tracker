@@ -28,16 +28,16 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 	};
 
 	return (
-		<div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-			<div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-				<div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-gray-100">
+		<div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+			<div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[92dvh] flex flex-col">
+				<div className="flex justify-between items-center px-4 sm:px-6 pt-4 sm:pt-5 pb-3 border-b border-gray-100 shrink-0">
 					<h2 className="text-lg font-semibold text-gray-800">
 						{initial?.id ? 'Edit Application' : 'Add Application'}
 					</h2>
 					<button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
 				</div>
 
-				<form onSubmit={handleSubmit} className="p-6 space-y-4">
+				<form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 overflow-y-auto">
 					<Field label="Company *">
 						<input value={form.company} onChange={e => set('company', e.target.value)}
 							required className={inputCls} placeholder="Acme Corp" />
