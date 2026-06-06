@@ -178,3 +178,12 @@ export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
 	);
 };
 
+/** Wipe all applications AND the synced-email log so the next sync re-processes everything. */
+export const clearAll = async (): Promise<{ applications: number; syncedEmails: number }> => {
+	const [apps, emails] = await Promise.all([
+		AppModel.deleteMany({}),
+		SyncedEmailModel.deleteMany({}),
+	]);
+	return { applications: apps.deletedCount, syncedEmails: emails.deletedCount };
+};
+

@@ -15,6 +15,9 @@ export const updateApplication = (id: string, data: Partial<Application>): Promi
 export const deleteApplication = (id: string): Promise<void> =>
 	api.delete(`/applications/${id}`);
 
+export const resetDatabase = (): Promise<{ applications: number; syncedEmails: number }> =>
+	api.delete('/applications/all').then(r => r.data as { applications: number; syncedEmails: number });
+
 export const getAuthStatus = (): Promise<{ connected: boolean }> =>
 	api.get('/auth/status').then(r => r.data as { connected: boolean });
 

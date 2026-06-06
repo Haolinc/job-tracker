@@ -6,7 +6,7 @@ import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
 import ImportResultModal, { type ImportOutcome } from './components/ImportResultModal';
-import { getApplications } from './api';
+import { getApplications, resetDatabase } from './api';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
 import { downloadApplicationsCsv } from './utils/exportCsv';
@@ -29,6 +29,8 @@ export default function App() {
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [importResult, setImportResult] = useState<ImportOutcome | null>(null);
+	const [showResetConfirm, setShowResetConfirm] = useState(false);
+	const [resetting, setResetting] = useState(false);
 
 	useEffect(() => {
 		fetchAll(filters);
@@ -123,6 +125,18 @@ export default function App() {
 		});
 	};
 
+	const handleReset = async () => {
+		setResetting(true);
+		try {
+			await resetDatabase();
+			setNewlyAdded(new Set());
+			await fetchAll(filters);
+		} finally {
+			setResetting(false);
+			setShowResetConfirm(false);
+		}
+	};
+
 	const handleSync = async (days: number) => {
 		// Snapshot updated_at per id before syncing; after the refetch, anything new or with a bumped
 		// updated_at was touched by this sync and gets the "new" highlight.
@@ -194,6 +208,13 @@ export default function App() {
 							⤓ Export CSV
 						</button>
 						<button
+							onClick={() => setShowResetConfirm(true)}
+							className="px-3 py-2 border border-red-200 bg-white text-red-500 text-sm font-medium rounded-lg hover:bg-red-50"
+							title="Wipe all applications and sync history"
+						>
+							⚠ Reset DB
+						</button>
+						<button
 							onClick={() => setModal({})}
 							className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
 						>
@@ -234,6 +255,35 @@ export default function App() {
 
 			{importResult && (
 				<ImportResultModal outcome={importResult} onClose={() => setImportResult(null)} />
+			)}
+
+			{showResetConfirm && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowResetConfirm(false)}>
+					<div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+						<div className="text-3xl mb-3 text-center">⚠️</div>
+						<h2 className="text-lg font-bold text-gray-900 text-center mb-1">Reset database?</h2>
+						<p className="text-sm text-gray-500 text-center mb-6">
+							This deletes <span className="font-semibold text-gray-700">all {applications.length} applications</span> and
+							clears the Gmail sync history, so the next sync re-processes everything from scratch.
+							This cannot be undone.
+						</p>
+						<div className="flex gap-3">
+							<button
+								onClick={() => setShowResetConfirm(false)}
+								className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleReset}
+								disabled={resetting}
+								className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+							>
+								{resetting ? 'Resetting…' : 'Yes, reset everything'}
+							</button>
+						</div>
+					</div>
+				</div>
 			)}
 		</div>
 	);

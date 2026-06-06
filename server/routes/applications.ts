@@ -112,6 +112,17 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	}
 });
 
+// Wipe the entire database (applications + synced-email log).
+// Placed before /:id so Express doesn't interpret "all" as an id.
+router.delete('/all', async (_req: Request, res: Response) => {
+	try {
+		const counts = await db.clearAll();
+		res.json({ success: true, ...counts });
+	} catch (err) {
+		res.status(500).json({ error: errMsg(err, 'Failed to reset database') });
+	}
+});
+
 router.delete('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
 		const deleted = await db.remove(req.params.id);
