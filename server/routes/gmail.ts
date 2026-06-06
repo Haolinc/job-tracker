@@ -5,7 +5,7 @@ import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
 import { parseEmail, extractGeneralCompanyRole, extractJobNumber, recoverRoleFromBody, tidyRole } from '../services/parser';
 import * as db from '../services/db';
-import { errMsg, buildLookupKey } from '../utils';
+import { errMsg } from '../utils';
 import type { Application } from '../types';
 
 const router = Router();
@@ -275,7 +275,7 @@ async function findExisting(company: string, role: string | null, externalId: st
 	// backfilled). If the name probe were skipped whenever the domain probe found even one record, those
 	// domain-less siblings would stay invisible and the email would spawn a DUPLICATE of the same employer.
 	const byDomain = domain ? await db.findByCompanyDomain(domain) : [];
-	const byName = (await db.findByCompanyFirstWord(company.split(/\s+/)[0] ?? company)).filter(m =>
+	const byName = (await db.findByCompanyFirstWord(company.split(/\s+/)[0])).filter(m =>
 		companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
 	);
 	const seen = new Set(byDomain.map(m => m.id));
@@ -476,19 +476,16 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			if (existing) {
 				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
-				// decided by the email's precise internalDate, not the day-string — so same-day emails
-				// order correctly and processing order never matters.
-				// Newest wins by precise send time (epoch), so same-day emails order correctly and
-				// processing order never matters. ts 0 means "no recorded activity", so any email is
-				// correctly treated as newer.
+				// decided by the email's precise internalDate, not the day-string — so same-day emails order
+				// correctly and processing order never matters. ts 0 means "no recorded activity yet", so any
+				// email is treated as newer.
 				const isNewer   = email.internalDate >= existing.last_activity_ts;
 				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
 				// Upgrade "Unknown Role" when this email provides a specific role
 				// (e.g. a BAE Systems status update naming the role after a generic confirmation).
-				const roleUpgrade = existing.role === 'Unknown Role' && role
-					? { role, lookup_key: buildLookupKey(company, role) }
-					: {};
-				const effectiveRole = existing.role === 'Unknown Role' && role ? role : existing.role;
+				const upgradedRole = existing.role === 'Unknown Role' && role ? role : null;
+				const roleUpgrade = upgradedRole ? { role: upgradedRole } : {};
+				const effectiveRole = upgradedRole ?? existing.role;
 				// The newest email owns status, last_activity, and the auto note (a 'manual' note is
 				// never overwritten).
 				const newerUpdate = isNewer

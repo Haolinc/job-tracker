@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Application, CreateApplicationData, MarkSyncedData } from '../types';
-import { buildLookupKey } from '../utils';
 
 // ── Application ────────────────────────────────────────────────────────────
 
@@ -8,7 +7,6 @@ interface AppDoc {
 	_id: mongoose.Types.ObjectId;
 	company: string;
 	role: string;
-	lookup_key: string | null;
 	status: string;
 	interview_step: string | null;
 	reached_interview: boolean;
@@ -32,9 +30,6 @@ interface AppDoc {
 const appSchema = new Schema<AppDoc>({
 	company:         { type: String, required: true },
 	role:            { type: String, required: true },
-	// Pre-computed compound key: normalize(company)::normalize(role).
-	// Indexed for O(1) lookup when matching emails to existing applications.
-	lookup_key:      { type: String, index: true, default: null },
 	status:          { type: String, default: 'applied' },
 	interview_step:  { type: String, default: null },
 	reached_interview: { type: Boolean, default: false },
@@ -60,7 +55,6 @@ function toApp(doc: AppDoc): Application {
 		id:              doc._id.toString(),
 		company:         doc.company,
 		role:            doc.role,
-		lookup_key:      doc.lookup_key ?? null,
 		status:          doc.status as Application['status'],
 		interview_step:  (doc.interview_step ?? null) as Application['interview_step'],
 		reached_interview: doc.reached_interview ?? false,
@@ -108,19 +102,11 @@ export const connect = async (): Promise<typeof mongoose> => {
 		await SyncedEmailModel.collection.dropIndex('thread_id_1');
 	} catch { /* already dropped or never existed */ }
 
-	// Migration 2: backfill lookup_key for existing application entries that predate the field.
-	const toBackfill = await AppModel
-		.find({ lookup_key: { $exists: false } })
-		.lean<AppDoc[]>();
-	if (toBackfill.length > 0) {
-		await Promise.all(toBackfill.map(e =>
-			AppModel.updateOne(
-				{ _id: e._id },
-				{ $set: { lookup_key: buildLookupKey(e.company, e.role) } },
-			),
-		));
-		console.log(`[db] backfilled lookup_key for ${toBackfill.length} application(s)`);
-	}
+	// Migration 2: drop the retired lookup_key index — matching now gathers candidates by company
+	// domain/name and resolves the role in memory, so the pre-computed key is no longer used.
+	try {
+		await AppModel.collection.dropIndex('lookup_key_1');
+	} catch { /* already dropped or never existed */ }
 
 	return m;
 };
@@ -141,10 +127,7 @@ export const getAll = async (filters: GetAllFilters = {}): Promise<Application[]
 };
 
 export const create = async (data: CreateApplicationData): Promise<Application> => {
-	const doc = await AppModel.create({
-		...data,
-		lookup_key: buildLookupKey(data.company, data.role),
-	});
+	const doc = await AppModel.create(data);
 	const lean = doc.toObject() as AppDoc;
 	return toApp(lean);
 };
@@ -158,21 +141,6 @@ export const update = async (id: string, data: Record<string, unknown>): Promise
 export const remove = async (id: string): Promise<boolean> => {
 	const doc = await AppModel.findByIdAndDelete(id).lean();
 	return !!doc;
-};
-
-/** Fast O(1) lookup by pre-computed compound key (preferred path). */
-export const findByLookupKey = async (key: string): Promise<Application | undefined> => {
-	const doc = await AppModel.findOne({ lookup_key: key }).lean<AppDoc>();
-	return doc ? toApp(doc) : undefined;
-};
-
-/** Regex fallback used when lookup_key is unavailable (manual entries, legacy data). */
-export const findByCompanyRole = async (company: string, role: string): Promise<Application | undefined> => {
-	const doc = await AppModel.findOne({
-		company: new RegExp(`^${escapeRegex(company)}$`, 'i'),
-		role:    new RegExp(`^${escapeRegex(role)}$`, 'i'),
-	}).lean<AppDoc>();
-	return doc ? toApp(doc) : undefined;
 };
 
 /**

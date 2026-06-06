@@ -22,7 +22,6 @@ export interface Application {
 	id: string;
 	company: string;
 	role: string;
-	lookup_key: string | null;
 	status: Status;
 	interview_step: InterviewStep | null;
 	// Sticky: true once the application ever reached interview/offer, even if later rejected.
