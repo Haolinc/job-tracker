@@ -180,7 +180,7 @@ export default function App() {
 						/>
 						<button
 							onClick={() => fileInputRef.current?.click()}
-							className="px-3 py-2 border border-blue-400 bg-white text-blue-800 text-sm font-medium rounded-lg hover:bg-blue-50"
+							className="px-3 py-2 border border-emerald-200 bg-white text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-100"
 							title="Import applications from a CSV file"
 						>
 							⤒ Import CSV
@@ -188,7 +188,7 @@ export default function App() {
 						<button
 							onClick={() => downloadApplicationsCsv(applications)}
 							disabled={applications.length === 0}
-							className="px-3 py-2 border border-blue-400 bg-blue-100 text-blue-800 text-sm font-medium rounded-lg hover:bg-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
+							className="px-3 py-2 border border-blue-200 bg-white text-blue-600 text-sm font-medium rounded-lg hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
 							title="Download the current applications as a CSV file"
 						>
 							⤓ Export CSV
