@@ -318,6 +318,7 @@ function buildJobQuery(days: number): string {
 		// "Continue to apply for the job..." is always about a draft, never a submitted app.
 		'-subject:"continue to apply"',
         '-subject:"incomplete"',
+        '-subject:"complete your"',
         '-subject:"your application was viewed"',
         '-subject:"draft"',
         // ATS "still reviewing" status pings — no new information, just noise.

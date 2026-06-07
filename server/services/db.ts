@@ -21,6 +21,7 @@ interface AppDoc {
 	detected_by: string | null;
 	company_domain: string | null;
 	awaiting_application: boolean;
+	fast_apply: boolean;
 	source: string;
 	gmail_thread_id: string | null;
 	created_at: Date;
@@ -44,6 +45,7 @@ const appSchema = new Schema<AppDoc>({
 	detected_by:     { type: String, default: null },
 	company_domain:  { type: String, index: true, default: null },
 	awaiting_application: { type: Boolean, default: false },
+	fast_apply:      { type: Boolean, default: false },
 	source:          { type: String, default: 'manual' },
 	gmail_thread_id: { type: String, default: null },
 }, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
@@ -69,6 +71,7 @@ function toApp(doc: AppDoc): Application {
 		detected_by:     (doc.detected_by ?? null) as Application['detected_by'],
 		company_domain:  doc.company_domain ?? null,
 		awaiting_application: doc.awaiting_application ?? false,
+		fast_apply:      doc.fast_apply ?? false,
 		source:          doc.source as Application['source'],
 		gmail_thread_id: doc.gmail_thread_id,
 		created_at:      doc.created_at.toISOString(),

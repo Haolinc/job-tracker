@@ -123,6 +123,10 @@ export function tidyRole(s: string): string {
 	// trailing DASH-separated requisition id ("… Developer Platform Team - 2026-75736", "… - R28486").
 	// Excludes a bare year ("- 2026") and short levels ("- L3"): needs a hyphenated number, letters+≥2 digits, or ≥5 digits.
 	s = s.replace(/\s*[-–]\s*#?(?:\d{1,4}[-_]\d{2,}|[A-Za-z]{1,6}[-_]?\d{2,}|\d{5,})[A-Za-z]{0,3}$/, '').trim();
+	// trailing SPACE-separated requisition id with no dash ("Software Engineer Opportunities in NJ 722493BR",
+	// "… Engineer R0859802"): a 5+ digit run, or a 4+ digit run with a 1-3 letter prefix/suffix. The ≥5-digit /
+	// letter-bound shape keeps real trailing numbers in titles ("Engineer 3", "Level 2") safe.
+	s = s.replace(/\s+#?(?:[A-Za-z]{1,3}\d{4,}|\d{4,}[A-Za-z]{1,3}|\d{5,})$/, '').trim();
 	s = s.replace(/\s+(?:onsite|hybrid|remote)\b.*$/i, '').trim();                                     // work-mode + everything after ("… Onsite Great River, NY"); "(Remote)" is safe (paren breaks the \s+ anchor)
 	s = s.replace(/\s*[-–,]\s*[A-Z][A-Za-z. ]+?,\s*[A-Z]{2}\b.*$/, '').trim();                         // trailing "- City, ST" / ", City, ST"
 	s = s.replace(/\s+(?:United\s+(?:States|Kingdom)|USA?|UK)\b(?:\s*\([A-Za-z]{2,3}\))?$/i, '').trim();   // trailing "… United States (US)"
@@ -159,6 +163,10 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	// Subject form: "(We have received your) application for [Role]" — the title follows "application for"
 	// and may carry a trailing "- <req>" (tidyRole strips it): "…application for Software Engineer, Developer Platform Team - 2026-75736".
 	const s2 = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
+	// Subject form: "Job Application: [Name] - [req] [Role] on [date]" — iCIMS application receipts
+	// ("Job Application: Hao Lin Chen - 70363 Junior Java Developer on 04/03/2026"). The title sits between
+	// the dash-prefixed req number and the " on <date>" tail.
+	const s4 = subject.match(/\bJob Application:.*?[-–]\s*\d+\s+([A-Z][^\n]*?)\s+on\s+\d/i);
 	// Subject form: "... Update for [Role], Req #..." — status emails (BAE, T-Mobile) put the title after
 	// "Update for", terminated by a comma/req-label/end rather than a "position"/"role" keyword, and may
 	// prefix a req id ("Update for REQ347505 SDET Engineer"). "BAE Systems - Application Update for Entry
@@ -169,8 +177,9 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	// "...for|to [the|our] [Role] role|position|opportunity|opening" (skip the wrong "for" in "thank you FOR applying").
 	// The optional "(…)" lets a leading qualifier through ("…to the (Entry level) Full Stack Software Engineer … position").
 	const r1 = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opportunity|opening)\b/);
-	// "...in|for the [Role] role|position" — "interest in the Associate, Software Engineer position" (r1's for/to anchor sits too far left)
-	const r9 = body.match(/\b(?:in|for)\s+the\s+((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
+	// "...in|for the [Role] role|position|opportunity" — "interest in the Associate, Software Engineer position"
+	// (r1's for/to anchor sits too far left), "interest in the Software Engineer (NYC) opportunity"
+	const r9 = body.match(/\b(?:in|for)\s+the\s+((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opening|opportunity)\b/);
 	// "...our [open] [Role] role|position|opening" — the "interest in our … role" phrasing r1's for/to anchor misses
 	const r4 = body.match(/\bour\s+(?:open\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
 	// "...application for the [Role] job …" — Workable confirmations ("application for the QA Automation Engineer job was submitted")
@@ -185,10 +194,31 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	const r10 = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
 	// "...applying for: [Role]" — MathWorks ("Thank you for applying for: Software Engineer in Test")
 	const r7 = body.match(/\bapplying for:\s*([A-Z][^.!?\n]*?)(?=\s+(?:Dear|Hi|Hello)\b|[.!?\n]|$)/);
+	// "...application for: [req] [Role]" — colon form with an optional leading req token (CVS Health:
+	// "received your application for: R0859802 Software Development Engineer (Open)"). The colon
+	// distinguishes it from r10's no-colon form; the optional "[A-Z]{0,3}\d…" swallows a leading req id.
+	const r13 = body.match(/\bapplication for:\s+(?:#?[A-Za-z]{0,3}\d[\w./-]*\s+)?([A-Z][^!?\n]*?)(?=[.!?\n]|$)/i);
 	// "[Role] [8-9 digit req number]" — title right before the requisition id ("Software Engineer III - Java 210677860")
 	const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
-	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(s3?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
-		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r6?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(r7?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r3?.[1]);
+	// "following job: [Role]" / "following job(s): [Role]" / "following position(s): [Role]" — NBC Universal,
+	// SAP SuccessFactors, Lockheed ATS: "...application to the following job: Software Engineer, Live and
+	// Interactive", "...submitted for the following position(s): Software Engineer Opportunities in NJ 722493BR"
+	const r8 = body.match(/\bfollowing\s+(?:job|position)(?:\(s\)|s)?\s*:?\s+([A-Z][^.!?\n]+?)(?=[.!?\n]|$)/i);
+	// "...joining us|the team as [a] [Role]" — Talkspace ("excited that you're interested in joining us as a
+	// QA Automation Engineer (AI Systems & Web Apps)")
+	const r11 = body.match(/\bjoining\s+(?:us|the\s+team)\s+as\s+(?:an?\s+)?([A-Z][^.!?\n]*?)(?=[.!?\n]|$)/i);
+	// "...the [Role] role|position has|since|is" — rejection/confirmation prose with no for/to/in anchor
+	// ("Unfortunately, the Senior Software Engineer I, Data Enablement role has since been filled", "...and
+	// the QA Automation Engineer (46_2026.1) position"). LOWEST priority — broadest, so it only fills when
+	// the anchored patterns above find nothing; cleanGeneralRole rejects prose mis-captures.
+	// Paren-aware capture so a parenthetical req with an inner period ("(46_2026.1)") doesn't truncate the title.
+	const r12 = body.match(/\bthe\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:role|position|opening|opportunity)\b/);
+	// "...interest in the [Role] at|with [Company]" — no position keyword, the title sits directly before
+	// "at <Company>" (Synopsys: "interest in the Validation/Verification Engineer (Computer Science Focus) -
+	// Exton, PA (14923) - 14923 at Synopsys"). Paren-aware; tidyRole strips the trailing location/req tail.
+	const r14 = body.match(/\binterest in the\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:at|with)\s+[A-Z]/);
+	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(s4?.[1]) ?? cleanGeneralRole(s3?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
+		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r8?.[1]) ?? cleanGeneralRole(r11?.[1]) ?? cleanGeneralRole(r13?.[1]) ?? cleanGeneralRole(r6?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(r7?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r3?.[1]) ?? cleanGeneralRole(r14?.[1]) ?? cleanGeneralRole(r12?.[1]);
 }
 
 /**
@@ -229,8 +259,10 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
 	if (!company) { m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
 
-	// 2. your interest in [the] [Role] position at|with [Company]
-	if (!company) { m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+position\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
+	// 2. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
+	// ("...interest in the Software Engineer (NYC) opportunity at PermitFlow", "...the Engineer,
+	// Product Integration (Paisly) opportunity at JetBlue")
+	if (!company) { m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
 
 	// 3. employment with [Company] in our [Role] position
 	if (!company) { m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i')); if (m) { company = m[1]; role = m[2]; } }
@@ -310,13 +342,31 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
  * "Requisition 123456". This is a stable unique key for one posting: the application confirmation
  * and the later status/rejection email for the same job both carry it, so it matches them reliably
  * even when the company name is written differently ("JPMorganChase" vs "JPMorgan Chase & Co.").
- * Returns the digits only, or null when no labelled number is present.
+ * Returns the digits only, or null when no number is present.
  */
 export function extractJobNumber(subject: string, body: string): string | null {
-	const m = `${subject}\n${body}`.match(
+	const text = `${subject}\n${body}`;
+	// 1. Explicitly LABELLED ("Job Number: 210715977", "Req ID: 210705462", "Requisition 123456").
+	const labeled = text.match(
 		/\b(?:job\s*(?:number|id|no\.?|#)|req(?:uisition)?\s*(?:id|number|no\.?|#)?|requisition)\s*[:#]?\s*([0-9]{5,})/i,
 	);
-	return m ? m[1] : null;
+	if (labeled) return labeled[1];
+	// 1b. A bare "ID: 3092179" — the colon makes it an explicit label (not a stray "id" in prose). Amazon
+	// posts the job id this way: "...your interest in Software Engineer (ID: 3092179)".
+	const idLabel = text.match(/\bID\s*[:#]\s*([0-9]{5,})/i);
+	if (idLabel) return idLabel[1];
+	// 2. An UNLABELLED but unmistakably req-shaped alphanumeric token: a 1-3 letter prefix + 5+ digits
+	// ("R0859802") or 5+ digits + a 2-3 letter suffix ("722493BR", "124432BR"). This mixed letter/digit
+	// shape doesn't occur in phone numbers, dates, or money, so it's safe to read without a label. Return
+	// the digits only (the letters are a system prefix, not part of the number we match on).
+	const alnum = text.match(/\b(?:[A-Z]{1,3}([0-9]{5,})|([0-9]{5,})[A-Z]{2,3})\b/);
+	if (alnum) return alnum[1] ?? alnum[2];
+	// 3. A 6+ digit run set off by a dash in the SUBJECT ("...Software Engineer I – 31143106"). Restricted
+	// to the subject because phone numbers in body footers can also be dash-separated digit runs; subjects
+	// don't carry phones. The dash + length (6+, excludes years) marks it as a req.
+	const dashed = subject.match(/[-–]\s*([0-9]{6,})\b/);
+	if (dashed) return dashed[1];
+	return null;
 }
 
 // Strong, unambiguous status phrases mined from the real corpus (each ~0% in the

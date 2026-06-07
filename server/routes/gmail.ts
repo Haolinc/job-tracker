@@ -34,6 +34,12 @@ const AUTOMATED_SUBJECT = new RegExp(
 		'verify your email',
 		'confirm your email',
 		'activate your account',
+		// Auth / magic-link emails from ATS portals (e.g. ClearCompany "Sign-in link for your application
+		// at …") — a login link to RESUME an application, not an application event. The body often names
+		// the role, so without this filter it wrongly spawns/updates a record.
+		'sign[\\s-]?in link',
+		'log[\\s-]?in link',
+		'magic link',
 		// Glassdoor post-application feedback survey — runtime backstop; Gmail query
 		// already excludes by subject, but these emails DO match the keywordFilter
 		// ("your application"), so a fetched straggler would still be skipped here.
@@ -263,7 +269,7 @@ function oldest(apps: Application[]): Application {
  *                                  e.g. several Google "Thanks for applying" emails stay separate)
  *  - no role, STATUS update     → the company's original application (oldest)
  */
-async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null, isConfirmation: boolean, date: string): Promise<Application | undefined> {
+async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null, isConfirmation: boolean, isFastApply: boolean, date: string): Promise<Application | undefined> {
 	// COMPANY FIRST — gather every record that could be THIS employer, then disambiguate by role below.
 	// We probe two ways and UNION the results, rather than "domain, else name":
 	//   • by DOMAIN — a real company domain (ATS/job-board hosts already excluded) is unique to one
@@ -296,34 +302,60 @@ async function findExisting(company: string, role: string | null, externalId: st
 		if (matches.length === 0) return undefined;
 	}
 
-	// Resolve the role. A CONFIRMATION ("applied") is a NEW application, so it only adopts an existing
-	// record on an EXACT role (the same posting re-confirmed / a fast-apply pair) — it never folds into
-	// a sibling. A STATUS update (interview/offer/rejected) is about an EXISTING application, so it may
+	// Resolve the role. A CONFIRMATION ("applied") is a NEW application: it adopts an existing record by
+	// exact role ONLY to pair a LinkedIn/Indeed fast-apply with the company's own email — two regular
+	// confirmations with the same title stay separate unless they share a req number. A STATUS update
+	// (interview/offer/rejected) is about an EXISTING application, so it matches by title freely and may
 	// also carry the role an earlier role-less confirmation lacked and upgrade it.
 	const incomingHasRole = !!role && role !== 'Unknown Role';
 	if (incomingHasRole) {
-		// Exact title = same posting (also catches an awaiting record whose role this email matches —
-		// the merge then clears its awaiting flag).
+		// Exact title = same posting. But a CONFIRMATION ("applied") only merges by title when one side is a
+		// LinkedIn/Indeed FAST-APPLY: that's the job-board email pairing with the company's own confirmation.
+		// Two REGULAR confirmations with the same title are DISTINCT applications (a shared req number, handled
+		// above, is the only thing that merges them) — so applying to two like-named postings directly stays
+		// as two records. A STATUS update (rejection/interview/offer) always matches its application by title.
+		// EXCEPTION: an AWAITING exact-title record is a status email (e.g. a rejection processed first, since
+		// the sync runs newest-first) explicitly waiting for its own confirmation — that confirmation always
+		// claims it, fast-apply or not, so an application and its rejection don't end up as two records.
 		const exact = matches.find(m => normRole(m.role) === normRole(role));
-		if (exact) return exact;
-		if (!isConfirmation) {
-			// A status update fills in the role on a still-roleless record — only if there's exactly one.
-			const roleless = matches.filter(m => !m.role || m.role === 'Unknown Role');
-			if (roleless.length === 1) return roleless[0];
+		if (exact && (!isConfirmation || isFastApply || exact.fast_apply || exact.awaiting_application)) return exact;
+		const roleless = matches.filter(m => !m.role || m.role === 'Unknown Role');
+		// A STATUS update (interview/rejected/…) fills in the role on a lone still-roleless record.
+		if (!isConfirmation && roleless.length === 1) return roleless[0];
+		// A CONFIRMATION normally stays separate (so distinct postings don't collapse) — but it DOES claim
+		// a roleless record that an earlier status update left AWAITING its application. That record is this
+		// posting's other half: the status email (e.g. a rejection) arrived and created the record before
+		// its confirmation was processed (the sync runs newest-first, so a later rejection lands before its
+		// own older confirmation). Claiming it backfills the role + application date and clears the wait,
+		// instead of spawning a second record. The date guard keeps a confirmation that POSTDATES the
+		// awaiting record's activity from grabbing an unrelated rejection.
+		if (isConfirmation) {
+			const awaiting = roleless.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
+			if (awaiting.length) return oldest(awaiting);
 		}
 		return undefined;
 	}
 	// Incoming email has NO role.
 	if (isConfirmation) {
-		// A role-less confirmation is normally a brand-new application (so several Google "Thanks for
-		// applying" don't collapse into one) — BUT it first backfills an "awaiting" record: a status
-		// update that arrived before its (older, out-of-window) confirmation. Its role came from that
-		// update; this confirmation just supplies the application date and clears the flag.
+		// A role-less confirmation first backfills an "awaiting" record: a status update that arrived before
+		// its (older, out-of-window) confirmation. Its role came from that update; this confirmation just
+		// supplies the application date and clears the flag.
 		// DATE GUARD: only backfill a record whose status update is NOT older than this application — an
 		// application that POSTDATES a rejection is a NEW application to the company, not the confirmation
 		// that rejection was waiting for, so it must keep its own record.
 		const awaiting = matches.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
-		return awaiting.length ? oldest(awaiting) : undefined;
+		if (awaiting.length) return oldest(awaiting);
+		// No awaiting record to claim. If a ROLED application to this company already exists, this title-less
+		// email is the company's own confirmation of one of them (the company-side of a LinkedIn/Indeed
+		// fast-apply, or the confirmation paired with a rejection that already created the record) — fold it
+		// in to backfill the application date/domain instead of spawning a blank "Unknown Role" duplicate.
+		// Only ROLED records are eligible, so several genuinely title-less applications to one company
+		// (e.g. multiple "Thanks for applying to Google" with no role anywhere) still stay separate. Same
+		// DATE GUARD as above: a title-less confirmation that POSTDATES the existing application is a NEW
+		// application to the company, not that one's confirmation, so it keeps its own record.
+		const roled = matches.filter(m => m.role && m.role !== 'Unknown Role' && (!m.date_applied || date <= m.date_applied));
+		if (roled.length) return oldest(roled);
+		return undefined;
 	}
 	// A role-less status update attaches to the company's original application (oldest).
 	return oldest(matches);
@@ -408,6 +440,20 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					if (!classification.company && ext) classification.company = ext.company;
 					if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
 				}
+			} else if (classification.category !== 'ignored' && !classification.role) {
+				// The parser nailed the company + category but couldn't pull a role from the templated text.
+				// The title may still be present in prose the regex doesn't model, so consult the LLM for the
+				// ROLE ONLY — the parser's company/category are reliable and stay authoritative. A failed or
+				// empty LLM call just leaves the role null → "Unknown Role", same as before.
+				try {
+					const ai = await classifyEmail(subject, from, body);
+					if (ai.role) {
+						classification = { ...classification, role: ai.role };
+						console.log(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
+					}
+				} catch (err) {
+					console.error(`[classify] role-fill error for subject="${subject}":`, err);
+				}
 			}
 
 			// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
@@ -466,7 +512,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// updates; an "applied" email is a confirmation UNLESS its subject OR body marks it as a
 			// status update (the classifier sometimes defaults those to "applied").
 			const isConfirmation = category === 'applied' && !UPDATE_SUBJECT.test(subject) && !UPDATE_BODY.test(body);
-			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, email.lastMessageDate);
+			// A LinkedIn/Indeed fast-apply email — its job-board confirmation and the company's own
+			// confirmation are merged by company+role; a regular confirmation is not (see findExisting).
+			const isFastApply = /^(?:linkedin|indeed)_/.test(classifier_code ?? '');
+			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
@@ -512,6 +561,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// A confirmation arriving for an "awaiting" record (one created by an earlier update) supplies
 				// the original application and closes the wait — clear the flag so nothing else claims it.
 				const awaitingClear = isConfirmation && existing.awaiting_application ? { awaiting_application: false } : {};
+				// A LinkedIn/Indeed fast-apply that merges in MARKS the record fast_apply — it's only the job
+				// board's "application sent" notice, not the company's own confirmation. The mark lets the REAL
+				// company confirmation (a regular email) still pair with this record by title later, instead of
+				// being split off as a separate record.
+				const fastApplyMark = isFastApply && !existing.fast_apply ? { fast_apply: true } : {};
 				const merged = {
 					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
@@ -520,6 +574,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...externalIdUpdate,
 					...domainUpdate,
 					...awaitingClear,
+					...fastApplyMark,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
 				updated++;
@@ -541,6 +596,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					// A status update creating its own record means its confirmation isn't here yet (older
 					// than the scan window, or simply not synced) — mark it so a later confirmation backfills it.
 					awaiting_application: !isConfirmation,
+					fast_apply:      isFastApply,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 				});
