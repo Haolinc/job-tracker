@@ -10,6 +10,19 @@ import type { Application } from '../types';
 
 const router = Router();
 
+/** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
+function formatDuration(ms: number): string {
+	const total = Math.round(ms / 1000);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	const parts: string[] = [];
+	if (h) parts.push(`${h}h`);
+	if (m) parts.push(`${m}m`);
+	if (s || !parts.length) parts.push(`${s}s`);
+	return parts.join(' ');
+}
+
 // Patterns that identify automated / non-application emails.
 // Matched before calling the LLM to avoid unnecessary inference.
 const AUTOMATED_SUBJECT = new RegExp(
@@ -610,13 +623,13 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
 		}
-        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        const durationMs = Date.now() - start;
         const failed = failedIds.length;
         if (failed) console.warn(`[sync] ${failed} message(s) could not be fetched — NOT marked synced, will be retried next sync: ${failedIds.join(', ')}`);
         console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
-        console.log(`[sync] duration: ${duration} seconds`);
+        console.log(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
-		send({ phase: 'done', added, updated, skipped, failed });
+		send({ phase: 'done', added, updated, skipped, failed, durationMs });
 		res.end();
 	} catch (err) {
 		console.error('Sync error:', err);

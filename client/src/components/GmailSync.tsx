@@ -3,6 +3,19 @@ import type { SyncResult, SyncProgress } from '../types';
 
 const SCAN_WINDOWS = [30, 60, 90, 180];
 
+/** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
+function formatDuration(ms: number): string {
+	const total = Math.round(ms / 1000);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	const parts: string[] = [];
+	if (h) parts.push(`${h}h`);
+	if (m) parts.push(`${m}m`);
+	if (s || !parts.length) parts.push(`${s}s`);
+	return parts.join(' ');
+}
+
 interface Props {
 	connected: boolean;
 	syncing: boolean;
@@ -61,8 +74,14 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						)
 					)}
 					{!syncing && lastResult && (
-						<span className="text-xs text-gray-500 w-full sm:w-auto">
-							+{lastResult.added} added &middot; {lastResult.updated} updated &middot; {lastResult.skipped} skipped
+						<span className="text-xs text-gray-400 w-full sm:w-auto">
+							<span className="font-semibold text-emerald-600">+{lastResult.added} added</span>
+							{' '}&middot;{' '}
+							<span className="font-semibold text-blue-600">{lastResult.updated} updated</span>
+							{' '}&middot;{' '}
+							<span className="text-gray-400">{lastResult.skipped} skipped</span>
+							{' '}&middot;{' '}
+							<span className="font-semibold text-purple-600">{formatDuration(lastResult.durationMs)}</span>
 							{lastResult.failed > 0 && (
 								<span
 									className="text-amber-600 font-medium"

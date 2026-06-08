@@ -29,6 +29,7 @@ export interface SyncResult {
 	updated: number;
 	skipped: number;
 	failed: number;   // emails that errored on fetch this run; not synced, retried next sync
+	durationMs: number;   // wall-clock time the sync took
 }
 
 export interface SyncProgress {

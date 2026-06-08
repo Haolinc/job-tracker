@@ -54,7 +54,7 @@ export async function syncGmail(days?: number, onProgress?: (p: SyncProgress) =>
 			buffer = buffer.slice(nl + 1);
 			if (!line) continue;
 			const ev = JSON.parse(line) as { phase: string } & SyncResult & SyncProgress & { error?: string };
-			if (ev.phase === 'done') final = { added: ev.added, updated: ev.updated, skipped: ev.skipped, failed: ev.failed };
+			if (ev.phase === 'done') final = { added: ev.added, updated: ev.updated, skipped: ev.skipped, failed: ev.failed, durationMs: ev.durationMs };
 			else if (ev.phase === 'error') throw new Error(ev.error ?? 'Sync failed');
 			else onProgress?.(ev);   // 'start' and 'progress'
 		}
