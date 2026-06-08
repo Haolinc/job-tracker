@@ -45,13 +45,14 @@ export default function App() {
 	}, [checkStatus]);
 
 	const handleSave = async (form: ApplicationFormData) => {
-		const { interview_step, date_applied, last_activity, job_url, notes, ...rest } = form;
+		const { interview_step, date_applied, last_activity, job_url, external_id, notes, ...rest } = form;
 		const cleaned = {
 			...rest,
 			interview_step: interview_step || null,
 			date_applied: date_applied || null,
 			last_activity: last_activity || null,
 			job_url: job_url || null,
+			external_id: external_id.trim() || null,
 			notes: notes || null,
 		};
 		if (form.id) {

@@ -188,7 +188,7 @@ const COMPANY_DESCRIPTOR = new Set([
 	'hardware', 'digital', 'services', 'consulting', 'networks', 'communications', 'analytics',
 	'security', 'cloud', 'data', 'robotics', 'semiconductor', 'semiconductors', 'electronics',
 	// industry sectors — "Fora Travel" is the same company as "Fora"; "Travel" is its sector, not a new brand
-	'financial', 'finance', 'health', 'healthcare', 'bank', 'media', 'pharmaceuticals', 'pharma',
+	'financial', 'finance', 'trust', 'health', 'healthcare', 'bank', 'media', 'pharmaceuticals', 'pharma',
 	'bio', 'biosciences', 'therapeutics', 'diagnostics', 'energy', 'power', 'retail', 'foods', 'food',
 	'motors', 'automotive', 'aerospace', 'travel', 'hospitality', 'insurance', 'mortgage', 'realty',
 	'logistics', 'transport', 'transportation', 'education', 'learning', 'payments', 'lending',
@@ -451,6 +451,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 						classification = { ...classification, role: ai.role };
 						console.log(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
 					}
+					// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
+					if (ai.req_id) classification.req_id = ai.req_id;
 				} catch (err) {
 					console.error(`[classify] role-fill error for subject="${subject}":`, err);
 				}
@@ -504,7 +506,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				continue;
 			}
 
-			const externalId = extractJobNumber(subject, body);
+			// Deterministic extraction first (reliable, never hallucinates); fall back to the req number the
+			// AI surfaced from a format the regex doesn't model. Both keep the number in the SAME literal form
+			// (as written), so a posting matches whether its confirmation and rejection were read by parser or AI.
+			const externalId = extractJobNumber(subject, body) ?? classification.req_id ?? null;
 			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
 			// stored signal that disambiguates first-word twins on future syncs.
 			const senderDomain = companyDomainFromSender(from);

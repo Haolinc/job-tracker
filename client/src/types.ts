@@ -53,5 +53,6 @@ export interface ApplicationFormData {
 	date_applied: string;
 	last_activity: string;
 	job_url: string;
+	external_id: string;
 	notes: string;
 }

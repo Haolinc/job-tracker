@@ -80,7 +80,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
 		const { id } = req.params;
-		const allowed = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'notes'] as const;
+		const allowed = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'external_id', 'notes'] as const;
 		const updates: Record<string, unknown> = {};
 		for (const key of allowed) {
 			if ((req.body as Record<string, unknown>)[key] !== undefined) {

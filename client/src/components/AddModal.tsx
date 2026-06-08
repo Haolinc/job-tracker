@@ -4,7 +4,7 @@ import { STATUS_LABELS, STEP_LABELS } from '../constants';
 
 const EMPTY: ApplicationFormData = {
 	company: '', role: '', status: 'applied', reached_interview: false,
-	interview_step: '', date_applied: '', last_activity: '', job_url: '', notes: '',
+	interview_step: '', date_applied: '', last_activity: '', job_url: '', external_id: '', notes: '',
 };
 
 interface Props {
@@ -15,7 +15,8 @@ interface Props {
 
 export default function AddModal({ initial, onSave, onClose }: Props) {
 	const [form, setForm] = useState<ApplicationFormData>(
-		initial ? { ...EMPTY, ...initial } : EMPTY
+		// external_id is stored as string | null on the record; coerce a null to '' so the input stays controlled.
+		initial ? { ...EMPTY, ...initial, external_id: initial.external_id ?? '' } : EMPTY
 	);
 
 	const set = <K extends keyof ApplicationFormData>(k: K, v: ApplicationFormData[K]) =>
@@ -94,6 +95,10 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					<Field label="Job URL">
 						<input value={form.job_url} onChange={e => set('job_url', e.target.value)}
 							className={inputCls} placeholder="https://..." />
+					</Field>
+					<Field label="Job / Req ID">
+						<input value={form.external_id} onChange={e => set('external_id', e.target.value)}
+							className={inputCls} placeholder="e.g. 2026-0013799" />
 					</Field>
 					<Field label="Notes">
 						<textarea value={form.notes} onChange={e => set('notes', e.target.value)}

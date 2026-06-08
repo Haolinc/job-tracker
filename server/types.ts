@@ -68,6 +68,7 @@ export interface Classification {
 	category: Category;
 	company: string | null;
 	role: string | null;
+	req_id?: string | null;   // ATS requisition/job number (digits only) the AI pulled from the email, if any
     classifier_code?: string; // Optional field to store which parser/classifier was used
 }
 

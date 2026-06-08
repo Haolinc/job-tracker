@@ -1,4 +1,5 @@
 import type { Classification } from '../types';
+import { canonicalReqId } from './parser';
 import ollama from 'ollama';
 
 const systemPrompt = `You are a job application email classifier. Given an email's From header, subject, and body text, determine if it relates to a job application and extract key information.
@@ -7,7 +8,8 @@ Return ONLY valid JSON in this exact shape:
 {
   "category": "applied" | "interview" | "offer" | "rejected" | "ignored",
   "company": "Company name or null",
-  "role": "Job title or null"
+  "role": "Job title or null",
+  "req_id": "ATS requisition/job number kept exactly as written (e.g. 2026-0013799, 722493BR), or null"
 }
 
 Categories:
@@ -134,21 +136,41 @@ Role extraction tips:
   or a non-geographic word ("Evergreen" is a posting type, not a city — keep it).
   When in doubt, keep the original text.
 
+Requisition / job number (the "req_id" field):
+- Extract the posting's requisition/job number when the email shows one — either EXPLICITLY LABELLED
+  ("Job ID: …", "Job Number: …", "Req #…", "Requisition …", "(ID: …)") OR written in an UNMISTAKABLE
+  requisition FORMAT even without a label: a year-hyphen-number ("2026-71968"), a letter+digits code
+  ("R232753", "722493BR", "R0859802"), or a long standalone digit id ("3092179"). The same number appears
+  on the confirmation and its later status/rejection email, so it links them.
+- Keep it EXACTLY AS WRITTEN — preserve any letter prefix/suffix and internal hyphens. Do NOT reduce to digits.
+- Only return null when you are genuinely NOT CONFIDENT a number is a requisition. A plain small number, a
+  seniority level, or a bare year that is merely part of the job TITLE is NOT a req. Never use a phone
+  number, date, salary figure, or zip code.
+- Examples:
+    "Req 2026-71968 - Space Force - Software Engineer" → "2026-71968"   (a requisition code — keep it)
+    "Job ID# 2026-0013799" → "2026-0013799"      "(ID: 3092179)" → "3092179"      "Req #124432BR" → "124432BR"
+    "Senior Software Engineer II" → null   ("II" is a seniority level, not a requisition)
+    "2026 Emerging Talent Software Engineers" → null   (a year inside the title, not a requisition)
+
 WORKED EXAMPLES (input cue → output). These are the source of truth for the tricky decisions; when a
 new case is classified wrong, ADD a short example here rather than relying on prose rules alone:
 1. From "JPMorgan Chase & Co. <noreply@cloud.oracle.com>", body "...interested in a career at JPMorganChase..."
-   → {"category":"applied","company":"JPMorganChase","role":null}
+   → {"category":"applied","company":"JPMorganChase","role":null,"req_id":null}
    (the body's working name wins over BOTH the legal signature name and the Oracle ATS sender domain)
 2. Subject "Thank you for your Resume", body "...your application for the Test Engineer at Sherpa 6. We..."
-   → {"category":"applied","company":"Sherpa 6","role":"Test Engineer"}   (keep the number — it is part of the name)
+   → {"category":"applied","company":"Sherpa 6","role":"Test Engineer","req_id":null}   (keep the number — it is part of the name)
 3. Body "...Thanks for applying! ... Thank you, PMC Talent Acquisition Team"  (company appears ONLY in the sign-off)
-   → {"category":"applied","company":"PMC","role":null}
+   → {"category":"applied","company":"PMC","role":null,"req_id":null}
 4. Subject "Application received by City of Scottsdale", body is unrendered junk ("*---*---*---*")
-   → {"category":"applied","company":"City of Scottsdale","role":null}   (body is junk → take the company from the SUBJECT)
+   → {"category":"applied","company":"City of Scottsdale","role":null,"req_id":null}   (body is junk → take the company from the SUBJECT)
 5. Body "...Thank you for your interest in employment at CP Payroll, LLC dba ConnectPay..."
-   → {"category":"applied","company":"ConnectPay","role":null}   (use the "dba" trade name, not the legal entity)
+   → {"category":"applied","company":"ConnectPay","role":null,"req_id":null}   (use the "dba" trade name, not the legal entity)
 6. Subject "Your HackerRank for Acme Corp - Backend Engineer Invitation", from "HackerRank <...>"
-   → {"category":"interview","company":"Acme Corp","role":"Backend Engineer"}   (the EMPLOYER, never the assessment platform)`;
+   → {"category":"interview","company":"Acme Corp","role":"Backend Engineer","req_id":null}   (the EMPLOYER, never the assessment platform)
+7. Subject "Update regarding your application for Software Engineer 1 (React + API + Cloud Migration) Job ID# 2026-0013799"
+   → {"category":"rejected","company":"U.S. Bank","role":"Software Engineer 1 (React + API + Cloud Migration)","req_id":"2026-0013799"}   (req number kept OUT of the role, returned WHOLE in req_id)
+8. Body "...Thank you for your interest in Software Engineer (ID: 3092179)..." from "noreply@mail.amazon.jobs"
+   → {"category":"applied","company":"Amazon","role":"Software Engineer","req_id":"3092179"}`;
 
 const VALID_CATEGORIES = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
 
@@ -174,10 +196,14 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 	if (!parsed || !VALID_CATEGORIES.has(parsed.category as string)) {
 		throw new Error(`Unexpected classifier response: ${text}`);
 	}
+	// canonicalReqId strips a leading "Req"/"Job Req" label the model sometimes prepends and validates the
+	// token (≥5 digits), matching what the parser extracts from the same text so a posting links across paths.
+	const reqInput = (typeof parsed.req_id === 'string' || typeof parsed.req_id === 'number') ? String(parsed.req_id) : null;
 	return {
 		category: parsed.category as Classification['category'],
 		company:  typeof parsed.company === 'string' ? parsed.company : null,
 		role:     typeof parsed.role    === 'string' ? parsed.role    : null,
+		req_id:   canonicalReqId(reqInput),
 	};
 }
 
