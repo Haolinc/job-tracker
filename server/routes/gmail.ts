@@ -65,6 +65,11 @@ const AUTOMATED_SUBJECT = new RegExp(
 );
 const AUTOMATED_FROM = /calendly\./i;
 
+// Staffing-agency COLD OUTREACH (a recruiter pitching a contract role), not an application event. Matched
+// on the BODY because the subject is usually just the role title. Each phrase is mass-mail-specific and
+// ~never appears in an employer's own confirmation/rejection, so a single hit is enough to skip the email.
+const RECRUITER_OUTREACH = /\bplanning to make a change\b|\bknow of a friend\b|\breferral bonus\b|\bour records (?:show|indicate)\b|\bmy current opening|\beven if we have spoken recently\b|\b(?:c2c|corp[\s-]?to[\s-]?corp|w-?2|1099|contract to hire)\b/i;
+
 // ATS platforms and generic mail providers — never treat their domain as a company name.
 const ATS_DOMAINS = new Set([
 	'greenhouse.io', 'greenhouse-mail.io', 'lever.co', 'icims.com', 'taleo.net', 'bamboohr.com',
@@ -421,7 +426,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 
 			// Hard-filter obvious non-job emails before calling the LLM.
-			if (AUTOMATED_SUBJECT.test(subject) || AUTOMATED_FROM.test(from)) {
+			if (AUTOMATED_SUBJECT.test(subject) || AUTOMATED_FROM.test(from) || RECRUITER_OUTREACH.test(body)) {
 				console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
