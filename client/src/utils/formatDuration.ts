@@ -1,9 +1,3 @@
-export const errMsg = (e: unknown, fallback: string): string => {
-	if (e instanceof Error) return e.message;
-	if (typeof e === 'string') return e;
-	return fallback;
-};
-
 /** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
 export function formatDuration(ms: number): string {
 	const total = Math.round(ms / 1000);

@@ -398,7 +398,9 @@ export function canonicalReqId(raw: string | null | undefined): string | null {
 	if (raw == null) return null;
 	const s = String(raw).trim()
 		.replace(/^#\s*/, '')
-		.replace(/^(?:job\s+)?req(?:uisition)?[\s.:#-]+(?=[0-9A-Za-z])/i, '')
+		// A run of label words ("Req", "Job Number", "Requisition", "Job ID") each followed by a SEPARATOR;
+		// a label glued straight to the digits ("REQ352476") has no separator and is left whole.
+		.replace(/^(?:(?:job|req(?:uisition)?|ref(?:erence)?|number|no|id)[\s.:#-]+)+(?=[0-9A-Za-z])/i, '')
 		.trim();
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(s)) return null;
 	if ((s.match(/[0-9]/g)?.length ?? 0) < 5) return null;

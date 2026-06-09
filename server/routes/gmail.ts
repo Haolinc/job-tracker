@@ -5,70 +5,11 @@ import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
 import { parseEmail, extractGeneralCompanyRole, extractJobNumber, recoverRoleFromBody, tidyRole } from '../services/parser';
 import * as db from '../services/db';
-import { errMsg } from '../utils';
+import { isIgnorableEmail } from '../services/filters';
+import { errMsg, formatDuration } from '../utils';
 import type { Application } from '../types';
 
 const router = Router();
-
-/** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
-function formatDuration(ms: number): string {
-	const total = Math.round(ms / 1000);
-	const h = Math.floor(total / 3600);
-	const m = Math.floor((total % 3600) / 60);
-	const s = total % 60;
-	const parts: string[] = [];
-	if (h) parts.push(`${h}h`);
-	if (m) parts.push(`${m}m`);
-	if (s || !parts.length) parts.push(`${s}s`);
-	return parts.join(' ');
-}
-
-// Patterns that identify automated / non-application emails.
-// Matched before calling the LLM to avoid unnecessary inference.
-const AUTOMATED_SUBJECT = new RegExp(
-	[
-		'^automatic reply',
-		'^auto:',
-		'^out of office',
-		'interview confirmation',
-		'interview confirmed',
-		'your interview (is|has been) (confirmed|scheduled)',
-		'has been scheduled',
-		'calendar invite',
-		'meeting confirmed',
-		'reminder',
-		'jobs? alert',
-		'new jobs? for you',
-		'\\d+ new jobs?',
-		'your career opportunities at',       // recruitment marketing, not application confirmation
-		// Account-activation / email-verification emails from ATS portals — the application is NOT yet
-		// submitted (e.g. Siemens "Email address validation request"), so this isn't an application event.
-		'email address validation',
-		'verify your email',
-		'confirm your email',
-		'activate your account',
-		// Auth / magic-link emails from ATS portals (e.g. ClearCompany "Sign-in link for your application
-		// at …") — a login link to RESUME an application, not an application event. The body often names
-		// the role, so without this filter it wrongly spawns/updates a record.
-		'sign[\\s-]?in link',
-		'log[\\s-]?in link',
-		'magic link',
-		// Glassdoor post-application feedback survey — runtime backstop; Gmail query
-		// already excludes by subject, but these emails DO match the keywordFilter
-		// ("your application"), so a fetched straggler would still be skipped here.
-		'quick question about your application at',
-		// Jacobs generic portal-reminder emails — subject is exactly "Jacobs - Application Update"
-		// with no role after it. The valid Jacobs emails always have ", [Role]" after "Update".
-		'jacobs - application update(?!,)',
-	].join('|'),
-	'i',
-);
-const AUTOMATED_FROM = /calendly\./i;
-
-// Staffing-agency COLD OUTREACH (a recruiter pitching a contract role), not an application event. Matched
-// on the BODY because the subject is usually just the role title. Each phrase is mass-mail-specific and
-// ~never appears in an employer's own confirmation/rejection, so a single hit is enough to skip the email.
-const RECRUITER_OUTREACH = /\bplanning to make a change\b|\bknow of a friend\b|\breferral bonus\b|\bour records (?:show|indicate)\b|\bmy current opening|\beven if we have spoken recently\b|\b(?:c2c|corp[\s-]?to[\s-]?corp|w-?2|1099|contract to hire)\b/i;
 
 // ATS platforms and generic mail providers — never treat their domain as a company name.
 const ATS_DOMAINS = new Set([
@@ -426,7 +367,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 
 			// Hard-filter obvious non-job emails before calling the LLM.
-			if (AUTOMATED_SUBJECT.test(subject) || AUTOMATED_FROM.test(from) || RECRUITER_OUTREACH.test(body)) {
+			if (isIgnorableEmail(subject, from, body)) {
 				console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
