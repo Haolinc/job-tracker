@@ -39,6 +39,7 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 	return (
 		<div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
 			<div
+				data-testid="import-result-modal"
 				role="dialog"
 				aria-modal="true"
 				onClick={e => e.stopPropagation()}
@@ -52,7 +53,7 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 				{outcome.message && <p className="mt-2 text-sm text-gray-500">{outcome.message}</p>}
 
 				{outcome.stats && outcome.stats.length > 0 && (
-					<div className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">
+					<div data-testid="import-result-stats" className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">
 						{outcome.stats.map(s => (
 							<div key={s.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
 								<span className="text-gray-600">{s.label}</span>
@@ -63,6 +64,7 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 				)}
 
 				<button
+					data-testid="import-result-done"
 					ref={okRef}
 					onClick={onClose}
 					className="mt-5 w-full px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
