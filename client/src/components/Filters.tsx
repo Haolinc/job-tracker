@@ -15,8 +15,9 @@ export default function Filters({ filters, onChange }: Props) {
 	}, [search, onChange]);
 
 	return (
-		<div className="flex gap-3 flex-wrap">
+		<div data-testid="filters" className="flex gap-3 flex-wrap">
 			<input
+				data-testid="filters-search"
 				type="text"
 				placeholder="Search company or role..."
 				value={search}
