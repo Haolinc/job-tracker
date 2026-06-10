@@ -32,23 +32,24 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 		<div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
 			<div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[92dvh] flex flex-col">
 				<div className="flex justify-between items-center px-4 sm:px-6 pt-4 sm:pt-5 pb-3 border-b border-gray-100 shrink-0">
-					<h2 className="text-lg font-semibold text-gray-800">
+					<h2 data-testid="modal-title" className="text-lg font-semibold text-gray-800">
 						{initial?.id ? 'Edit Application' : 'Add Application'}
 					</h2>
-					<button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+					<button data-testid="modal-close" onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
 				</div>
 
 				<form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 overflow-y-auto">
 					<Field label="Company *">
-						<input value={form.company} onChange={e => set('company', e.target.value)}
+						<input data-testid="field-company" value={form.company} onChange={e => set('company', e.target.value)}
 							required className={inputCls} placeholder="Acme Corp" />
 					</Field>
 					<Field label="Role *">
-						<input value={form.role} onChange={e => set('role', e.target.value)}
+						<input data-testid="field-role" value={form.role} onChange={e => set('role', e.target.value)}
 							required className={inputCls} placeholder="Software Engineer" />
 					</Field>
 					<Field label="Status">
 						<select
+							data-testid="field-status"
 							value={form.status}
 							onChange={e => {
 								const status = e.target.value as Status;
@@ -65,7 +66,7 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					</Field>
 					{form.status === 'interview' && (
 						<Field label="Interview Stage">
-							<select value={form.interview_step} onChange={e => set('interview_step', e.target.value as InterviewStep | '')} className={inputCls}>
+							<select data-testid="field-interview-step" value={form.interview_step} onChange={e => set('interview_step', e.target.value as InterviewStep | '')} className={inputCls}>
 								<option value="">— Select Stage —</option>
 								{(Object.entries(STEP_LABELS) as [InterviewStep, string][]).map(([v, label]) => (
 									<option key={v} value={v}>{label}</option>
@@ -76,6 +77,7 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					{form.status === 'rejected' && (
 						<label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
 							<input
+                                data-testid="field-reached-interview"
 								type="checkbox"
 								checked={form.reached_interview}
 								onChange={e => set('reached_interview', e.target.checked)}
@@ -86,29 +88,29 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					)}
 					<div className="grid grid-cols-2 gap-3">
 						<Field label="Date Applied">
-							<input type="date" value={form.date_applied} onChange={e => set('date_applied', e.target.value)} className={inputCls} />
+							<input data-testid="field-date-applied" type="date" value={form.date_applied} onChange={e => set('date_applied', e.target.value)} className={inputCls} />
 						</Field>
 						<Field label="Last Response">
-							<input type="date" value={form.last_activity} onChange={e => set('last_activity', e.target.value)} className={inputCls} />
+							<input data-testid="field-last-activity" type="date" value={form.last_activity} onChange={e => set('last_activity', e.target.value)} className={inputCls} />
 						</Field>
 					</div>
 					<Field label="Job URL">
-						<input value={form.job_url} onChange={e => set('job_url', e.target.value)}
+						<input data-testid="field-job-url" value={form.job_url} onChange={e => set('job_url', e.target.value)}
 							className={inputCls} placeholder="https://..." />
 					</Field>
 					<Field label="Job / Req ID">
-						<input value={form.external_id} onChange={e => set('external_id', e.target.value)}
+						<input data-testid="field-external-id" value={form.external_id} onChange={e => set('external_id', e.target.value)}
 							className={inputCls} placeholder="e.g. 2026-0013799" />
 					</Field>
 					<Field label="Notes">
-						<textarea value={form.notes} onChange={e => set('notes', e.target.value)}
+						<textarea data-testid="field-notes" value={form.notes} onChange={e => set('notes', e.target.value)}
 							rows={3} className={inputCls} placeholder="Any notes..." />
 					</Field>
 
 					<div className="flex justify-end gap-2 pt-1">
-						<button type="button" onClick={onClose}
+						<button data-testid="modal-cancel" type="button" onClick={onClose}
 							className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100">Cancel</button>
-						<button type="submit"
+						<button data-testid="modal-submit" type="submit"
 							className="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 font-medium">
 							{initial?.id ? 'Save Changes' : 'Add Application'}
 						</button>
