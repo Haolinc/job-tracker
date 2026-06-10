@@ -18,10 +18,11 @@ interface Props {
 export default function GmailSync({ connected, syncing, progress, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
 	const [days, setDays] = useState(30);
 	return (
-		<div className="flex items-center gap-2 flex-wrap">
+		<div data-testid="gmail-sync" className="flex items-center gap-2 flex-wrap">
 			{connected ? (
 				<>
 					<select
+						data-testid="gmail-scan-window"
 						value={days}
 						onChange={e => setDays(Number(e.target.value))}
 						disabled={syncing}
@@ -31,6 +32,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						{SCAN_WINDOWS.map(d => <option key={d} value={d}>Last {d} days</option>)}
 					</select>
 					<button
+						data-testid="gmail-sync-btn"
 						onClick={() => onSync(days)}
 						disabled={syncing}
 						className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
@@ -41,6 +43,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						{syncing ? 'Syncing...' : 'Sync Gmail'}
 					</button>
 					<button
+						data-testid="gmail-disconnect-btn"
 						onClick={onDisconnect}
 						className="text-xs text-gray-400 hover:text-red-500 underline"
 					>Disconnect</button>
@@ -62,7 +65,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						)
 					)}
 					{!syncing && lastResult && (
-						<span className="text-xs text-gray-400 w-full sm:w-auto">
+						<span data-testid="gmail-sync-result" className="text-xs text-gray-400 w-full sm:w-auto">
 							<span className="font-semibold text-emerald-600">+{lastResult.added} added</span>
 							{' '}&middot;{' '}
 							<span className="font-semibold text-blue-600">{lastResult.updated} updated</span>
@@ -84,6 +87,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 				</>
 			) : (
 				<button
+					data-testid="gmail-connect-btn"
 					onClick={onConnect}
 					className="flex items-center gap-2 px-4 py-2 border border-gray-300 hover:border-gray-400 bg-white text-gray-700 text-sm font-medium rounded-lg transition-colors"
 				>
