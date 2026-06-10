@@ -11,6 +11,7 @@ interface Props {
 export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 	return (
 		<div
+			data-testid={`app-card-${app.id}`}
 			className={`bg-white rounded-lg shadow-sm p-3 ${
 				isNew ? 'border-2 border-emerald-400 ring-2 ring-emerald-100' : 'border border-gray-200'
 			}`}
@@ -28,11 +29,13 @@ export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 				</div>
 				<div className="flex gap-1 shrink-0">
 					<button
+						data-testid="card-edit"
 						onClick={() => onEdit(app)}
 						className="text-gray-400 hover:text-blue-500 text-xs px-1"
 						title="Edit"
 					>✏️</button>
 					<button
+						data-testid="card-delete"
 						onClick={() => onDelete(app.id)}
 						className="text-gray-400 hover:text-red-500 text-xs px-1"
 						title="Delete"
