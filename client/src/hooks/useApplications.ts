@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { getApplications, createApplication, updateApplication, deleteApplication } from '../api';
-import type { Application, Filters } from '../types';
+import type { Application, NewApplication, Filters } from '../types';
 
 export function useApplications() {
 	const [applications, setApplications] = useState<Application[]>([]);
@@ -23,7 +23,7 @@ export function useApplications() {
 		}
 	}, []);
 
-	const add = async (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> => {
+	const add = async (data: NewApplication): Promise<Application> => {
 		const created = await createApplication(data);
 		setApplications(prev => [created, ...prev]);
 		return created;

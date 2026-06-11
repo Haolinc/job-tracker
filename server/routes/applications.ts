@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import * as db from '../services/db';
 import { errMsg } from '../utils';
-import type { Status, InterviewStep, Source } from '../types';
+import type { Status, InterviewStep, Source, EmailRef } from '../types';
 
 const VALID_STATUSES    = new Set<string>(['applied', 'interview', 'offer', 'rejected']);
 const VALID_STEPS       = new Set<string>(['phone_screen', 'technical', 'onsite', 'final']);
@@ -10,6 +10,25 @@ const VALID_STEPS       = new Set<string>(['phone_screen', 'technical', 'onsite'
 const VALID_SOURCES     = new Set<string>(['manual', 'csv']);
 
 const router = Router();
+
+// Coerce user-supplied email refs (manual attach / CSV import) into well-formed EmailRefs: each needs a
+// non-empty messageId and a valid stage; date defaults to ''. Drops anything malformed or a duplicate
+// messageId (dupes would collide on the client's React key and make removal ambiguous).
+function sanitizeEmails(raw: unknown): EmailRef[] {
+	if (!Array.isArray(raw)) return [];
+	const seen = new Set<string>();
+	return raw.flatMap((e): EmailRef[] => {
+		const messageId = typeof e?.messageId === 'string' ? e.messageId.trim() : '';
+		const category  = e?.category;
+		if (!messageId || seen.has(messageId) || !VALID_STATUSES.has(category)) return [];
+		seen.add(messageId);
+		return [{
+			messageId,
+			category: category as EmailRef['category'],
+			date:    typeof e?.date === 'string' ? e.date : '',
+		}];
+	});
+}
 
 router.get('/', async (req: Request, res: Response) => {
 	try {
@@ -28,7 +47,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
 	try {
-		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview, source, company_domain, external_id } = req.body as {
+		const { company, role, status, interview_step, date_applied, last_activity, job_url, notes, reached_interview, source, company_domain, external_id, account, emails } = req.body as {
 			company: string;
 			role: string;
 			status?: Status;
@@ -41,6 +60,8 @@ router.post('/', async (req: Request, res: Response) => {
 			source?: string;
 			company_domain?: string;
 			external_id?: string;
+			account?: string;
+			emails?: unknown;
 		};
 
 		if (!company || !role) {
@@ -70,6 +91,8 @@ router.post('/', async (req: Request, res: Response) => {
 			company_domain: company_domain || null,
 			source: source && VALID_SOURCES.has(source) ? source as Source : 'manual',
 			gmail_thread_id: null,
+			account: account?.trim() || null,
+			emails: sanitizeEmails(emails),
 		});
 		res.status(201).json(app);
 	} catch (err) {
@@ -80,13 +103,17 @@ router.post('/', async (req: Request, res: Response) => {
 router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 	try {
 		const { id } = req.params;
-		const allowed = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'external_id', 'notes'] as const;
+		const allowed = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'external_id', 'notes', 'account'] as const;
 		const updates: Record<string, unknown> = {};
 		for (const key of allowed) {
 			if ((req.body as Record<string, unknown>)[key] !== undefined) {
 				updates[key] = (req.body as Record<string, unknown>)[key];
 			}
 		}
+		// `account` is a free-text email — normalize "" to null so clearing it stores null, not an empty string.
+		if ('account' in updates) updates.account = (updates.account as string)?.trim() || null;
+		// `emails` is a user-editable array — sanitize each ref rather than trusting the raw body.
+		if ((req.body as Record<string, unknown>).emails !== undefined) updates.emails = sanitizeEmails((req.body as Record<string, unknown>).emails);
 		if ('status' in updates && !VALID_STATUSES.has(updates.status as string)) {
 			res.status(400).json({ error: 'Invalid status value' });
 			return;

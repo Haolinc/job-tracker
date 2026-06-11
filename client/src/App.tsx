@@ -92,17 +92,26 @@ export default function App() {
 			setImportResult({ tone: 'warning', title: 'Nothing to import', message: 'No applications were found in that CSV.' });
 			return;
 		}
-		// Same company + role (case-insensitive) == same application, so skip it. Dedup against the
-		// COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications` list is
-		// narrowed by an active search filter and can be momentarily stale — AND against earlier rows
-		// in this same file, since a CSV can list the same company+role more than once (e.g. rows that
-		// differ only by date/status). Without the in-file guard, those rows would all be added.
+		// Skip applications already on the board, and collapse in-file duplicates. Identity is the set of
+		// tracked Gmail message ids (globally unique): two rows are the same application iff they share a
+		// message id. This keeps genuinely-distinct applications that merely share a company+role — several
+		// "Unknown Role" postings at one employer, or the same generic role applied to twice — from being
+		// wrongly merged. Rows with no tracked emails (manual entries) fall back to a company+role key.
+		// Dedup against the COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications`
+		// list is narrowed by an active search filter and can be momentarily stale.
 		const key = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
-		const seen = new Set((await getApplications()).map(a => key(a.company, a.role)));
+		const existing = await getApplications();
+		const seenMsgIds = new Set(existing.flatMap(a => a.emails.map(e => e.messageId)));
+		const seenKeys = new Set(existing.map(a => key(a.company, a.role)));
 		const toAdd = parsed.filter(a => {
-			const k = key(a.company, a.role);
-			if (seen.has(k)) return false;
-			seen.add(k);
+			if (a.emails.length > 0) {
+				if (a.emails.some(e => seenMsgIds.has(e.messageId))) return false;   // shares an email → already here
+				a.emails.forEach(e => seenMsgIds.add(e.messageId));
+				return true;
+			}
+			const k = key(a.company, a.role);   // no emails to identify it → fall back to company+role
+			if (seenKeys.has(k)) return false;
+			seenKeys.add(k);
 			return true;
 		});
 		const duplicates = parsed.length - toAdd.length;

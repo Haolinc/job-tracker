@@ -17,6 +17,8 @@ export function makeApp(overrides: Partial<Application> = {}): Application {
 		notes: null,
 		source: 'gmail',
 		gmail_thread_id: null,
+		account: null,
+		emails: [],
 		created_at: '2026-01-01T00:00:00.000Z',
 		updated_at: '2026-01-02T00:00:00.000Z',
 		...overrides,

@@ -2,6 +2,14 @@ export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
 export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
 export type Source = 'manual' | 'gmail' | 'csv';
 
+// A Gmail message that drove this application to a given stage — lets the user open the actual email.
+// The inbox it lives in is the application-level `account` (one account per application), not stored per ref.
+export interface EmailRef {
+	messageId: string;       // Gmail message id → deep-link with gmailUrl()
+	category: Status;        // which stage this email represents (applied/interview/offer/rejected)
+	date: string;            // 'YYYY-MM-DD' of the email
+}
+
 export interface Application {
 	id: string;
 	company: string;
@@ -20,9 +28,17 @@ export interface Application {
 	detected_by?: 'parser' | 'llm' | null;   // server-managed: how the email was classified
 	source: Source;
 	gmail_thread_id: string | null;
+	// The Gmail account this application's emails live in — drives every "open in Gmail" link. Set from
+	// the synced mailbox (or entered manually); null when unknown (links fall back to the browser's u/0).
+	account: string | null;
+	emails: EmailRef[];                  // every Gmail message tracked for this application, by stage
 	created_at: string;
 	updated_at: string;
 }
+
+// The payload accepted when creating an application — an Application minus the fields the server always
+// assigns itself (id + timestamps). One place to edit when a server-only field is added.
+export type NewApplication = Omit<Application, 'id' | 'created_at' | 'updated_at'>;
 
 export interface SyncResult {
 	added: number;
@@ -56,4 +72,6 @@ export interface ApplicationFormData {
 	job_url: string;
 	external_id: string;
 	notes: string;
+	account: string;          // Gmail account this application's emails live in (drives every link)
+	emails: EmailRef[];       // tracked emails (sync-added or manually attached)
 }

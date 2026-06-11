@@ -67,6 +67,8 @@ describe('AddModal', () => {
 			last_activity: '2026-03-15',
 			job_url: 'https://careers.example.com',
 			notes: 'a note',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -92,6 +94,8 @@ describe('AddModal', () => {
 			last_activity: '2026-03-15',
 			job_url: 'https://careers.example.com',
 			notes: 'a note',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -121,6 +125,8 @@ describe('AddModal', () => {
 			last_activity: '2026-03-15',
 			job_url: 'https://careers.example.com',
 			notes: 'a note',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -149,6 +155,8 @@ describe('AddModal', () => {
 			last_activity: '2026-03-15',
 			job_url: 'https://careers.example.com',
 			notes: 'a note',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -178,6 +186,8 @@ describe('AddModal', () => {
 			last_activity: '2026-03-15',
 			job_url: 'https://careers.example.com',
 			notes: 'a note',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -204,6 +214,8 @@ describe('AddModal', () => {
 			last_activity: '',
 			job_url: '',
 			notes: '',
+			account: '',
+			emails: [],
 		});
 	});
 
@@ -234,7 +246,7 @@ describe('AddModal', () => {
 		const initial: Partial<ApplicationFormData> = {
 			id: 'abc123', company: 'Lockheed Martin', role: 'Staff Engineer', status: 'applied',
 			date_applied: '2026-02-01', last_activity: '2026-03-15', job_url: 'https://careers.example.com',
-			external_id: '722493BR', notes: 'recruiter call scheduled',
+			external_id: '722493BR', notes: 'recruiter call scheduled', account: 'me@work.com',
 		};
 		render(<AddModal initial={initial} onSave={vi.fn()} onClose={vi.fn()} />);
 		expect(screen.getByTestId('modal-title')).toHaveTextContent('Edit Application');
@@ -242,7 +254,7 @@ describe('AddModal', () => {
 			'field-company': 'Lockheed Martin', 'field-role': 'Staff Engineer', 'field-status': 'applied',
 			'field-date-applied': '2026-02-01', 'field-last-activity': '2026-03-15',
 			'field-job-url': 'https://careers.example.com', 'field-external-id': '722493BR',
-			'field-notes': 'recruiter call scheduled',
+			'field-notes': 'recruiter call scheduled', 'field-account': 'me@work.com',
 		};
 		for (const [id, val] of Object.entries(expected))
 			expect(screen.getByTestId(id)).toHaveValue(val);
@@ -261,5 +273,62 @@ describe('AddModal', () => {
 		render(<AddModal initial={{}} onSave={vi.fn()} onClose={onClose} />);
 		await user.click(screen.getByTestId('modal-close'));
 		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('should attach a pasted Gmail link as a tracked email and include it on save', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn();
+		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
+		fireEvent.change(screen.getByTestId('field-company'), { target: { value: 'Acme' } });
+		fireEvent.change(screen.getByTestId('field-role'), { target: { value: 'SWE' } });
+		fireEvent.change(screen.getByTestId('field-account'), { target: { value: 'me@work.com' } });
+
+		await user.selectOptions(screen.getByTestId('email-draft-category'), 'interview');
+		// a whole pasted Gmail URL → the id is extracted for the user
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: 'https://mail.google.com/mail/u/0/#all/ABC123' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		expect(screen.getByTestId('email-row')).toHaveTextContent('ABC123');
+
+		await user.click(screen.getByTestId('modal-submit'));
+		const saved = onSave.mock.calls[0][0];
+		// the application carries the Gmail account; each ref carries just its stage + id (date defaults to today)
+		expect(saved.account).toBe('me@work.com');
+		expect(saved.emails).toEqual([{ messageId: 'ABC123', category: 'interview', date: expect.any(String) }]);
+	});
+
+	it('should require the Gmail account before a tracked email can be attached', async () => {
+		const user = userEvent.setup();
+		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
+		// no account yet → the add controls are disabled and a hint is shown
+		expect(screen.getByTestId('email-draft-add')).toBeDisabled();
+		expect(screen.getByTestId('email-draft-input')).toBeDisabled();
+		expect(screen.getByTestId('email-account-hint')).toBeInTheDocument();
+
+		// entering the account unlocks attaching, and the hint disappears
+		fireEvent.change(screen.getByTestId('field-account'), { target: { value: 'me@work.com' } });
+		expect(screen.queryByTestId('email-account-hint')).toBeNull();
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: 'ABC123' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		expect(screen.getByTestId('email-row')).toHaveTextContent('ABC123');
+	});
+
+	it('should keep Add disabled when the input has no extractable id', () => {
+		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
+		fireEvent.change(screen.getByTestId('field-account'), { target: { value: 'me@work.com' } });
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: 'just some words' } });
+		expect(screen.getByTestId('email-draft-add')).toBeDisabled();   // no id present → can't attach
+		expect(screen.queryByTestId('email-row')).toBeNull();
+	});
+
+	it('should remove a tracked email when its × is clicked', async () => {
+		const user = userEvent.setup();
+		const initial = {
+			id: 'x', company: 'Acme', role: 'SWE',
+			emails: [{ messageId: 'M1', category: 'applied', date: '2026-01-01' }],
+		} as unknown as Partial<ApplicationFormData>;
+		render(<AddModal initial={initial} onSave={vi.fn()} onClose={vi.fn()} />);
+		expect(screen.getByTestId('email-row')).toHaveTextContent('M1');
+		await user.click(screen.getByTestId('email-row-remove'));
+		expect(screen.queryByTestId('email-row')).toBeNull();
 	});
 });

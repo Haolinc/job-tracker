@@ -1,14 +1,15 @@
-import type { Application, Status, InterviewStep } from '../types';
+import type { NewApplication, Status, InterviewStep } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
+import { parseEmails } from './emailRefs';
 
 /** The shape `createApplication` accepts — an application minus its server-assigned fields. */
-export type ImportableApplication = Omit<Application, 'id' | 'created_at' | 'updated_at'>;
+export type ImportableApplication = NewApplication;
 
 /** Thrown when a CSV can't be imported as a whole (e.g. no Company column, or a row missing a company). */
 export class CsvImportError extends Error {}
 
 // The application fields a CSV column can fill. Everything else is server-assigned.
-type Field = 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes' | 'company_domain' | 'external_id';
+type Field = 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes' | 'company_domain' | 'external_id' | 'account' | 'emails';
 
 // Map a NORMALIZED header (see normalizeHeader: lower-cased, underscores/hyphens → spaces) to the
 // field it fills. Keys mirror exportCsv's column headers 1:1 (in normalized form) so a re-imported
@@ -26,6 +27,8 @@ const HEADER_TO_FIELD: Record<string, Field> = {
 	'notes': 'notes',
 	'company domain': 'company_domain',
 	'job id': 'external_id',
+	'gmail account': 'account',
+	'emails': 'emails',
 };
 
 // Accept either the human label ("Applied") or the raw value ("applied"), case-insensitively.
@@ -156,6 +159,9 @@ export function parseApplicationsCsv(text: string): ImportableApplication[] {
 			external_id: cell(row, 'external_id') || null,
 			source: 'csv',
 			gmail_thread_id: null,
+			// Email-link data round-tripped from a prior export (the Gmail account + tracked messages).
+			account: cell(row, 'account') || null,
+			emails: parseEmails(cell(row, 'emails')),
 		};
 	});
 }
