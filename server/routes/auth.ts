@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getAuthUrl, exchangeCode, revokeTokens } from '../services/gmailService';
+import { getAuthUrl, exchangeCode, revokeTokens } from '../services/gmail/oauth';
 
 const router = Router();
 

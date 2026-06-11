@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalReqId, extractJobNumber, tidyRole, parseEmail, extractGeneralCompanyRole, recoverRoleFromBody } from './parser';
+import { canonicalReqId, extractJobNumber } from './parser/reqId';
+import { tidyRole, recoverRoleFromBody } from './parser/roles';
+import { parseEmail } from './parser/templates';
+import { extractGeneralCompanyRole } from './parser/companyRole';
 
 // ── canonicalReqId ────────────────────────────────────────────────────────────
 // Cleans an LLM-supplied requisition id. Rule: a label GLUED to the digits is the company's code prefix

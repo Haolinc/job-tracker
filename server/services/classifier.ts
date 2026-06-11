@@ -1,5 +1,5 @@
 import type { Classification } from '../types';
-import { canonicalReqId } from './parser';
+import { canonicalReqId } from './parser/reqId';
 import ollama from 'ollama';
 
 const systemPrompt = `You are a job application email classifier. Given an email's From header, subject, and body text, determine if it relates to a job application and extract key information.
