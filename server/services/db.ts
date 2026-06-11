@@ -1,7 +1,13 @@
 import mongoose, { Schema } from 'mongoose';
-import type { Application, CreateApplicationData, MarkSyncedData } from '../types';
+import type { Application, CreateApplicationData, MarkSyncedData, EmailRef } from '../types';
 
 // ── Application ────────────────────────────────────────────────────────────
+
+interface EmailRefDoc {
+	messageId: string;
+	category: string;
+	date: string;
+}
 
 interface AppDoc {
 	_id: mongoose.Types.ObjectId;
@@ -24,9 +30,18 @@ interface AppDoc {
 	fast_apply: boolean;
 	source: string;
 	gmail_thread_id: string | null;
+	account: string | null;
+	emails: EmailRefDoc[];
 	created_at: Date;
 	updated_at: Date;
 }
+
+// Embedded subdoc — no own _id, just the three fields needed to link back to the Gmail message.
+const emailRefSchema = new Schema<EmailRefDoc>({
+	messageId: { type: String, required: true },
+	category:  { type: String, required: true },
+	date:      { type: String, required: true },
+}, { _id: false });
 
 const appSchema = new Schema<AppDoc>({
 	company:         { type: String, required: true },
@@ -48,6 +63,8 @@ const appSchema = new Schema<AppDoc>({
 	fast_apply:      { type: Boolean, default: false },
 	source:          { type: String, default: 'manual' },
 	gmail_thread_id: { type: String, default: null },
+	account:         { type: String, default: null },
+	emails:          { type: [emailRefSchema], default: [] },
 }, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
 
 const AppModel = mongoose.model<AppDoc>('Application', appSchema);
@@ -74,6 +91,12 @@ function toApp(doc: AppDoc): Application {
 		fast_apply:      doc.fast_apply ?? false,
 		source:          doc.source as Application['source'],
 		gmail_thread_id: doc.gmail_thread_id,
+		account:         doc.account ?? null,
+		emails:          (doc.emails ?? []).map(e => ({
+			messageId: e.messageId,
+			category:  e.category as EmailRef['category'],
+			date:      e.date,
+		})),
 		created_at:      doc.created_at.toISOString(),
 		updated_at:      doc.updated_at.toISOString(),
 	};
@@ -144,6 +167,17 @@ export const update = async (id: string, data: Record<string, unknown>): Promise
 export const remove = async (id: string): Promise<boolean> => {
 	const doc = await AppModel.findByIdAndDelete(id).lean();
 	return !!doc;
+};
+
+/**
+ * Append a Gmail message reference to an application, deduped by messageId so re-processing the same
+ * email (e.g. after the synced-email log is cleared) never double-records it.
+ */
+export const addEmailRef = async (id: string, ref: EmailRef): Promise<void> => {
+	await AppModel.updateOne(
+		{ _id: id, 'emails.messageId': { $ne: ref.messageId } },
+		{ $push: { emails: ref } },
+	);
 };
 
 /**

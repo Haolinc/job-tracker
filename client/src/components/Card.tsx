@@ -1,5 +1,6 @@
 import type { Application } from '../types';
 import { STEP_LABELS, isUnknownRole, provenanceBadges } from '../constants';
+import EmailLinks from './EmailLinks';
 
 interface Props {
 	app: Application;
@@ -77,6 +78,8 @@ export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 			{app.notes && (
 				<p className="mt-2 text-xs text-gray-400 line-clamp-2">{app.notes}</p>
 			)}
+
+			<EmailLinks emails={app.emails} account={app.account} />
 		</div>
 	);
 }

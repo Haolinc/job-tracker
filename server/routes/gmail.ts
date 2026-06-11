@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { listJobMessageIds, streamJobMessages } from '../services/gmailService';
+import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmailService';
 import { classifyEmail } from '../services/classifier';
 import { parseEmail, extractGeneralCompanyRole, extractJobNumber, recoverRoleFromBody, tidyRole } from '../services/parser';
 import * as db from '../services/db';
@@ -348,6 +348,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		console.log(`[sync] scan window: ${days} days`);
 
 		const allIds   = await listJobMessageIds(req.session.tokens!, days);
+		// The mailbox being synced — stamped on each tracked email so its "open in Gmail" link targets the
+		// correct account (u/<address>) even when it isn't the browser's primary (u/0) account.
+		const accountEmail = await getAccountEmail(req.session.tokens!);
 		const syncedIds = await db.getSyncedMessageIds(allIds);
 		const newIds   = allIds.filter(id => !syncedIds.has(id));
 		const failedIds: string[] = [];   // messages that errored on fetch — not synced, retried next run
@@ -481,6 +484,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			const isFastApply = /^(?:linkedin|indeed)_/.test(classifier_code ?? '');
 			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 
+			// The Gmail message that drove this email's stage — recorded so the user can open the actual
+			// email later. `category` is already narrowed to the four non-'ignored' stages by the guard above.
+			// The inbox it lives in is tracked once at the application level (accountEmail), not per ref.
+			const emailRef = { messageId, category, date: email.lastMessageDate };
+
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
 			if (existing && senderDomain && existing.company_domain === senderDomain && !companiesSameEntity(existing.company, company)) {
@@ -530,6 +538,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// company confirmation (a regular email) still pair with this record by title later, instead of
 				// being split off as a separate record.
 				const fastApplyMark = isFastApply && !existing.fast_apply ? { fast_apply: true } : {};
+				// Backfill the application's Gmail account if it doesn't have one yet (e.g. a record created
+				// before this account was known) — one account per application drives all its email links.
+				const accountBackfill = accountEmail && !existing.account ? { account: accountEmail } : {};
 				const merged = {
 					...newerUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
@@ -539,8 +550,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...domainUpdate,
 					...awaitingClear,
 					...fastApplyMark,
+					...accountBackfill,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
+				await db.addEmailRef(existing.id, emailRef);   // always track the email, even when no field changed
 				updated++;
 			} else {
 				await db.create({
@@ -563,6 +576,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					fast_apply:      isFastApply,
 					source:          'gmail',
 					gmail_thread_id: threadId,
+					account:         accountEmail,   // the inbox these emails live in (one per application)
+					emails:          [emailRef],
 				});
 				added++;
 			}

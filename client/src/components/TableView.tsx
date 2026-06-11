@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import type { Application } from '../types';
 import { STATUS_COLORS, STATUS_LABELS, STEP_LABELS, isUnknownRole, provenanceBadges } from '../constants';
+import EmailLinks from './EmailLinks';
 
 type SortKey = 'company' | 'role' | 'status' | 'date_applied' | 'last_activity';
 type SortDir = 'asc' | 'desc';
@@ -110,6 +111,7 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 											</span>
 										))}
 									</div>
+									<EmailLinks emails={app.emails} account={app.account} />
 								</td>
 								<td className="px-4 py-3 whitespace-nowrap max-w-[200px] truncate">
 									{isUnknownRole(app.role) ? (

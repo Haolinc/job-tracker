@@ -1,12 +1,12 @@
 import axios from 'axios';
-import type { Application, Filters, SyncResult, SyncProgress } from './types';
+import type { Application, NewApplication, Filters, SyncResult, SyncProgress } from './types';
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
 
 export const getApplications = (params?: Filters): Promise<Application[]> =>
 	api.get('/applications', { params }).then(r => r.data as Application[]);
 
-export const createApplication = (data: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> =>
+export const createApplication = (data: NewApplication): Promise<Application> =>
 	api.post('/applications', data).then(r => r.data as Application);
 
 export const updateApplication = (id: string, data: Partial<Application>): Promise<Application> =>

@@ -18,6 +18,15 @@ export type DetectedBy = 'parser' | 'llm';
 export type NoteSource = 'auto' | 'manual';
 export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
 
+// A Gmail message that drove this application to a given stage — stored so the user can open the
+// actual email. `category` is the email's stage; 'ignored' emails are never recorded here. The inbox
+// it lives in is the application-level `account` (one account per application), not stored per ref.
+export interface EmailRef {
+	messageId: string;
+	category: Exclude<Category, 'ignored'>;
+	date: string;            // 'YYYY-MM-DD'
+}
+
 export interface Application {
 	id: string;
 	company: string;
@@ -60,6 +69,11 @@ export interface Application {
 	fast_apply: boolean;
 	source: Source;
 	gmail_thread_id: string | null;
+	// The Gmail account this application's emails live in — drives every email link. Set from the synced
+	// mailbox (or entered manually); null when unknown. One account per application.
+	account: string | null;
+	// Every Gmail message tracked for this application, one per stage-driving email (by category).
+	emails: EmailRef[];
 	created_at: string;
 	updated_at: string;
 }
@@ -102,6 +116,8 @@ export interface CreateApplicationData {
 	fast_apply?: boolean;               // originated from a LinkedIn/Indeed fast-apply email; defaults false
 	source: Source;
 	gmail_thread_id: string | null;
+	account?: string | null;            // default Gmail account for links; defaults to null when omitted
+	emails?: EmailRef[];                // stage-driving Gmail messages; defaults to [] when omitted (manual entries)
 }
 
 export interface MarkSyncedData {

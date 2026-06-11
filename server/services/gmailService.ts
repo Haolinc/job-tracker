@@ -211,6 +211,20 @@ function getGmail(tokens: Credentials): gmail_v1.Gmail {
 	return google.gmail({ version: 'v1', auth: client });
 }
 
+/**
+ * The Gmail address of the connected account. Stored on each tracked email so "open in Gmail" links can
+ * target u/<address> — the right account regardless of its login-order index in the user's browser (a
+ * non-primary mailbox is u/1+, so a hardcoded u/0 would open the wrong account). Null if the lookup fails.
+ */
+export async function getAccountEmail(tokens: Credentials): Promise<string | null> {
+	try {
+		const res = await getGmail(tokens).users.getProfile({ userId: 'me' });
+		return res.data.emailAddress ?? null;
+	} catch {
+		return null;   // non-fatal: links fall back to u/0
+	}
+}
+
 /** Build one EmailResult from a single message using its own headers (each email stands alone). */
 function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 	const headers      = msg.payload?.headers ?? [];
