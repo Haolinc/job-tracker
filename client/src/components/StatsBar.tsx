@@ -15,14 +15,14 @@ export default memo(function StatsBar({ applications }: Props) {
 	const rate = total > 0 ? ((interviewed / total) * 100).toFixed(1) : '0.0';
 
 	const stat = (label: string, value: string | number, color: string) => (
-		<div className="flex flex-col items-center px-4 sm:px-6 py-2 sm:py-3 bg-white rounded-xl shadow-sm border border-gray-100">
+		<div data-testid={`stat-${label.toLowerCase().replace(/\s+/g, '-')}`} className="flex flex-col items-center px-4 sm:px-6 py-2 sm:py-3 bg-white rounded-xl shadow-sm border border-gray-100">
 			<span className={`text-xl sm:text-2xl font-bold ${color}`}>{value}</span>
 			<span className="text-xs text-gray-500 mt-0.5">{label}</span>
 		</div>
 	);
 
 	return (
-		<div className="flex gap-2 sm:gap-3 flex-wrap">
+		<div data-testid="stats-bar" className="flex gap-2 sm:gap-3 flex-wrap">
 			{stat('Total', total, 'text-gray-800')}
 			{stat('Active', active, 'text-blue-600')}
 			{stat('Offers', offers, 'text-green-600')}
