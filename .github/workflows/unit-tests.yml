@@ -1,0 +1,51 @@
+name: Run Unit Tests
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - 'server/**'
+jobs:
+  test-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./client
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: my-app/package-lock.json
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Client Tests
+        run: npx vitest run
+
+  test-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./server
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: my-app/package-lock.json
+
+      - name: Install Dependencies
+        run: npm install
+        
+      - name: Run Server Tests
+        run: npx vitest run
