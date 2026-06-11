@@ -1,5 +1,6 @@
 import type { Application } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
+import { serializeEmails } from './emailRefs';
 
 // RFC-4180 escaping: quote a cell if it contains a comma, quote, or newline; double any inner quotes.
 function csvCell(value: unknown): string {
@@ -22,6 +23,10 @@ const COLUMNS: { header: string; value: (a: Application) => string }[] = [
 	// (employer domain = the company key; req/job id = the within-company posting key).
 	{ header: 'Company Domain',    value: a => a.company_domain ?? '' },
 	{ header: 'Job ID',            value: a => a.external_id ?? '' },
+	// Email-link data: the application's Gmail account and the tracked messages (category|id|date; …),
+	// so the "open in Gmail" links survive an export/import round-trip.
+	{ header: 'Gmail Account',     value: a => a.account ?? '' },
+	{ header: 'Emails',            value: a => serializeEmails(a.emails) },
 ];
 
 /** Build a CSV (with header row) from a list of applications. */
