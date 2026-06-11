@@ -72,7 +72,7 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 	const thProps = { sortKey, sortDir, onSort: handleSort };
 
 	return (
-		<div className="space-y-3">
+		<div data-testid="table-view" className="space-y-3">
 			<div className="rounded-xl border border-gray-200 overflow-x-auto">
 				<table className="w-full text-sm">
 					<thead className="bg-gray-50 border-b border-gray-200">
@@ -94,7 +94,7 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 								</td>
 							</tr>
 						) : pageData.map(app => (
-							<tr key={app.id} className={`group ${highlightIds.has(app.id) ? 'bg-emerald-50 border-l-2 border-emerald-400' : 'hover:bg-gray-50'}`}>
+							<tr key={app.id} data-testid={`table-row-${app.id}`} className={`group ${highlightIds.has(app.id) ? 'bg-emerald-50 border-l-2 border-emerald-400' : 'hover:bg-gray-50'}`}>
 								<td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[260px]">
 									<div className="flex items-center gap-1.5">
 										<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate">
@@ -163,11 +163,13 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 					</span>
 					<div className="flex gap-1">
 						<button
+							data-testid="table-prev"
 							onClick={() => setPage(p => Math.max(0, p - 1))}
 							disabled={effectivePage === 0}
 							className="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
 						>← Prev</button>
 						<button
+							data-testid="table-next"
 							onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
 							disabled={effectivePage === totalPages - 1}
 							className="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"

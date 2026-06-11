@@ -173,10 +173,12 @@ export default function App() {
 					<div className="flex flex-wrap items-center gap-2">
 						<div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium">
 							<button
+								data-testid="view-board"
 								onClick={() => setView('board')}
 								className={`px-3 py-2 ${view === 'board' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
 							>⊞ Board</button>
 							<button
+								data-testid="view-table"
 								onClick={() => setView('table')}
 								className={`px-3 py-2 border-l border-gray-200 ${view === 'table' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
 							>☰ Table</button>
@@ -194,6 +196,7 @@ export default function App() {
 							}}
 						/>
 						<button
+							data-testid="btn-import-csv"
 							onClick={() => fileInputRef.current?.click()}
 							className="px-3 py-2 border border-emerald-200 bg-white text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-100"
 							title="Import applications from a CSV file"
@@ -201,6 +204,7 @@ export default function App() {
 							⤒ Import CSV
 						</button>
 						<button
+							data-testid="btn-export-csv"
 							onClick={() => downloadApplicationsCsv(applications)}
 							disabled={applications.length === 0}
 							className="px-3 py-2 border border-blue-200 bg-white text-blue-600 text-sm font-medium rounded-lg hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -209,6 +213,7 @@ export default function App() {
 							⤓ Export CSV
 						</button>
 						<button
+							data-testid="btn-reset-db"
 							onClick={() => setShowResetConfirm(true)}
 							className="px-3 py-2 border border-red-200 bg-white text-red-500 text-sm font-medium rounded-lg hover:bg-red-50"
 							title="Wipe all applications and sync history"
@@ -216,6 +221,7 @@ export default function App() {
 							⚠ Reset DB
 						</button>
 						<button
+							data-testid="btn-add-application"
 							onClick={() => setModal({})}
 							className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
 						>
@@ -260,7 +266,7 @@ export default function App() {
 
 			{showResetConfirm && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowResetConfirm(false)}>
-					<div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+					<div data-testid="reset-confirm-modal" className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
 						<div className="text-3xl mb-3 text-center">⚠️</div>
 						<h2 className="text-lg font-bold text-gray-900 text-center mb-1">Reset database?</h2>
 						<p className="text-sm text-gray-500 text-center mb-6">
@@ -270,12 +276,14 @@ export default function App() {
 						</p>
 						<div className="flex gap-3">
 							<button
+								data-testid="reset-cancel"
 								onClick={() => setShowResetConfirm(false)}
 								className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50"
 							>
 								Cancel
 							</button>
 							<button
+								data-testid="reset-confirm"
 								onClick={handleReset}
 								disabled={resetting}
 								className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
