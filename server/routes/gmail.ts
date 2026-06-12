@@ -11,8 +11,6 @@ import * as db from '../services/db';
 import { isIgnorableEmail } from '../services/filters';
 import {
 	normalizeCompany,
-	extractCompanyFromSender,
-	extractCompanyFromSenderName,
 	companyDomainFromSender,
 	companiesSameEntity,
 } from '../services/companyIdentity';
@@ -141,23 +139,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
             if (classifier_code === 'indeed_applied') indeedParsed++;
             if (classifier_code === 'general_template') generalParsed++;
 
-			// If the LLM couldn't identify the company, fall back to parsing the sender domain
-			// (e.g. "noreply@walmart.com" → "Walmart").
-			if (!company && category !== 'ignored') {
-				const domainCompany = extractCompanyFromSender(from);
-				if (domainCompany) {
-					console.log(`[sync] company from domain fallback: "${domainCompany}" subject="${subject}"`);
-					company = domainCompany;
-				} else {
-					// Domain is an ATS/generic host. Last resort: the sender's display name with its
-					// HR/ATS suffix stripped ("RTX Workday Notifications" → "RTX").
-					const nameCompany = extractCompanyFromSenderName(from);
-					if (nameCompany) {
-						console.log(`[sync] company from sender-name fallback: "${nameCompany}" subject="${subject}"`);
-						company = nameCompany;
-					}
-				}
-			}
+			// Company comes solely from the parser/LLM. The classifier prompt already reads the sender
+			// domain + display name (including the Workday-subdomain rule), so there's no regex fallback
+			// here — an email the model can't attribute to a company is dropped below, not guessed at.
 
 			// Normalize legal suffixes for consistent dedup.
 			if (company) company = normalizeCompany(company);

@@ -123,10 +123,8 @@ function parseGeneralApplicationPattern(subject: string, from: string, body: str
 // Workday (*@myworkday.com) is intentionally NOT parsed here.
 // Each company customises their Workday email template independently, so there
 // is no reliable platform-level subject or body pattern to match against.
-// The company is still recovered correctly for all Workday emails via the
-// extractCompanyFromSender() domain-fallback in routes/gmail.ts, which reads
-// the branded subdomain (e.g. "tmobile@myworkday.com" → "Tmobile").
-// Category and role extraction is handled by the AI classifier.
+// Company, category, and role for Workday emails are all left to the AI classifier,
+// whose prompt knows the branded-subdomain rule (e.g. "ms@myworkday.com" → "Morgan Stanley").
 
 // ── Dispatcher ──────────────────────────────────────────────────────────────────
 
@@ -150,8 +148,7 @@ const PARSERS = [
  *   • General "Thank you for your interest" templates (~5–10 % of emails)
  *
  * Workday is intentionally excluded — each company customises the template
- * so there is no reliable platform-level pattern. Company is still recovered
- * via the extractCompanyFromSender() subdomain fallback in routes/gmail.ts.
+ * so there is no reliable platform-level pattern; the AI classifier handles those.
  */
 export function parseEmail(subject: string, from: string, body: string): Classification | null {
 	for (const parser of PARSERS) {

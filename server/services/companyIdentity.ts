@@ -1,5 +1,6 @@
-// ── Company identity from an email sender ─────────────────────
-// Extracts the employer (name/domain) and decides whether two company names are the same entity.
+// ── Company identity ─────────────────────
+// Normalizes a company name, extracts the sender's registrable domain (for matching/dedup), and
+// decides whether two company names are the same entity. Pure, no I/O.
 
 // ATS platforms and generic mail providers — never treat their domain as a company name.
 const ATS_DOMAINS = new Set([
@@ -37,70 +38,6 @@ export function normalizeCompany(name: string): string {
 	name = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
 	name = name.replace(LINKEDIN_QUALIFIER_RE, '').trim();
 	return name.replace(COMPANY_SUFFIX_RE, '').trim();
-}
-
-// Generic local-part prefixes that identify the ATS or HR function, not the employer.
-// "globalhr" is RTX's shared HR Workday address — not a company slug.
-const GENERIC_LOCAL = /^(no.?reply|noreply|donotreply|workday|notifications?|info|support|careers|talent|hr|recruiting|jobs?|globalhr)$/i;
-
-/**
- * Last-resort fallback: parse the employer name from the sender domain.
- * e.g. "noreply@walmart.com" → "Walmart", "careers@stripe.com" → "Stripe".
- * Returns null for ATS platforms, generic providers, and unrecognised senders.
- *
- * Special case: Workday branded subdomains use the local part as the company
- * slug (e.g. "cableone@myworkday.com" → "CableONE"). The LLM already knows
- * this rule but fails when the email body contains no company name.
- */
-export function extractCompanyFromSender(from: string): string | null {
-	const rawEmail = from.match(/<([^>]+)>/)?.[1] ?? from.match(/\S+@\S+/)?.[0];
-	if (!rawEmail) return null;
-	const [localPart, domain] = rawEmail.toLowerCase().split('@');
-	if (!domain) return null;
-
-	// Workday branded subdomains: "cableone@myworkday.com" → company slug is "cableone".
-	// Slugs ≤ 2 chars (e.g. "ms" for Morgan Stanley) are abbreviations the fallback
-	// can't meaningfully expand — return null and let the LLM extract from the body.
-	if (domain === 'myworkday.com') {
-		if (!localPart || GENERIC_LOCAL.test(localPart) || localPart.length <= 2) return null;
-		return localPart.charAt(0).toUpperCase() + localPart.slice(1);
-	}
-
-	if (ATS_DOMAINS.has(domain)) return null;
-	// Also check parent domain for subdomained ATS hosts (e.g. "us.greenhouse-mail.io").
-	const labels = domain.split('.');
-	if (labels.length >= 3 && ATS_DOMAINS.has(labels.slice(1).join('.'))) return null;
-
-	// "careers.walmart.com" → "walmart";  "walmart.com" → "walmart"
-	const companySlug = labels.length >= 3 ? labels[labels.length - 2] : labels[0];
-	return companySlug.charAt(0).toUpperCase() + companySlug.slice(1);
-}
-
-// HR/ATS-function words that get appended to a corporate sender's display name. Their presence is the
-// signal that the display name is a COMPANY (not a person), so we only trust the name when one strips off.
-const SENDER_NAME_SUFFIX = /[\s,]*(?:[-–|]\s*)?(?:(?:p&o|people(?:\s*&\s*organization)?)\s+)?(?:workday\s+)?(?:talent acquisition(?:\s+team)?|talent team|career opportunities|careers|recruit(?:ing|ment)(?:\s+team)?|human resources|hiring(?:\s+team)?|notifications?)\s*$/i;
-
-/**
- * Fallback for ATS senders whose body omits the company: recover it from the sender DISPLAY NAME.
- * Only trusted when the name (a) carries an HR/ATS suffix we can strip ("RTX Workday Notifications" →
- * "RTX", "Siemens P&O Talent Acquisition" → "Siemens") or (b) uses the icims " @ " form ("Charles
- * Schwab Corporation @ icims" → "Charles Schwab Corporation"). A plain personal/company name with no
- * such marker is ignored — it's as likely to be a recruiter's name as an employer.
- */
-export function extractCompanyFromSenderName(from: string): string | null {
-	const name = (from.split('<')[0] ?? '').trim().replace(/^["']|["']$/g, '').trim();
-	if (!name) return null;
-
-	// icims form: "<Company> @ icims" — the part after " @ " is the ATS, not the company.
-	const atIdx = name.indexOf(' @ ');
-	if (atIdx > 0) return name.slice(0, atIdx).trim() || null;
-	if (name.includes('@')) return null;   // a raw address slipped through — no usable display name
-
-	// Strip one or more trailing HR/ATS suffix runs ("Siemens P&O Talent Acquisition" → "Siemens").
-	let stripped = name;
-	for (let prev = ''; prev !== stripped; ) { prev = stripped; stripped = stripped.replace(SENDER_NAME_SUFFIX, '').trim(); }
-	if (stripped === name || stripped.length < 2) return null;   // nothing stripped → likely a person, not a company
-	return stripped;
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
