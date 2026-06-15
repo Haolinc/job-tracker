@@ -44,7 +44,7 @@ function cleanGeneralRole(s: string | null | undefined): string | null {
 	// never appear in a real job title ("Talent Acquisition team will be evaluating applications for this").
 	// Case-SENSITIVE on purpose: it targets lowercase prose words, not Title-Cased role words.
 	if (/\b(?:will|would|shall|be|been|being|are|is|was|were|do|does|did|have|has|had|we|us|our|you|your|they|them|their|this|that|these|those|evaluating|reviewing|received|receive|submitted|considering|currently|please|thanks)\b/.test(s)) return null;
-	if (/^United\s+(?:States|Kingdom)\b/i.test(s)) return null;   // a location fragment, not a role (e.g. r3 grabbing "United States (April 2026 Start)" after an en-dash split the title)
+	if (/^United\s+(?:States|Kingdom)\b/i.test(s)) return null;   // a location fragment, not a role (e.g. a recovery pattern grabbing "United States (April 2026 Start)" after an en-dash split the title)
 	return s;
 }
 
@@ -57,9 +57,6 @@ export { cleanGeneralRole };
  * CONFIDENCE by nature — callers only use it to FILL a missing role, never to override one already set.
  */
 export function recoverRoleFromBody(body: string, subject = ''): string | null {
-	// Subject form: "New Application Received [Role]" / "Application Received [for|:] [Role]" — the title
-	// trails the phrase, often with a location tail cleanGeneralRole strips ("… United States (US)").
-	const s1 = subject.match(/\b(?:new application received|application received(?:\s+for)?)\s*:?\s+(.+)$/i);
 	// Subject form: "(We have received your) application for [Role]" — the title follows "application for"
 	// and may carry a trailing "- <req>" (tidyRole strips it): "…application for Software Engineer, Developer Platform Team - 2026-75736".
 	const s2 = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
@@ -67,11 +64,6 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	// ("Job Application: Hao Lin Chen - 70363 Junior Java Developer on 04/03/2026"). The title sits between
 	// the dash-prefixed req number and the " on <date>" tail.
 	const s4 = subject.match(/\bJob Application:.*?[-–]\s*\d+\s+([A-Z][^\n]*?)\s+on\s+\d/i);
-	// Subject form: "... Update for [Role], Req #..." — status emails (BAE, T-Mobile) put the title after
-	// "Update for", terminated by a comma/req-label/end rather than a "position"/"role" keyword, and may
-	// prefix a req id ("Update for REQ347505 SDET Engineer"). "BAE Systems - Application Update for Entry
-	// Level Software Engineer, Req #124432BR" → "Entry Level Software Engineer".
-	const s3 = subject.match(/\b[Uu]pdate for\s+(?:the\s+)?(?:REQ\w*\s+)?([A-Z][^\n]*?)(?=\s*,?\s*(?:[Rr]eq|[Rr]equisition|[Jj]ob)\b|[.!?]|$)/);
 	// "...position|role of [req#] [Role]" — Workday/Oracle sometimes print a req number before the title
 	const r2 = body.match(/\b(?:position|role) of\s+(?:\d{5,}\s+)?([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
 	// "...for|to [the|our] [Role] role|position|opportunity|opening" (skip the wrong "for" in "thank you FOR applying").
@@ -84,22 +76,14 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	const r4 = body.match(/\bour\s+(?:open\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
 	// "...application for the [Role] job …" — Workable confirmations ("application for the QA Automation Engineer job was submitted")
 	const r5 = body.match(/\bapplication for the\s+([A-Z][^.!?\n]*?)\s+(?:job|position|role)\b/);
-	// "...applying to|application for [our] [Role], [req#]" — icims lists the title before a short req id
-	// ("Specialist - Jr. Java Software Engineer, 2026-119847"). [^!?\n] (allows ".") so an abbreviation
-	// period inside the title ("Jr.") doesn't truncate it — the trailing req number bounds the capture.
-	const r6 = body.match(/\b(?:applying to|application for)\s+(?:the\s+|our\s+)?([A-Z][^!?\n]*?),?\s+(?:20\d{2}-)?\d{4,}\b/);
 	// "...application for [Role]," — title terminated by a comma or a clause word, not a "position"/"role"
 	// keyword ("received your application for Quality Assurance Automation Engineer, and we…"). Lower
 	// priority than the keyword-anchored patterns above, so it only fills when they find nothing.
 	const r10 = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
-	// "...applying for: [Role]" — MathWorks ("Thank you for applying for: Software Engineer in Test")
-	const r7 = body.match(/\bapplying for:\s*([A-Z][^.!?\n]*?)(?=\s+(?:Dear|Hi|Hello)\b|[.!?\n]|$)/);
 	// "...application for: [req] [Role]" — colon form with an optional leading req token (CVS Health:
 	// "received your application for: R0859802 Software Development Engineer (Open)"). The colon
 	// distinguishes it from r10's no-colon form; the optional "[A-Z]{0,3}\d…" swallows a leading req id.
 	const r13 = body.match(/\bapplication for:\s+(?:#?[A-Za-z]{0,3}\d[\w./-]*\s+)?([A-Z][^!?\n]*?)(?=[.!?\n]|$)/i);
-	// "[Role] [8-9 digit req number]" — title right before the requisition id ("Software Engineer III - Java 210677860")
-	const r3 = body.match(/\b([A-Z][A-Za-z0-9][A-Za-z0-9 ,/&()[\].+-]{2,68}?)\s+\d{8,9}\b/);
 	// "following job: [Role]" / "following job(s): [Role]" / "following position(s): [Role]" — NBC Universal,
 	// SAP SuccessFactors, Lockheed ATS: "...application to the following job: Software Engineer, Live and
 	// Interactive", "...submitted for the following position(s): Software Engineer Opportunities in NJ 722493BR"
@@ -113,10 +97,6 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	// the anchored patterns above find nothing; cleanGeneralRole rejects prose mis-captures.
 	// Paren-aware capture so a parenthetical req with an inner period ("(46_2026.1)") doesn't truncate the title.
 	const r12 = body.match(/\bthe\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:role|position|opening|opportunity)\b/);
-	// "...interest in the [Role] at|with [Company]" — no position keyword, the title sits directly before
-	// "at <Company>" (Synopsys: "interest in the Validation/Verification Engineer (Computer Science Focus) -
-	// Exton, PA (14923) - 14923 at Synopsys"). Paren-aware; tidyRole strips the trailing location/req tail.
-	const r14 = body.match(/\binterest in the\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:at|with)\s+[A-Z]/);
-	return cleanGeneralRole(s1?.[1]) ?? cleanGeneralRole(s4?.[1]) ?? cleanGeneralRole(s3?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
-		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r8?.[1]) ?? cleanGeneralRole(r11?.[1]) ?? cleanGeneralRole(r13?.[1]) ?? cleanGeneralRole(r6?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(r7?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r3?.[1]) ?? cleanGeneralRole(r14?.[1]) ?? cleanGeneralRole(r12?.[1]);
+	return cleanGeneralRole(s4?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
+		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r8?.[1]) ?? cleanGeneralRole(r11?.[1]) ?? cleanGeneralRole(r13?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r12?.[1]);
 }

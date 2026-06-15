@@ -40,7 +40,7 @@ function cleanGeneralCompany(s: string | null | undefined): string | null {
  *   "...applying for [the] [Role] [position|role] at|with [Company]"
  *   "...your interest in [the] [Role] position at|with [Company]"
  *   "...employment with [Company] in our [Role] position"
- *   "...joining our team at [Company]"
+ *   "...joining [the] [Company] [team]"
  *   "...applying to | application to | apply at [Company]"     (company only)
  *
  * Regex beats the LLM here: it never hallucinates, preserves exact requisition
@@ -58,64 +58,38 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	let role:    string | null = null;
 	let m: RegExpMatchArray | null;
 
-	// 0. "[Company]: Thank you for applying to [the] [Role] job" — Workday system emails whose BODY is an
-	// unrendered stub ("THIS IS A SYSTEM-GENERATED EMAIL"); the subject carries both company and role.
-	m = subject.match(/^(.+?):\s*Thank you for applying to (?:the\s+)?(.+?)\s+job\b/i);
-	if (m) { company = m[1]; role = m[2]; }
-
 	// 1. applying for [the] [role|position of] [Role] [position|role] at|with [Company]
 	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
 	if (m) { role = m[1]; company = m[2]; }
 
-	// 1b. application to [the] [Role] opening|position|role at|with [Company]
+	// 2. application to [the] [Role] opening|position|role at|with [Company]
 	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
 	if (!company) { m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
 
-	// 2. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
+	// 3. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
 	// ("...interest in the Software Engineer (NYC) opportunity at PermitFlow", "...the Engineer,
 	// Product Integration (Paisly) opportunity at JetBlue")
 	if (!company) { m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
 
-	// 3. employment with [Company] in our [Role] position
+	// 4. employment with [Company] in our [Role] position
 	if (!company) { m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i')); if (m) { company = m[1]; role = m[2]; } }
 
-	// 3c. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
+	// 5. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
 	// often holds a comma the sentence-bounded patterns above can't keep ("The New York Times - Software
 	// Engineer, Programming"). Spaces around the dash are required, so hyphenated names ("Coca-Cola") don't split.
 	if (!company) { m = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i); if (m) { company = m[1]; role = m[2]; } }
 
-	// 3d. "Application received by [Company]" (subject) — for emails whose BODY is an unrendered junk
-	// template ("*---*---*"); the subject still names the employer ("Application received by City of Scottsdale").
-	if (!company) { m = text.match(new RegExp(`\\breceived by\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 3b. [Company] has received your application   (company only) — Ashby/greenhouse confirmations
-	// ("Thank You for Applying! Pinecone Has Received Your Application"). Runs BEFORE the "joining"
-	// patterns: the clean subject signal beats a body where HTML-stripping glued words ("joining Pineconeon").
-	if (!company) { m = text.match(new RegExp(`${GEN_CO}\\s+has received your application`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 4. joining our team at [Company]
-	if (!company) { m = text.match(new RegExp(`joining our team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 4c. joining [the] [Company] [team]   (company only) — "interest in joining Luma!", "joining the Deltek team"
+	// 6. joining [the] [Company] [team]   (company only) — "interest in joining Luma!", "joining the Deltek team"
 	if (!company) { m = text.match(new RegExp(`joining (?:the\\s+)?${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
-	// 4b. [a] career [opportunities] at [Company]   (company only) — Workday/Oracle HR confirmations:
+	// 7. [a] career [opportunities] at [Company]   (company only) — Workday/Oracle HR confirmations:
 	// "interested in a career at JPMorganChase". Deterministic so it never depends on the LLM's mood.
 	if (!company) { m = text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
-	// 5. signature sign-off — some emails name the company ONLY in the closing line. Two forms:
-	//   (a) "[Recruiting|Talent Acquisition] Team at [Company]"   ("Best, The Recruiting Team at Precision Neuroscience")
-	//   (b) "[Salutation], [Company] Talent Acquisition|Recruiting" ("Kind Regards, Morgan Stanley Talent Acquisition")
-	// Runs BEFORE the bare "applying to" pattern: a subject like "applying to Software Engineer" (a ROLE,
-	// no company) would otherwise make that pattern grab the role and the structural guard nullify everything,
-	// hiding the real company in the sign-off ("Thank you, PMC Talent Acquisition Team").
-	if (!company) { m = text.match(new RegExp(`(?:Talent Acquisition|Recruiting)\\s+Team at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-	if (!company) { m = text.match(new RegExp(`(?:Regards|Kind Regards|Best Regards|Warm Regards|Sincerely|Best|Warmly|Cheers|Thanks|Thanks again|Thank you|Many thanks|All the best),\\s+(?!(?:The|Talent|Recruiting|Recruitment|Human|People)\\b)${GEN_CO}\\s+(?:Talent Acquisition|Talent Team|Recruiting Team|Recruiting)\\b`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 6. applying to | application to | apply at [Company]   (company only)
+	// 8. applying to | application to | apply at [Company]   (company only)
 	if (!company) { m = text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
 
-	// 7. [your] interest in [Company]   (company only, LAST — broadest) — "interest in Lockheed Martin",
+	// 9. [your] interest in [Company]   (company only, LAST — broadest) — "interest in Lockheed Martin",
 	// "interest in Blue Mountain Quality Resources, LLC and our …". The proper-noun-run trim + the
 	// structural guard below keep this from grabbing a role phrase ("interest in the Software Engineer …").
 	if (!company) { m = text.match(new RegExp(`\\b(?:your |the )?interest in ${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
@@ -131,7 +105,7 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	const escaped = cleanCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	if (new RegExp(`\\b${escaped}\\s+(?:position|role|opening|opportunity)\\b`, 'i').test(body)) return null;
 
-	// A role captured by a primary pattern (0-3, alongside the company) is high-confidence; a role
+	// A role captured by a primary pattern (1-5, alongside the company) is high-confidence; a role
 	// scraped by the body-recovery heuristics is a low-confidence guess. The caller uses this to decide
 	// whether the regex role may override a role the LLM already produced.
 	let cleanRole = cleanGeneralRole(role);
@@ -139,7 +113,7 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	if (!cleanRole) cleanRole = recoverRoleFromBody(body, subject);
 
 	// Structural guard 2: the captured "company" IS the role — e.g. "…your interest in Software
-	// Engineer" names no employer, so pattern 7 grabbed the role as the company. (Guard 1 misses it
+	// Engineer" names no employer, so pattern 9 grabbed the role as the company. (Guard 1 misses it
 	// because the role phrase has no trailing "position/role/…" marker, and it came from the subject,
 	// not the body.) Defer to the LLM, which reads the real company from the body/sender.
 	const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
