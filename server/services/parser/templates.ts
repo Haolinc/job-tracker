@@ -1,89 +1,14 @@
-// ── Template parsers + the parseEmail dispatcher ────────────────────────────
-// Deterministic parsers (LinkedIn, Indeed, general) — classify the ~50-60% of mail matching a known
-// shape with no AI cost.
+// ── General template + the parseEmail dispatcher ────────────────────────────
+// The general (non-platform) acknowledgement/rejection template, plus the dispatcher that runs
+// every deterministic parser in order. Platform-specific extractors live in their own modules
+// (./linkedin, ./indeed) — each owns one fast-apply platform's exact format.
 
 import type { Classification } from '../../types';
 import { extractGeneralCompanyRole } from './companyRole';
+import { parseLinkedIn } from './linkedin';
+import { parseIndeed } from './indeed';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function senderEmail(from: string): string {
-	return (from.match(/<([^>]+)>/)?.[1] ?? from.match(/\S+@\S+/)?.[0] ?? '').toLowerCase();
-}
-
-// ── Template parsers ──────────────────────────────────────────────────────────
-
-/**
- * LinkedIn Easy Apply confirmation.
- * Subject: "[Name], your application was sent to [Company]"
- * From:    jobs-noreply@linkedin.com
- * Body:    "Your application was sent to [Company]\n\n[Role]\n[Company]\n[Location]\n..."
- */
-function parseLinkedInApplied(subject: string, from: string, body: string): Classification | null {
-	if (!senderEmail(from).endsWith('jobs-noreply@linkedin.com')) return null;
-
-	const companyMatch = subject.match(/your application was sent to (.+)$/i);
-	if (!companyMatch) return null;
-
-	const company = companyMatch[1].trim();
-
-	// cleanBody() always collapses whitespace before the body reaches the parser, so the
-	// LinkedIn body arrives as a single line:
-	//   "Your application was sent to [Company] [Role] [Company] [Location] ..."
-	// Extract the role as the text between the first and second occurrence of the company name.
-	const esc  = company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const m    = body.match(new RegExp(`was sent to\\s+${esc}\\s+(.+?)\\s+${esc}`, 'i'));
-	const role = m?.[1]?.trim() ?? null;
-
-	return { category: 'applied', company, role, classifier_code: 'linkedin_applied' };
-}
-
-/**
- * LinkedIn rejection notification.
- * Subject: "Your application to [Role] at [Company]"
- * From:    jobs-noreply@linkedin.com
- * Body:    "Your update from [Company] ..."
- *
- * Uses lastIndexOf(' at ') so company names containing " at " (e.g. "AI at Scale") parse correctly.
- */
-function parseLinkedInRejected(subject: string, from: string, body: string): Classification | null {
-	if (!senderEmail(from).endsWith('jobs-noreply@linkedin.com')) return null;
-	if (!/^your application to /i.test(subject)) return null;
-	if (!/your update from /i.test(body)) return null;
-
-	const rest   = subject.slice('your application to '.length);
-	const lastAt = rest.lastIndexOf(' at ');
-	if (lastAt < 0) return null;
-
-	return {
-		category: 'rejected',
-		role:     rest.slice(0, lastAt).trim(),
-		company:  rest.slice(lastAt + 4).trim(),
-        classifier_code: 'linkedin_rejected'
-	};
-}
-
-/**
- * Indeed Easy Apply confirmation.
- * Subject: "Indeed Application: [Role]"
- * From:    indeedapply@indeed.com
- * Body:    gmailService.buildBody() prepends "Employer: [Company]\n\n" for Indeed emails.
- */
-function parseIndeed(subject: string, from: string, body: string): Classification | null {
-	if (!senderEmail(from).includes('indeedapply@indeed.com')) return null;
-
-	const roleMatch = subject.match(/^Indeed Application:\s*(.+)$/i);
-	if (!roleMatch) return null;
-
-	const company = body.match(/^Employer:\s*(.+)/im)?.[1]?.trim() ?? null;
-
-	// If buildBody() didn't find the employer in the HTML, company is unknown.
-	// indeed.com is in ATS_DOMAINS so the domain fallback won't help either —
-	// fall through to AI rather than silently saving with a null company.
-	if (!company) return null;
-
-	return { category: 'applied', company, role: roleMatch[1].trim(), classifier_code: 'indeed_applied' };
-}
+// ── General template ────────────────────────────────────────────────────────────
 
 // Strong, unambiguous status phrases mined from the real corpus (each ~0% in the
 // opposite class). "if"-conditional sentences are skipped for rejection because
@@ -128,9 +53,10 @@ function parseGeneralApplicationPattern(subject: string, from: string, body: str
 
 // ── Dispatcher ──────────────────────────────────────────────────────────────────
 
+// Each fast-apply platform owns its own extractor module; the general template is the catch-all.
+// To support a new platform, add its parser module and slot it in here before the general one.
 const PARSERS = [
-	parseLinkedInApplied,
-	parseLinkedInRejected,
+	parseLinkedIn,
 	parseIndeed,
 	parseGeneralApplicationPattern,
 ] as const;

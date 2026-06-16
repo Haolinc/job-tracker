@@ -52,14 +52,10 @@ const FOOTER_RE = /please do not reply to this (email|message)|this is an auto(?
  *  7. Truncate at the first footer signal (unsubscribe notices, copyright, social links).
  *  8. Collapse whitespace.
  */
-function cleanBody(raw: string): string {
-	let text = raw;
-
-	// 1. Re-strip if plain-text part contains raw HTML (e.g. Precision Neuroscience).
-	if (/<[a-z][\s\S]*?>/i.test(text)) text = stripHtml(text);
-
-	// 2. HTML entities.
-	text = text
+// HTML entities + Unicode invisible/zero-width characters (email tracking spacers): ZWSP, ZWNJ,
+// ZWJ, LRM, RLM, LSEP, PSEP, SHY, BOM, NBSP. Shared by cleanBody and cleanLinkedInBody.
+function decodeEntities(text: string): string {
+	return text
 		.replace(/&nbsp;/gi,   ' ')
 		.replace(/&amp;/gi,    '&')
 		.replace(/&lt;/gi,     '<')
@@ -71,11 +67,18 @@ function cleanBody(raw: string): string {
 		.replace(/&ldquo;/gi,  '"')
 		.replace(/&hellip;/gi, '...')
 		.replace(/&zwnj;/gi,   '')
-		.replace(/&#\d+;/g,    ' ');
+		.replace(/&#\d+;/g,    ' ')
+		.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
+}
 
-	// 3. Unicode invisible / zero-width characters (email tracking spacers).
-	// Covers: ZWSP, ZWNJ, ZWJ, LRM, RLM, LSEP, PSEP, SHY, BOM, NBSP.
-	text = text.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
+function cleanBody(raw: string): string {
+	let text = raw;
+
+	// 1. Re-strip if plain-text part contains raw HTML (e.g. Precision Neuroscience).
+	if (/<[a-z][\s\S]*?>/i.test(text)) text = stripHtml(text);
+
+	// 2-3. HTML entities + invisible/zero-width characters.
+	text = decodeEntities(text);
 
 	// 4. Artifact prefixes.
 	text = text.replace(/^\s*RTF Template\s*/i, '');  // Oracle/Workday HTML-to-text artifact
@@ -103,6 +106,27 @@ function cleanBody(raw: string): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * LinkedIn "application sent" cleaner — UNLIKE cleanBody, it keeps line breaks, because the LinkedIn
+ * extractor reads the card by position (role / company / location on consecutive lines). It drops the
+ * "similar jobs" recommendations below the card so they can't be mistaken for the applied role, then
+ * strips URLs and divider runs and normalizes each line.
+ */
+function cleanLinkedInBody(raw: string): string {
+	let text = raw;
+	if (/<[a-z][\s\S]*?>/i.test(text)) text = stripHtml(text);   // malformed plain part that's actually HTML
+	text = decodeEntities(text);
+	// Everything from "Now, take these next steps" / "View similar jobs" on is recommendations, not this application.
+	text = text.split(/Now, take these next steps|View similar jobs you may/i)[0];
+	text = text.replace(/https?:\/\/\S+/g, '');                  // "View job:" links
+	text = text.replace(/(?:[*\-=_~+•]\s?){4,}/g, ' ');          // divider runs ("------", glued to the date)
+	return text
+		.split('\n')
+		.map(l => l.replace(/[ \t]+/g, ' ').trim())
+		.filter(l => l && !/^view job:?$/i.test(l))
+		.join('\n');
+}
+
 // Markers of an UNRENDERED email template (ERB `<% %>`, Liquid/Handlebars `{{ }}`/`{% %}`, Rails
 // `I18n.t`). Some senders (e.g. HackerRank) ship the raw template as text/plain while the text/html
 // part is correctly rendered — so a plain part containing these is garbage, not the real content.
@@ -128,24 +152,25 @@ function extractHtmlBody(part: gmail_v1.Schema$MessagePart | undefined): string 
 }
 
 /**
- * Build the body string passed to the classifier.
- *
- * Indeed forwarding emails have no company info in their plain-text part
- * ("Your application has been submitted. Good luck!"). The HTML part contains
- * "The following items were sent to [Company]. Good luck!" — extract that phrase
- * and prepend it so the classifier immediately sees the employer name.
+ * Build the body string passed to the parser/classifier. Most mail is flattened by cleanBody, but
+ * two platforms need special handling:
+ *  • LinkedIn — keep the card's line structure so the LinkedIn extractor can read it by position.
+ *  • Indeed   — the company is only in the HTML part ("...sent to [Company]."), not the plain text,
+ *               so lift it out and prepend "Employer: [Company]" for the Indeed extractor.
  */
 export function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
 	const part = msg.payload ?? undefined;
 
-	if (!from.includes('indeedapply@indeed.com')) {
-		return cleanBody(extractBody(part)).slice(0, BODY_LIMIT);
+	if (from.includes('jobs-noreply@linkedin.com')) {
+		return cleanLinkedInBody(extractBody(part)).slice(0, BODY_LIMIT);
 	}
 
-	// Indeed: company name lives in the HTML part, not plain text.
-	// Prepend "Employer: [Company]" so the classifier sees it immediately.
-	const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
-	const sentTo   = richBody.match(/sent to ([^.]+)\./i);
-	const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
-	return prefix + richBody.slice(0, prefix ? 1000 : 3000);
+	if (from.includes('indeedapply@indeed.com')) {
+		const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
+		const sentTo   = richBody.match(/sent to ([^.]+)\./i);
+		const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
+		return prefix + richBody.slice(0, prefix ? 1000 : 3000);
+	}
+
+	return cleanBody(extractBody(part)).slice(0, BODY_LIMIT);
 }
