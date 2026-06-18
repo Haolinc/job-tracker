@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { errMsg, formatDuration } from './utils';
+import { errMsg, formatDuration, resolveStatus } from './utils';
 
 describe('formatDuration', () => {
 	it.each([
@@ -12,6 +12,26 @@ describe('formatDuration', () => {
 		[500, '1s'],            // rounds to nearest second (0.5s → 1s)
 	])('%d ms -> %s', (ms, expected) => {
 		expect(formatDuration(ms)).toBe(expected);
+	});
+});
+
+describe('resolveStatus — forward-only, terminal-sticky', () => {
+	it('advances forward', () => {
+		expect(resolveStatus('applied', 'interview')).toBe('interview');
+		expect(resolveStatus('applied', 'rejected')).toBe('rejected');
+		expect(resolveStatus('interview', 'offer')).toBe('offer');
+		expect(resolveStatus('interview', 'rejected')).toBe('rejected');
+	});
+
+	it('never rolls back (a lower-stage email keeps the current stage)', () => {
+		expect(resolveStatus('interview', 'applied')).toBe('interview');   // stray "received your application"
+		expect(resolveStatus('applied', 'applied')).toBe('applied');
+	});
+
+	it('terminal states are final', () => {
+		expect(resolveStatus('rejected', 'interview')).toBe('rejected');   // reached_interview tracked separately
+		expect(resolveStatus('rejected', 'applied')).toBe('rejected');
+		expect(resolveStatus('offer', 'rejected')).toBe('offer');          // an offer never becomes a rejection
 	});
 });
 

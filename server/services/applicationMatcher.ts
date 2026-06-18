@@ -73,26 +73,32 @@ export async function findExisting(company: string, role: string | null, externa
 	// also carry the role an earlier role-less confirmation lacked and upgrade it.
 	const incomingHasRole = !!role && role !== 'Unknown Role';
 	if (incomingHasRole) {
-		// Exact title = same posting. But a CONFIRMATION ("applied") only merges by title when one side is a
-		// LinkedIn/Indeed FAST-APPLY: that's the job-board email pairing with the company's own confirmation.
-		// Two REGULAR confirmations with the same title are DISTINCT applications (a shared req number, handled
-		// above, is the only thing that merges them) — so applying to two like-named postings directly stays
-		// as two records. A STATUS update (rejection/interview/offer) always matches its application by title.
-		// EXCEPTION: an AWAITING exact-title record is a status email (e.g. a rejection processed first, since
-		// the sync runs newest-first) explicitly waiting for its own confirmation — that confirmation always
-		// claims it, fast-apply or not, so an application and its rejection don't end up as two records.
-		const exact = matches.find(m => normRole(m.role) === normRole(role));
-		if (exact && (!isConfirmation || isFastApply || exact.fast_apply || exact.awaiting_application)) return exact;
+		// Same title = same posting.
+		const sameRole = matches.filter(m => normRole(m.role) === normRole(role));
+		if (isConfirmation) {
+			const exact = sameRole[0];  //TODO: why is role[0]?
+			// Pair a fast-apply notice with the company's own confirmation of the SAME application — but not
+			// with an EARLIER application it postdates (a later fast-apply is a re-application → new cycle).
+			if (exact && (isFastApply || exact.fast_apply) && (!exact.date_applied || date <= exact.date_applied)) return exact;
+			// Claim a same-title record an earlier (newer-processed) status email left awaiting — unless this
+			// confirmation postdates it, in which case it's a new application, not the one that was waiting.
+			const awaiting = sameRole.find(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
+			if (awaiting) return awaiting;
+		} else {
+			// A status update joins its same-title application — one that predates it, or a still-awaiting record
+			// (placeholder date). Duplicate notices (e.g. two rejection emails for one posting) collapse here;
+			// a genuine re-application splits via the confirmation path. Status itself is resolved on the route.
+			const candidates = sameRole.filter(m => !m.date_applied || m.date_applied <= date || m.awaiting_application);
+			if (candidates.length) return candidates.reduce((a, b) => (b.date_applied ?? '') > (a.date_applied ?? '') ? b : a);
+		}
+        // When same company but no role in the application
 		const roleless = matches.filter(m => !m.role || m.role === 'Unknown Role');
-		// A STATUS update (interview/rejected/…) fills in the role on a lone still-roleless record.
-		if (!isConfirmation && roleless.length === 1) return roleless[0];
-		// A CONFIRMATION normally stays separate (so distinct postings don't collapse) — but it DOES claim
-		// a roleless record that an earlier status update left AWAITING its application. That record is this
-		// posting's other half: the status email (e.g. a rejection) arrived and created the record before
-		// its confirmation was processed (the sync runs newest-first, so a later rejection lands before its
-		// own older confirmation). Claiming it backfills the role + application date and clears the wait,
-		// instead of spawning a second record. The date guard keeps a confirmation that POSTDATES the
-		// awaiting record's activity from grabbing an unrelated rejection.
+		// A STATUS update names the role on a lone still-roleless record — but only one that PREDATES it. A
+		// LATER untitled application is a different posting, so an older rejection must not rename it.
+		if (!isConfirmation && roleless.length === 1 && (!roleless[0].date_applied || roleless[0].date_applied <= date)) return roleless[0];
+		// A CONFIRMATION otherwise stays separate, but claims a roleless record an earlier status email left
+		// awaiting (its other half) — backfilling role/date instead of spawning a duplicate. Date-guarded so a
+		// confirmation that postdates the awaiting record doesn't grab an unrelated rejection.
 		if (isConfirmation) {
 			const awaiting = roleless.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
 			if (awaiting.length) return oldest(awaiting);
@@ -101,26 +107,17 @@ export async function findExisting(company: string, role: string | null, externa
 	}
 	// Incoming email has NO role.
 	if (isConfirmation) {
-		// A role-less confirmation first backfills an "awaiting" record: a status update that arrived before
-		// its (older, out-of-window) confirmation. Its role came from that update; this confirmation just
-		// supplies the application date and clears the flag.
-		// DATE GUARD: only backfill a record whose status update is NOT older than this application — an
-		// application that POSTDATES a rejection is a NEW application to the company, not the confirmation
-		// that rejection was waiting for, so it must keep its own record.
+		// Backfill the oldest predating awaiting record (its missing confirmation); else fold into the oldest
+		// predating ROLED application (the company's own confirmation of it). Both date-guarded — a confirmation
+		// that postdates the existing record is a new application; with no match it stays a fresh record.
 		const awaiting = matches.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
 		if (awaiting.length) return oldest(awaiting);
-		// No awaiting record to claim. If a ROLED application to this company already exists, this title-less
-		// email is the company's own confirmation of one of them (the company-side of a LinkedIn/Indeed
-		// fast-apply, or the confirmation paired with a rejection that already created the record) — fold it
-		// in to backfill the application date/domain instead of spawning a blank "Unknown Role" duplicate.
-		// Only ROLED records are eligible, so several genuinely title-less applications to one company
-		// (e.g. multiple "Thanks for applying to Google" with no role anywhere) still stay separate. Same
-		// DATE GUARD as above: a title-less confirmation that POSTDATES the existing application is a NEW
-		// application to the company, not that one's confirmation, so it keeps its own record.
 		const roled = matches.filter(m => m.role && m.role !== 'Unknown Role' && (!m.date_applied || date <= m.date_applied));
 		if (roled.length) return oldest(roled);
 		return undefined;
 	}
-	// A role-less status update attaches to the company's original application (oldest).
-	return oldest(matches);
+	// A role-less status update attaches to the company's oldest application that PREDATES it — never a
+	// LATER one (that's a different posting). With none predating, it waits for its own confirmation.
+	const predating = matches.filter(m => !m.date_applied || m.date_applied <= date || m.awaiting_application);
+	return predating.length ? oldest(predating) : undefined;
 }

@@ -15,7 +15,7 @@ import {
 	companiesSameEntity,
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
-import { errMsg, formatDuration } from '../utils';
+import { errMsg, formatDuration, resolveStatus } from '../utils';
 
 const router = Router();
 
@@ -190,10 +190,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			if (existing) {
-				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
-				// decided by the email's precise internalDate, not the day-string — so same-day emails order
-				// correctly and processing order never matters. ts 0 means "no recorded activity yet", so any
-				// email is treated as newer.
+				// Status moves FORWARD only (resolveStatus) — a later email never rolls it back. Activity fields
+				// (last_activity, auto note, detected_by) track the NEWEST email by precise internalDate, and
+				// date_applied the EARLIEST. ts 0 means "no recorded activity yet", so any email counts as newer.
 				const isNewer   = email.internalDate >= existing.last_activity_ts;
 				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
 				// Upgrade "Unknown Role" when this email provides a specific role
@@ -201,11 +200,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				const upgradedRole = existing.role === 'Unknown Role' && role ? role : null;
 				const roleUpgrade = upgradedRole ? { role: upgradedRole } : {};
 				const effectiveRole = upgradedRole ?? existing.role;
-				// The newest email owns status, last_activity, and the auto note (a 'manual' note is
-				// never overwritten).
-				const newerUpdate = isNewer
+				const resolved = resolveStatus(existing.status, category);
+				const statusUpdate = resolved !== existing.status ? { status: resolved } : {};
+				// The newest email owns last_activity and the auto note (a 'manual' note is never overwritten).
+				const activityUpdate = isNewer
 					? {
-						status: category,
 						last_activity: email.lastMessageDate,
 						last_activity_ts: email.internalDate,
 						detected_by: detectedBy,   // record how the newest (status-driving) email was classified
@@ -236,7 +235,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// before this account was known) — one account per application drives all its email links.
 				const accountBackfill = accountEmail && !existing.account ? { account: accountEmail } : {};
 				const merged = {
-					...newerUpdate,
+					...statusUpdate,
+					...activityUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...roleUpgrade,
 					...reachedUpdate,
