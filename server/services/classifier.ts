@@ -8,6 +8,7 @@ Return ONLY valid JSON in this exact shape:
 {
   "category": "applied" | "interview" | "offer" | "rejected" | "ignored",
   "company": "Company name or null",
+  "role_source": "The verbatim snippet of email text the role is taken from, copied exactly, or null if no role is stated. Fill this BEFORE deciding role.",
   "role": "Job title or null",
   "req_id": "ATS requisition/job number kept exactly as written (e.g. 2026-0013799, 722493BR), or null"
 }
@@ -120,21 +121,26 @@ because the same employer's other emails use that same working name.
    SmartRecruiters, Jobvite, Jazz, Breezy) as the company — they are the hiring software,
    not the employer. Return null if only the ATS domain is available.
 
-Role extraction tips:
-- Look for job titles in the subject or body (e.g. "Application for Software Engineer", "Application Success: Space Force - Software Engineer")
-- Keep the title CLEAN: do NOT append reference/requisition numbers, job IDs, or location tails — the
-  requisition number is tracked separately. "Java Developer (reference number: 779128)" → "Java Developer".
-- LinkedIn subjects like "Your application to [Role] at [Company]" → role is [Role], company is [Company]
-- A generic "Thank you for applying" with no title → return null (caller will store "Unknown Role")
-- Do not invent a role; only return what is explicitly stated.
-- Strip location/workplace modifiers from the end of role titles only when they are clearly
-  geographic (a recognisable city, state, or country name follows the modifier):
+Role extraction — PRIORITY ORDER (read top to bottom, stop at the first that yields a title). READ THE
+BODY for the title even when the SUBJECT is generic ("Your application has been received!", "Thank you
+for applying") — the role is very often stated only in the body:
+  (A) An explicit application/role phrase in the SUBJECT or BODY  ← highest priority, most reliable
+      "application for [Role]", "your application to [Role]", "applied for/to [Role]",
+      "application to be a/an [Role]" (e.g. "...your application to be a [Role] at [Company]"),
+      "Application received for: [Role]", "interest in the [Role] position/role"
+  (B) A title-cased job title sitting immediately before "position", "role", or "opening" in the body
+  (C) The title in a LinkedIn / assessment subject ("Your application to [Role] at [Company]" → [Role])
+  Else → null (the caller will store "Unknown Role").
+EXTRACT THE TITLE EVEN WHEN IT IS UNFAMILIAR or company-specific (e.g. an unusual internal title) — if the
+email states it, it IS the role, and copying it is NOT inventing. Do NOT return the COMPANY name as the
+role: the company follows "applying/considering/interest in", the role is the title near "position"/"role".
+- Keep the title CLEAN: no reference/requisition numbers, job IDs, or location tails — the requisition
+  number is tracked separately. "Java Developer (reference number: 779128)" → "Java Developer".
+- Strip a trailing geographic work-mode tail only when a city/state/country follows the modifier:
     "Software Engineer Onsite Great River, NY"  → "Software Engineer"
-    "Software Engineer - Remote Austin, TX"     → "Software Engineer"
     "Data Analyst Hybrid Chicago"               → "Data Analyst"
-  Do NOT strip if what follows is a number (requisition IDs look like "Remote 376141" — keep it)
-  or a non-geographic word ("Evergreen" is a posting type, not a city — keep it).
-  When in doubt, keep the original text.
+  Do NOT strip if a number ("Remote 376141") or a non-geographic word ("Evergreen", a posting type)
+  follows. When in doubt, keep the original text.
 
 Requisition / job number (the "req_id" field):
 - Extract the posting's requisition/job number when the email shows one — either EXPLICITLY LABELLED
