@@ -129,6 +129,22 @@ describe('findExisting', () => {
 		setExisting([app({ id: 'C', role: 'Engineer', status: 'rejected', date_applied: '2026-02-18', awaiting_application: true })]);
 		expect(await findExisting('Acme', 'Engineer', null, null, false, false, '2026-02-25')).toMatchObject({ id: 'C' });
 	});
+
+	it('a status update merges into a lone title-drift variant of the same posting', async () => {
+		// the rejection's role is a shorter variant of the application's title — same posting (Palantir).
+		const applied = app({ id: 'P', role: 'Full Stack Software Engineer - Application Development', status: 'applied', date_applied: '2026-02-16' });
+		setExisting([applied]);
+		expect(await findExisting('Acme', 'Full Stack Software Engineer', null, null, false, false, '2026-02-18')).toMatchObject({ id: 'P' });
+	});
+
+	it('a bare-title status does NOT merge when several postings could contain it', async () => {
+		// two distinct "Software Engineer N" postings — a bare "Software Engineer" is ambiguous → no merge.
+		setExisting([
+			app({ role: 'Software Engineer 1 (React)',   status: 'applied', date_applied: '2026-02-16' }),
+			app({ role: 'Software Engineer 2 (Backend)', status: 'applied', date_applied: '2026-02-16' }),
+		]);
+		expect(await findExisting('Acme', 'Software Engineer', null, null, false, false, '2026-02-18')).toBeUndefined();
+	});
 });
 
 // ── Full Palantir sequence (findExisting + the route's create/update, every order) ────────────────

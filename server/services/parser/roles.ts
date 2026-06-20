@@ -9,13 +9,15 @@
 export function tidyRole(s: string): string {
 	s = s.trim();
 	// LEADING requisition token the ATS/AI sometimes prepends to the title ("2026-71968 Space Force -
-	// Software Engineer", "R232753 Platform Engineer"). Req-shaped = ≥5 digits with an optional short letter
-	// prefix and internal hyphens. The ≥5-digit floor keeps a real year-prefixed title ("2026 Emerging
-	// Talent Software Engineers") and levels ("3D Designer") intact.
-	const lead = s.match(/^#?[A-Za-z]{0,4}[0-9][0-9A-Za-z-]*\s+(?=\S)/);
+	// Software Engineer", "R232753 Platform Engineer", "R-78284 Software Engineer I"). Req-shaped = ≥5 digits
+	// with an optional short letter prefix and an optional separator before the digits. The ≥5-digit floor
+	// keeps a real year-prefixed title ("2026 Emerging Talent Software Engineers") and levels ("3D Designer").
+	const lead = s.match(/^#?[A-Za-z]{0,4}[-_]?[0-9][0-9A-Za-z-]*\s+(?=\S)/);
 	if (lead && (lead[0].match(/[0-9]/g)?.length ?? 0) >= 5) s = s.slice(lead[0].length).trim();
-	// Brace-wrapped id token anywhere ("Associate {TS9118550}" → "Associate").
+	// Brace- or bracket-wrapped id token anywhere ("Associate {TS9118550}" → "Associate",
+	// "Development Engineer in Test [208728]" → "…Test"). Bracket form requires a digit so "[Remote]" survives.
 	s = s.replace(/\s*\{[^}]*\}\s*/g, ' ').trim();
+	s = s.replace(/\s*\[\s*#?[A-Za-z]{0,5}[-_: ]?\d[\dA-Za-z._\-/ ]*\]\s*/g, ' ').trim();
 	s = s.replace(/\s*\(\s*(?:ref(?:erence)?|requisition|req|job|id|no)\b[^)]*\)\s*$/i, '').trim();   // "(reference number: 771221)", "(Req ID: …)", "(ID: 3208334)"
 	s = s.replace(/\s*\(\s*#?[A-Za-z]{0,5}[-_: ]?\d[\dA-Za-z._\-/ ]*\)\s*$/, '').trim();               // pure-ID parenthetical "(500544)", "(124432BR)", "(2026-75736)"
 	// trailing DASH-separated requisition id ("… Developer Platform Team - 2026-75736", "… - R28486").

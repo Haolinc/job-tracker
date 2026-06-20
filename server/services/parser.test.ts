@@ -77,6 +77,9 @@ describe('tidyRole', () => {
 		['Software Engineer I – 31143106', 'Software Engineer I'],
 		['Java Developer (reference number: 779128)', 'Java Developer'],   // trailing ref parenthetical
 		['Software Engineer Onsite Great River, NY', 'Software Engineer'], // work-mode + location tail
+		['R-78284 Software Engineer I', 'Software Engineer I'],            // hyphenated leading req
+		['Development Engineer in Test [208728]', 'Development Engineer in Test'],   // bracket-wrapped id
+		['QA Engineer [Remote]', 'QA Engineer [Remote]'],                 // bracket without a digit kept
 		// regressions — must be left intact:
 		['2026 Emerging Talent Software Engineers - Full time', '2026 Emerging Talent Software Engineers - Full time'],
 		['3D Designer', '3D Designer'],

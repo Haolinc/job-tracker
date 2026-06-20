@@ -11,6 +11,24 @@ import type { Application } from '../types';
 // and "Software Engineer 2 (Backend)" do NOT — they're distinct postings.
 const normRole = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Records from `candidates` that are the SAME job posting as `role`: first an exact normalized-title
+// match; failing that — and only when there is exactly ONE — a title-drift variant whose normalized title
+// contains or is contained by this one ("Full Stack Software Engineer" ↔ "Full Stack Software Engineer -
+// Application Development"). The exactly-one guard keeps a bare "Software Engineer" from collapsing into
+// one of several "Software Engineer N" postings.
+function findPostingMatches(role: string | null, candidates: Application[]): Application[] {
+	const targetTitle = normRole(role);
+	if (!targetTitle) return [];
+	const exactMatches = candidates.filter(c => normRole(c.role) === targetTitle);
+	if (exactMatches.length) return exactMatches;
+	const variantMatches = candidates.filter(c => {
+		const candidateTitle = normRole(c.role);
+		return !!candidateTitle && candidateTitle !== targetTitle
+			&& (candidateTitle.includes(targetTitle) || targetTitle.includes(candidateTitle));
+	});
+	return variantMatches.length === 1 ? variantMatches : [];
+}
+
 /** The original application for a company: earliest date_applied, id as tiebreak. */
 function oldest(apps: Application[]): Application {
 	return apps.reduce((a, b) => {
@@ -73,22 +91,22 @@ export async function findExisting(company: string, role: string | null, externa
 	// also carry the role an earlier role-less confirmation lacked and upgrade it.
 	const incomingHasRole = !!role && role !== 'Unknown Role';
 	if (incomingHasRole) {
-		// Same title = same posting.
-		const sameRole = matches.filter(m => normRole(m.role) === normRole(role));
+		// Same posting = exact title, or a lone title-drift variant (see findPostingMatches).
+		const postingMatches = findPostingMatches(role, matches);
 		if (isConfirmation) {
-			const exact = sameRole[0];  //TODO: why is role[0]?
+			const exact = postingMatches[0];  //TODO: why is role[0]?
 			// Pair a fast-apply notice with the company's own confirmation of the SAME application — but not
 			// with an EARLIER application it postdates (a later fast-apply is a re-application → new cycle).
 			if (exact && (isFastApply || exact.fast_apply) && (!exact.date_applied || date <= exact.date_applied)) return exact;
 			// Claim a same-title record an earlier (newer-processed) status email left awaiting — unless this
 			// confirmation postdates it, in which case it's a new application, not the one that was waiting.
-			const awaiting = sameRole.find(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
+			const awaiting = postingMatches.find(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
 			if (awaiting) return awaiting;
 		} else {
 			// A status update joins its same-title application — one that predates it, or a still-awaiting record
 			// (placeholder date). Duplicate notices (e.g. two rejection emails for one posting) collapse here;
 			// a genuine re-application splits via the confirmation path. Status itself is resolved on the route.
-			const candidates = sameRole.filter(m => !m.date_applied || m.date_applied <= date || m.awaiting_application);
+			const candidates = postingMatches.filter(m => !m.date_applied || m.date_applied <= date || m.awaiting_application);
 			if (candidates.length) return candidates.reduce((a, b) => (b.date_applied ?? '') > (a.date_applied ?? '') ? b : a);
 		}
         // When same company but no role in the application
