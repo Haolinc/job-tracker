@@ -59,46 +59,36 @@ export { cleanGeneralRole };
  * CONFIDENCE by nature — callers only use it to FILL a missing role, never to override one already set.
  */
 export function recoverRoleFromBody(body: string, subject = ''): string | null {
-	// Subject form: "(We have received your) application for [Role]" — the title follows "application for"
-	// and may carry a trailing "- <req>" (tidyRole strips it): "…application for Software Engineer, Developer Platform Team - 2026-75736".
-	const s2 = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
-	// Subject form: "Job Application: [Name] - [req] [Role] on [date]" — iCIMS application receipts
-	// ("Job Application: Hao Lin Chen - 70363 Junior Java Developer on 04/03/2026"). The title sits between
-	// the dash-prefixed req number and the " on <date>" tail.
-	const s4 = subject.match(/\bJob Application:.*?[-–]\s*\d+\s+([A-Z][^\n]*?)\s+on\s+\d/i);
-	// "...position|role of [req#] [Role]" — Workday/Oracle sometimes print a req number before the title
-	const r2 = body.match(/\b(?:position|role) of\s+(?:\d{5,}\s+)?([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
-	// "...for|to [the|our] [Role] role|position|opportunity|opening" (skip the wrong "for" in "thank you FOR applying").
-	// The optional "(…)" lets a leading qualifier through ("…to the (Entry level) Full Stack Software Engineer … position").
-	const r1 = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opportunity|opening)\b/);
-	// "...in|for the [Role] role|position|opportunity" — "interest in the Associate, Software Engineer position"
-	// (r1's for/to anchor sits too far left), "interest in the Software Engineer (NYC) opportunity"
-	const r9 = body.match(/\b(?:in|for)\s+the\s+((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opening|opportunity)\b/);
-	// "...our [open] [Role] role|position|opening" — the "interest in our … role" phrasing r1's for/to anchor misses
-	const r4 = body.match(/\bour\s+(?:open\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
-	// "...application for the [Role] job …" — Workable confirmations ("application for the QA Automation Engineer job was submitted")
-	const r5 = body.match(/\bapplication for the\s+([A-Z][^.!?\n]*?)\s+(?:job|position|role)\b/);
-	// "...application for [Role]," — title terminated by a comma or a clause word, not a "position"/"role"
-	// keyword ("received your application for Quality Assurance Automation Engineer, and we…"). Lower
-	// priority than the keyword-anchored patterns above, so it only fills when they find nothing.
-	const r10 = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
-	// "...application for: [req] [Role]" — colon form with an optional leading req token (CVS Health:
-	// "received your application for: R0859802 Software Development Engineer (Open)"). The colon
-	// distinguishes it from r10's no-colon form; the optional "[A-Z]{0,3}\d…" swallows a leading req id.
-	const r13 = body.match(/\bapplication for:\s+(?:#?[A-Za-z]{0,3}\d[\w./-]*\s+)?([A-Z][^!?\n]*?)(?=[.!?\n]|$)/i);
-	// "following job: [Role]" / "following job(s): [Role]" / "following position(s): [Role]" — NBC Universal,
-	// SAP SuccessFactors, Lockheed ATS: "...application to the following job: Software Engineer, Live and
-	// Interactive", "...submitted for the following position(s): Software Engineer Opportunities in NJ 722493BR"
-	const r8 = body.match(/\bfollowing\s+(?:job|position)(?:\(s\)|s)?\s*:?\s+([A-Z][^.!?\n]+?)(?=[.!?\n]|$)/i);
-	// "...joining us|the team as [a] [Role]" — Talkspace ("excited that you're interested in joining us as a
-	// QA Automation Engineer (AI Systems & Web Apps)")
-	const r11 = body.match(/\bjoining\s+(?:us|the\s+team)\s+as\s+(?:an?\s+)?([A-Z][^.!?\n]*?)(?=[.!?\n]|$)/i);
-	// "...the [Role] role|position has|since|is" — rejection/confirmation prose with no for/to/in anchor
-	// ("Unfortunately, the Senior Software Engineer I, Data Enablement role has since been filled", "...and
-	// the QA Automation Engineer (46_2026.1) position"). LOWEST priority — broadest, so it only fills when
-	// the anchored patterns above find nothing; cleanGeneralRole rejects prose mis-captures.
-	// Paren-aware capture so a parenthetical req with an inner period ("(46_2026.1)") doesn't truncate the title.
-	const r12 = body.match(/\bthe\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:role|position|opening|opportunity)\b/);
-	return cleanGeneralRole(s4?.[1]) ?? cleanGeneralRole(r2?.[1]) ?? cleanGeneralRole(r1?.[1]) ?? cleanGeneralRole(r9?.[1]) ?? cleanGeneralRole(r4?.[1])
-		?? cleanGeneralRole(r5?.[1]) ?? cleanGeneralRole(r8?.[1]) ?? cleanGeneralRole(r11?.[1]) ?? cleanGeneralRole(r13?.[1]) ?? cleanGeneralRole(r10?.[1]) ?? cleanGeneralRole(s2?.[1]) ?? cleanGeneralRole(r12?.[1]);
+	// Declared in PRIORITY order (first non-null wins, via the return chain below).
+	// Subject "Job Application: [Name] - [req] [Role] on [date]" — iCIMS receipts; title sits between the
+	// dash-prefixed req and the " on <date>" tail.
+	const subjJobApplication = subject.match(/\bJob Application:.*?[-–]\s*\d+\s+([A-Z][^\n]*?)\s+on\s+\d/i);
+	// "position|role of [req#] [Role]" — Workday/Oracle may print a req before the title.
+	const positionOfRole = body.match(/\b(?:position|role) of\s+(?:\d{5,}\s+)?([A-Z][^.!?\n]*?)(?=[.!?,]|\s+(?:has|have|is|was|at|with|on)\b|$)/);
+	// "for|to [the|our] [Role] role|position|opportunity|opening" — the optional "(…)" passes a leading
+	// qualifier ("…to the (Entry level) Full Stack Software Engineer … position").
+	const forTheRole = body.match(/\b(?:for|to|exploring)\s+(?:the\s+|our\s+|your\s+|a\s+)?((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opportunity|opening)\b/);
+	// "in|for the [Role] role|position|opportunity" — "interest in the Associate, Software Engineer position".
+	const inTheRole = body.match(/\b(?:in|for)\s+the\s+((?:\([^)]*\)\s*)?[A-Z][^.!?\n]*?)\s+(?:role|position|opening|opportunity)\b/);
+	// "our [open] [Role] role|position|opening".
+	const ourRole = body.match(/\bour\s+(?:open\s+)?([A-Z][^.!?\n]*?)\s+(?:role|position|opening)\b/);
+	// "application for the [Role] job" — Workable ("application for the QA Automation Engineer job was submitted").
+	const applicationForTheJob = body.match(/\bapplication for the\s+([A-Z][^.!?\n]*?)\s+(?:job|position|role)\b/);
+	// "following job|position(s): [Role]" — NBC Universal, SAP SuccessFactors, Lockheed ATS.
+	const followingJob = body.match(/\bfollowing\s+(?:job|position)(?:\(s\)|s)?\s*:?\s+([A-Z][^.!?\n]+?)(?=[.!?\n]|$)/i);
+	// "joining us|the team as [a] [Role]" — Talkspace.
+	const joiningAs = body.match(/\bjoining\s+(?:us|the\s+team)\s+as\s+(?:an?\s+)?([A-Z][^.!?\n]*?)(?=[.!?\n]|$)/i);
+	// "application for: [req] [Role]" — CVS Health colon form; the optional token swallows a leading req id.
+	const applicationForColon = body.match(/\bapplication for:\s+(?:#?[A-Za-z]{0,3}\d[\w./-]*\s+)?([A-Z][^!?\n]*?)(?=[.!?\n]|$)/i);
+	// "application for [Role]," — no "position"/"role" keyword; title terminated by a comma or clause word.
+	const applicationForClause = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
+	// Subject "application for [Role]" — may carry a trailing "- <req>" (tidyRole strips it).
+	const subjApplicationFor = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
+	// "the [Role] role|position has|since|is" — anchorless rejection/confirmation prose; LOWEST priority
+	// (broadest). Paren-aware so a parenthetical req with an inner period ("(46_2026.1)") doesn't truncate.
+	const theRolePhrase = body.match(/\bthe\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:role|position|opening|opportunity)\b/);
+	return cleanGeneralRole(subjJobApplication?.[1]) ?? cleanGeneralRole(positionOfRole?.[1]) ?? cleanGeneralRole(forTheRole?.[1])
+		?? cleanGeneralRole(inTheRole?.[1]) ?? cleanGeneralRole(ourRole?.[1]) ?? cleanGeneralRole(applicationForTheJob?.[1])
+		?? cleanGeneralRole(followingJob?.[1]) ?? cleanGeneralRole(joiningAs?.[1]) ?? cleanGeneralRole(applicationForColon?.[1])
+		?? cleanGeneralRole(applicationForClause?.[1]) ?? cleanGeneralRole(subjApplicationFor?.[1]) ?? cleanGeneralRole(theRolePhrase?.[1]);
 }
