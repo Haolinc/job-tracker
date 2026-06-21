@@ -47,6 +47,13 @@ describe('findExisting', () => {
 		expect(await findExisting('Acme', 'Engineer', null, null, true, true, '2026-02-16')).toMatchObject({ id: existing.id });
 	});
 
+	it('a fast-apply confirmation with several same-title records pairs with the OLDEST (deterministic, not db order)', async () => {
+		const newer = app({ id: 'NEW', role: 'Engineer', date_applied: '2026-03-01' });
+		const older = app({ id: 'OLD', role: 'Engineer', date_applied: '2026-02-16' });
+		setExisting([newer, older]);   // db returns the newer record first; the pick must not depend on that
+		expect(await findExisting('Acme', 'Engineer', null, null, true, true, '2026-02-16')).toMatchObject({ id: 'OLD' });
+	});
+
 	it('a rejection attaches to a same-title application that PREDATES it', async () => {
 		const applied = app({ role: 'Engineer', status: 'applied', date_applied: '2026-02-16' });
 		setExisting([applied]);
