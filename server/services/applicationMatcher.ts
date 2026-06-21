@@ -19,10 +19,10 @@ const normRole = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9
 function findPostingMatches(role: string | null, candidates: Application[]): Application[] {
 	const targetTitle = normRole(role);
 	if (!targetTitle) return [];
-	const exactMatches = candidates.filter(c => normRole(c.role) === targetTitle);
+	const exactMatches = candidates.filter(candidate => normRole(candidate.role) === targetTitle);
 	if (exactMatches.length) return exactMatches;
-	const variantMatches = candidates.filter(c => {
-		const candidateTitle = normRole(c.role);
+	const variantMatches = candidates.filter(candidate => {
+		const candidateTitle = normRole(candidate.role);
 		return !!candidateTitle && candidateTitle !== targetTitle
 			&& (candidateTitle.includes(targetTitle) || targetTitle.includes(candidateTitle));
 	});
@@ -80,9 +80,9 @@ export async function findExisting(company: string, role: string | null, externa
 		if (companyApps.length === 0) return undefined;
 	}
 
-	// A record with no  date_applied yet is treated as compatible. They matter because a confirmation 
-    // can only originate a record applied ON OR AFTER it, while a status update can only land on one 
-    // applied ON OR BEFORE it.
+	// Pure date checks against this email's `date`, one term in the larger conditions below. A record with
+	// no date_applied yet counts as compatible. A confirmation can only originate a record applied ON OR
+	// AFTER it; a status update can only land on one applied ON OR BEFORE it — opposite directions.
 	const appliedAfter = (app: Application) => !app.date_applied || date <= app.date_applied;
 	const appliedBefore = (app: Application) => !app.date_applied || app.date_applied <= date;
 
