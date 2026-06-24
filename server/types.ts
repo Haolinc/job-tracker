@@ -62,11 +62,11 @@ export interface Application {
 	// backfills the record (filling in date_applied) and clears this flag, so the two don't end up as
 	// two separate records. False for normal records.
 	awaiting_application: boolean;
-	// True when this record originated from a LinkedIn/Indeed FAST-APPLY email. Such applications get a
-	// confirmation from the job board AND the company's own email; those two are merged by company+role
-	// title. A REGULAR (non-fast-apply) confirmation is NOT merged into another by title alone — only a
-	// shared req number merges it — so applying to two like-named postings directly stays as two records.
+	// The two APPLY slots: `fast_apply` = a LinkedIn/Indeed notice ("your application was sent") filled it,
+	// `confirmed` = a company confirmation ("thanks for applying") filled it. The matcher pairs a notice with
+	// a confirmation into one record; a second of either can't refill a slot, so re-applications stay separate.
 	fast_apply: boolean;
+	confirmed: boolean;
 	source: Source;
 	gmail_thread_id: string | null;
 	// The Gmail account this application's emails live in — drives every email link. Set from the synced
@@ -113,7 +113,8 @@ export interface CreateApplicationData {
 	detected_by?: DetectedBy | null;   // 'parser' | 'llm'; null for manual
 	company_domain?: string | null;    // real company domain of the sender; null for ATS/job-board/manual
 	awaiting_application?: boolean;     // status-update record waiting for its (older) confirmation; defaults false
-	fast_apply?: boolean;               // originated from a LinkedIn/Indeed fast-apply email; defaults false
+	fast_apply?: boolean;               // notice slot filled (LinkedIn/Indeed fast-apply notice); defaults false
+	confirmed?: boolean;                // confirmation slot filled (company's own "thanks for applying"); defaults false
 	source: Source;
 	gmail_thread_id: string | null;
 	account?: string | null;            // default Gmail account for links; defaults to null when omitted

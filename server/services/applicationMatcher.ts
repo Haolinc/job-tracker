@@ -38,18 +38,33 @@ function oldest(apps: Application[]): Application {
 	});
 }
 
+// A fast-apply NOTICE and the company's own CONFIRMATION of one apply event land close in time; a same-
+// posting applied email further out is a separate cycle. Slots do the heavy lifting (a filled slot can't
+// take another, so re-applications never merge regardless of this bound) — the bound is just a loose
+// backstop so a confirmation with no nearby notice doesn't grab an old echo-less one. The DB shows real
+// pairs land same-day and the next applied gap is 5+ days, so ~4 days covers system lag / a next-day
+// cross-channel apply while staying under that floor. Tunable; precision is no longer load-bearing.
+const PAIR_WINDOW_DAYS = 4;
+const withinPairWindow = (a: string, b: string | null) =>
+	!b || Math.abs(Date.parse(a) - Date.parse(b)) <= PAIR_WINDOW_DAYS * 86_400_000;
+// Among candidates, the one nearest in time to `date` — EITHER direction, since a fast-apply notice can
+// arrive slightly after the company's own reply. Deterministic: ties break on the lower id.
+const nearestByDate = (apps: Application[], date: string): Application =>
+	apps.reduce((a, b) => {
+		const ga = a.date_applied ? Math.abs(Date.parse(date) - Date.parse(a.date_applied)) : 0;
+		const gb = b.date_applied ? Math.abs(Date.parse(date) - Date.parse(b.date_applied)) : 0;
+		return ga !== gb ? (ga < gb ? a : b) : (a.id < b.id ? a : b);
+	});
+
 /**
- * Match an incoming email to an existing application, or undefined to create a new one. COMPANY is
- * the primary key (gathered by domain ∪ name above); within a company the req number then the ROLE
- * disambiguate, and whether the email is a CONFIRMATION vs a STATUS update decides intent:
+ * Match an incoming email to an existing application, or undefined to create a new one. COMPANY is the
+ * primary key (gathered by domain ∪ name above); within a company, req number then ROLE narrow to a
+ * posting, and the email's kind decides intent:
  *
- *  - req number present         → the record with that req; a different req is a different posting
- *  - role present, match        → that posting (re-confirmation / status update for it)
- *  - role present, no match     → a STATUS email upgrades a single still-roleless record; a
- *                                  CONFIRMATION ("applied") is a new application → create new
- *  - no role, CONFIRMATION      → new application (so role-less confirmations don't all collapse —
- *                                  e.g. several Google "Thanks for applying" emails stay separate)
- *  - no role, STATUS update     → the company's original application (oldest)
+ *  - req number present  → the record with that req; a different req is a different posting
+ *  - APPLY email (a fast-apply notice OR the company's confirmation) → fills its slot on the NEAREST same-
+ *                          posting record whose matching slot is open, within a loose time bound; else new
+ *  - STATUS update (interview/offer/rejected) → joins the same-posting application that predates it
  */
 export async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null, isConfirmation: boolean, isFastApply: boolean, date: string): Promise<Application | undefined> {
 	// Gather every record that could be THIS employer, then disambiguate by role below. Probe by DOMAIN
@@ -80,61 +95,55 @@ export async function findExisting(company: string, role: string | null, externa
 		if (companyApps.length === 0) return undefined;
 	}
 
-	// Pure date checks against this email's `date`, one term in the larger conditions below. A record with
-	// no date_applied yet counts as compatible. A confirmation can only originate a record applied ON OR
-	// AFTER it; a status update can only land on one applied ON OR BEFORE it — opposite directions.
-	const appliedAfter = (app: Application) => !app.date_applied || date <= app.date_applied;
+	// A STATUS update can only land on a record applied ON OR BEFORE it (you can't be rejected before you
+	// applied); a record with no date_applied yet counts as compatible.
 	const appliedBefore = (app: Application) => !app.date_applied || app.date_applied <= date;
+	const isRoleless = (app: Application) => !app.role || app.role === 'Unknown Role';
+	// An APPLY email (a fast-apply NOTICE fills `fast_apply`, the company CONFIRMATION fills `confirmed`) can
+	// fill a record's matching slot when that slot is OPEN, and either:
+	//  • the record is a real apply event near in time — the notice↔echo pair (proximity bound), or
+	//  • it's an AWAITING record seeded by a status email — whose date is a placeholder, so we use the causal
+	//    guard "the apply is on/before the seeding status" instead of the bound (a later apply is a new cycle).
+	const slotOpen = (app: Application) => isFastApply ? !app.fast_apply : !app.confirmed;
+	const claimable = (app: Application) => slotOpen(app) && (
+		app.awaiting_application
+			? (!app.date_applied || date <= app.date_applied)
+			: withinPairWindow(date, app.date_applied)
+	);
 
-	// A CONFIRMATION ("applied") is a NEW application: it adopts an existing record by role ONLY to pair a
-	// fast-apply with the company's own email — two plain confirmations with the same title stay separate
-	// unless they share a req. A STATUS update belongs to an EXISTING application, so it matches by title
-	// freely and can backfill the role an earlier role-less confirmation lacked.
 	const incomingHasRole = !!role && role !== 'Unknown Role';
 	if (incomingHasRole) {
 		const postingMatches = findPostingMatches(role, companyApps);
 		if (isConfirmation) {
-			// Pair a fast-apply with the company's own confirmation of the SAME application — but not one it
-			// postdates (a later fast-apply is a re-application → new cycle). When several same-title records
-			// exist, pair with the oldest so the choice is deterministic, not whichever the db returned first.
-			const posting = postingMatches.length ? oldest(postingMatches) : undefined;
-			if (posting && (isFastApply || posting.fast_apply) && appliedAfter(posting)) return posting;
-			// Claim a same-title record an earlier status email left awaiting — unless this confirmation
-			// postdates it (then it's a new application, not the one that was waiting).
-			const awaiting = postingMatches.find(app => app.awaiting_application && appliedAfter(app));
-			if (awaiting) return awaiting;
-		} else {
-			// A status update joins its same-title application that predates it (or a still-awaiting record).
-			// Duplicate notices (two rejections for one posting) collapse here; a real re-application splits
-			// via the confirmation path. The status value itself is resolved on the route.
-			const attachable = postingMatches.filter(app => appliedBefore(app) || app.awaiting_application);
-			if (attachable.length) return attachable.reduce((a, b) => (b.date_applied ?? '') > (a.date_applied ?? '') ? b : a);
+			// Apply-side slot pairing: pair this notice/confirmation into the NEAREST same-posting record it can
+			// fill (slot open + near in time, or an awaiting record it predates). Opposite-slot-open ⇒ two notices
+			// never merge and two confirmations never merge. Failing a posting match (role drift, or all slots
+			// full), fall back to a role-less record the same way — an awaiting status record, or a role-less echo.
+			const open = postingMatches.filter(claimable);
+			if (open.length) return nearestByDate(open, date);
+			const rolelessOpen = companyApps.filter(app => isRoleless(app) && claimable(app));
+			if (rolelessOpen.length) return nearestByDate(rolelessOpen, date);
+			return undefined;
 		}
-		// Email's role matched no posting above — fall back to the company's roleless records.
-		const roleless = companyApps.filter(app => !app.role || app.role === 'Unknown Role');
-		// A STATUS update names the role on a lone roleless record — but only one that PREDATES it; a LATER
-		// untitled application is a different posting an older rejection must not rename.
-		if (!isConfirmation && roleless.length === 1 && appliedBefore(roleless[0])) return roleless[0];
-		// A CONFIRMATION instead claims a roleless record an earlier status email left awaiting (its other
-		// half), backfilling role/date instead of duplicating. Date-guarded against grabbing an unrelated rejection.
-		if (isConfirmation) {
-			const awaiting = roleless.filter(app => app.awaiting_application && appliedAfter(app));
-			if (awaiting.length) return oldest(awaiting);
-		}
+		// A STATUS update joins its same-title application that predates it (or a still-awaiting record). The
+		// status value itself is resolved on the route; duplicate notices collapse onto the same record.
+		const attachable = postingMatches.filter(app => appliedBefore(app) || app.awaiting_application);
+		if (attachable.length) return attachable.reduce((a, b) => (b.date_applied ?? '') > (a.date_applied ?? '') ? b : a);
+		// …or it names the role on a lone still-role-less record that PREDATES it (a LATER untitled application
+		// is a different posting an older rejection must not rename).
+		const stillRoleless = companyApps.filter(isRoleless);
+		if (stillRoleless.length === 1 && appliedBefore(stillRoleless[0])) return stillRoleless[0];
 		return undefined;
 	}
 	// Incoming email has NO role.
 	if (isConfirmation) {
-		// Backfill the oldest predating awaiting record (its missing confirmation), else fold into the oldest
-		// predating ROLED application. Date-guarded — a confirmation that postdates every record is new.
-		const awaiting = companyApps.filter(app => app.awaiting_application && appliedAfter(app));
-		if (awaiting.length) return oldest(awaiting);
-		const roled = companyApps.filter(app => app.role && app.role !== 'Unknown Role' && appliedAfter(app));
-		if (roled.length) return oldest(roled);
-		return undefined;
+		// A role-less applied email (untitled notice, or a confirmation that didn't name the role) fills the
+		// matching slot of the NEAREST same-company record it can fill — with no role to match a posting it can
+		// only attach to its near-in-time notice/echo (or an awaiting record), else it starts a new root.
+		const open = companyApps.filter(claimable);
+		return open.length ? nearestByDate(open, date) : undefined;
 	}
-	// A role-less status update attaches to the company's oldest application that PREDATES it — never a
-	// LATER one (a different posting). With none predating, it waits for its own confirmation.
+	// A role-less status update attaches to the company's oldest application that PREDATES it (or awaiting).
 	const predating = companyApps.filter(app => appliedBefore(app) || app.awaiting_application);
 	return predating.length ? oldest(predating) : undefined;
 }

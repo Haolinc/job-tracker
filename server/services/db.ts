@@ -28,6 +28,7 @@ interface AppDoc {
 	company_domain: string | null;
 	awaiting_application: boolean;
 	fast_apply: boolean;
+	confirmed: boolean;
 	source: string;
 	gmail_thread_id: string | null;
 	account: string | null;
@@ -61,6 +62,7 @@ const appSchema = new Schema<AppDoc>({
 	company_domain:  { type: String, index: true, default: null },
 	awaiting_application: { type: Boolean, default: false },
 	fast_apply:      { type: Boolean, default: false },
+	confirmed:       { type: Boolean, default: false },
 	source:          { type: String, default: 'manual' },
 	gmail_thread_id: { type: String, default: null },
 	account:         { type: String, default: null },
@@ -89,6 +91,7 @@ function toApp(doc: AppDoc): Application {
 		company_domain:  doc.company_domain ?? null,
 		awaiting_application: doc.awaiting_application ?? false,
 		fast_apply:      doc.fast_apply ?? false,
+		confirmed:       doc.confirmed ?? false,
 		source:          doc.source as Application['source'],
 		gmail_thread_id: doc.gmail_thread_id,
 		account:         doc.account ?? null,

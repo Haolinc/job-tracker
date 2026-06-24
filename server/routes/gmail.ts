@@ -15,18 +15,9 @@ import {
 	companiesSameEntity,
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
-import { errMsg, formatDuration, resolveStatus } from '../utils';
+import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
 
 const router = Router();
-
-// Signals that an email is a STATUS UPDATE on an EXISTING application (not a fresh confirmation), used
-// to override an "applied" classification. The SUBJECT can be loose — a short subject mentioning
-// "update" almost always means a status change. The BODY must be TIGHT: it requires "update" right
-// next to "your application", because the bare phrase "your application status" appears as portal-link
-// boilerplate in CONFIRMATION emails ("Check your application status and manage your profile") and
-// would otherwise misread every such confirmation as an update.
-const UPDATE_SUBJECT = /\bupdate\b/i;
-const UPDATE_BODY = /\bupdate (?:on|regarding|about|to) (?:the status of )?your application\b|\bapplication status update\b/i;
 
 /** The auto-detection note for an application, flagging when the role still needs manual entry. */
 function gmailNote(subject: string, hasRole: boolean): string {
@@ -169,13 +160,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
 			// stored signal that disambiguates first-word twins on future syncs.
 			const senderDomain = companyDomainFromSender(from);
-			// A fresh application confirmation vs a status update. Interview/offer/rejected are always
-			// updates; an "applied" email is a confirmation UNLESS its subject OR body marks it as a
-			// status update (the classifier sometimes defaults those to "applied").
-			const isConfirmation = category === 'applied' && !UPDATE_SUBJECT.test(subject) && !UPDATE_BODY.test(body);
-			// A LinkedIn/Indeed fast-apply email — its job-board confirmation and the company's own
-			// confirmation are merged by company+role; a regular confirmation is not (see findExisting).
-			const isFastApply = /^(?:linkedin|indeed)_/.test(classifier_code ?? '');
+			// A fresh confirmation vs a later status ping. An "applied" email is a confirmation when it
+			// carries confirmation language, or when its subject doesn't read as an update; an update-titled
+			// email with no confirmation language is demoted so it doesn't fill an apply slot.
+			const isConfirmation = category === 'applied'
+				&& (looksLikeConfirmation(subject, body) || !looksLikeStatusUpdate(subject));
+			// A LinkedIn/Indeed fast-apply NOTICE ("your application was sent") — its job-board confirmation
+			// pairs with the company's own confirmation by company+role; a regular confirmation does not (see
+			// findExisting). Only the "_applied" notice counts (see isFastApplyNotice).
+			const isFastApply = isFastApplyNotice(classifier_code);
 			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
@@ -231,6 +224,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// company confirmation (a regular email) still pair with this record by title later, instead of
 				// being split off as a separate record.
 				const fastApplyMark = isFastApply && !existing.fast_apply ? { fast_apply: true } : {};
+				// Fill the CONFIRMATION slot when a company (non-fast) confirmation merges in; once set, a
+				// second confirmation can't pair into this record.
+				const confirmedMark = isConfirmation && !isFastApply && !existing.confirmed ? { confirmed: true } : {};
 				// Backfill the application's Gmail account if it doesn't have one yet (e.g. a record created
 				// before this account was known) — one account per application drives all its email links.
 				const accountBackfill = accountEmail && !existing.account ? { account: accountEmail } : {};
@@ -244,6 +240,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...domainUpdate,
 					...awaitingClear,
 					...fastApplyMark,
+					...confirmedMark,
 					...accountBackfill,
 				};
 				if (Object.keys(merged).length) await db.update(existing.id, merged);
@@ -268,6 +265,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					// than the scan window, or simply not synced) — mark it so a later confirmation backfills it.
 					awaiting_application: !isConfirmation,
 					fast_apply:      isFastApply,
+					// Confirmation slot: a company (non-fast) confirmation fills it; a fast notice fills
+					// fast_apply instead; a status email fills neither (stays awaiting).
+					confirmed:       isConfirmation && !isFastApply,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 					account:         accountEmail,   // the inbox these emails live in (one per application)
