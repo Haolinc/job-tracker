@@ -26,6 +26,7 @@ function sanitizeEmails(raw: unknown): EmailRef[] {
 			messageId,
 			category: category as EmailRef['category'],
 			date:    typeof e?.date === 'string' ? e.date : '',
+			fast_apply: e?.fast_apply === true,
 		}];
 	});
 }

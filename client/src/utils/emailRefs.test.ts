@@ -22,6 +22,15 @@ describe('serializeEmails / parseEmails', () => {
 		]);
 	});
 
+	it('should round-trip the fast-apply flag via a 4th "fast" field', () => {
+		const withFast: EmailRef[] = [
+			{ messageId: 'm-fast', category: 'applied',  date: '2026-02-01', fast_apply: true },
+			{ messageId: 'm-rej',  category: 'rejected', date: '2026-04-02' },
+		];
+		expect(serializeEmails(withFast)).toBe('applied|m-fast|2026-02-01|fast ; rejected|m-rej|2026-04-02');
+		expect(parseEmails(serializeEmails(withFast))).toEqual(withFast);
+	});
+
 	it('should drop malformed entries (missing id or unknown stage) and an empty cell', () => {
 		expect(parseEmails('')).toEqual([]);
 		expect(parseEmails('applied||2026-01-01')).toEqual([]);        // no messageId

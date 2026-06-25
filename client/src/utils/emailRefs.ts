@@ -2,14 +2,22 @@ import type { EmailRef, Status } from '../types';
 
 const STATUSES = new Set<Status>(['applied', 'interview', 'offer', 'rejected']);
 
-// CSV cell encoding for the tracked-emails array. One entry per email as `category|messageId|date`,
-// entries separated by " ; ". Fields never contain `|` or `;` (ids/dates/status words), so the split is
-// unambiguous and the cell stays comma-free (no CSV quoting needed). The account lives in its own column.
+// CSV cell encoding for the tracked-emails array. One entry per email as `category|messageId|date`, with
+// an optional 4th field `fast` flagging a LinkedIn/Indeed fast-apply notice. Entries are separated by
+// " ; ". Fields never contain `|` or `;` (ids/dates/status words), so the split is unambiguous and the
+// cell stays comma-free (no CSV quoting needed). The account lives in its own column.
 const FIELD_SEP = '|';
 const ENTRY_SEP = ' ; ';
+const FAST_FLAG = 'fast';
 
 export function serializeEmails(emails: EmailRef[]): string {
-	return emails.map(e => [e.category, e.messageId, e.date].join(FIELD_SEP)).join(ENTRY_SEP);
+	return emails
+		.map(e => {
+			const fields = [e.category, e.messageId, e.date];
+			if (e.fast_apply) fields.push(FAST_FLAG);   // omitted for normal emails → unchanged encoding
+			return fields.join(FIELD_SEP);
+		})
+		.join(ENTRY_SEP);
 }
 
 export function parseEmails(cell: string): EmailRef[] {
@@ -18,9 +26,11 @@ export function parseEmails(cell: string): EmailRef[] {
 		.map(s => s.trim())
 		.filter(Boolean)
 		.flatMap((entry): EmailRef[] => {
-			const [category, messageId, date = ''] = entry.split(FIELD_SEP).map(p => p.trim());
+			const [category, messageId, date = '', flag] = entry.split(FIELD_SEP).map(p => p.trim());
 			if (!messageId || !STATUSES.has(category as Status)) return [];   // drop malformed entries
-			return [{ messageId, category: category as Status, date }];
+			const ref: EmailRef = { messageId, category: category as Status, date };
+			if (flag === FAST_FLAG) ref.fast_apply = true;   // a legacy 4th field (account) never equals "fast"
+			return [ref];
 		});
 }
 
