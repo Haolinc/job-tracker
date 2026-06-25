@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalReqId, extractJobNumber, tidyRole, parseEmail, extractGeneralCompanyRole, recoverRoleFromBody } from './parser';
+import type { gmail_v1 } from 'googleapis';
+import { canonicalReqId, extractJobNumber } from './parser/reqId';
+import { tidyRole, recoverRoleFromBody } from './parser/roles';
+import { parseEmail } from './parser/templates';
+import { extractGeneralCompanyRole } from './parser/companyRole';
+import { buildBody } from './gmail/body';
 
 // ── canonicalReqId ────────────────────────────────────────────────────────────
 // Cleans an LLM-supplied requisition id. Rule: a label GLUED to the digits is the company's code prefix
@@ -72,6 +77,9 @@ describe('tidyRole', () => {
 		['Software Engineer I – 31143106', 'Software Engineer I'],
 		['Java Developer (reference number: 779128)', 'Java Developer'],   // trailing ref parenthetical
 		['Software Engineer Onsite Great River, NY', 'Software Engineer'], // work-mode + location tail
+		['R-78284 Software Engineer I', 'Software Engineer I'],            // hyphenated leading req
+		['Development Engineer in Test [208728]', 'Development Engineer in Test'],   // bracket-wrapped id
+		['QA Engineer [Remote]', 'QA Engineer [Remote]'],                 // bracket without a digit kept
 		// regressions — must be left intact:
 		['2026 Emerging Talent Software Engineers - Full time', '2026 Emerging Talent Software Engineers - Full time'],
 		['3D Designer', '3D Designer'],
@@ -94,11 +102,21 @@ describe('parseEmail', () => {
 	}
 	const cases: Case[] = [
 		{
-			testName: 'LinkedIn fast-apply confirmation',
+			testName: 'LinkedIn fast-apply confirmation (structured card)',
 			subject: 'Hao Lin, your application was sent to FanDuel',
 			from: 'LinkedIn <jobs-noreply@linkedin.com>',
-			body: 'Your application was sent to FanDuel Software Engineer II FanDuel New York, United States',
+			body: 'Your application was sent to FanDuel\nSoftware Engineer II\nFanDuel\nNew York, United States\nView job:',
 			category: 'applied', company: 'FanDuel', role: 'Software Engineer II', code: 'linkedin_applied',
+		},
+		{
+			// Real regression: the LinkedIn page name in the subject ("Socotec Gestions") differs from the
+			// brand on the card ("SOCOTEC"). The old company-sandwich approach failed the role and kept the
+			// legal name; reading the card by position gives the brand company + the role directly.
+			testName: 'LinkedIn fast-apply — subject name ≠ card brand (Socotec)',
+			subject: 'Hao Lin, your application was sent to Socotec Gestions',
+			from: 'LinkedIn <jobs-noreply@linkedin.com>',
+			body: 'Your application was sent to Socotec Gestions\nSoftware Engineer\nSOCOTEC\nNew York, NY\nView job:',
+			category: 'applied', company: 'SOCOTEC', role: 'Software Engineer', code: 'linkedin_applied',
 		},
 		{
 			testName: 'LinkedIn rejection',
@@ -205,6 +223,37 @@ describe('parseEmail', () => {
 			if (c.code) expect(res!.classifier_code).toBe(c.code);
 		});
 	}
+});
+
+// ── buildBody → parseEmail (LinkedIn, end-to-end) ─────────────────────────────
+// Locks the real LinkedIn pipeline: the raw plain-text part (messy dividers, a "View job:" URL, and
+// the "similar jobs" recommendations below the card) must reduce to the structured card the extractor
+// reads. Mirrors the actual Albert Bow email captured from Gmail "Show original".
+describe('buildBody + parseEmail (LinkedIn)', () => {
+	const msg = (plain: string): gmail_v1.Schema$Message => ({
+		payload: { mimeType: 'text/plain', body: { data: Buffer.from(plain).toString('base64url') } },
+	});
+	const from = 'LinkedIn <jobs-noreply@linkedin.com>';
+
+	it('reads role + brand company from the card and drops the recommendations', () => {
+		const plain = [
+			'Your application was sent to Albert Bow', '',
+			'Software Engineer', 'Albert Bow', 'New York City Metropolitan Area',
+			'View job: https://www.linkedin.com/comm/jobs/view/4418756640/?trackingId=abc',
+			'', '---------------------------------------------------------', '',
+			'Applied on June 15, 2026-------------------------------------',
+			'        Now, take these next steps for more success', '',
+			'View similar jobs you may be interested in',
+			'software engineer- ST, Seattle, WA', 'Starbucks', 'Seattle, WA', 'View job: https://x',
+		].join('\n');
+
+		const body = buildBody(msg(plain), from);
+		expect(body).not.toMatch(/Starbucks/);            // recommendation dropped
+		expect(body).not.toMatch(/https?:\/\//);          // URLs stripped
+
+		const res = parseEmail('Hao Lin, your application was sent to Albert Bow', from, body);
+		expect(res).toMatchObject({ category: 'applied', company: 'Albert Bow', role: 'Software Engineer', classifier_code: 'linkedin_applied' });
+	});
 });
 
 // ── extractGeneralCompanyRole ─────────────────────────────────────────────────

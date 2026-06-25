@@ -1,19 +1,19 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import Board from './components/Board';
 import TableView from './components/TableView';
 import AddModal from './components/AddModal';
 import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
+import Toolbar, { type View } from './components/Toolbar';
+import ResetConfirmModal from './components/ResetConfirmModal';
 import ImportResultModal, { type ImportOutcome } from './components/ImportResultModal';
 import { getApplications, resetDatabase } from './api';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
 import { downloadApplicationsCsv } from './utils/exportCsv';
-import { parseApplicationsCsv, CsvImportError } from './utils/importCsv';
+import { parseApplicationsCsv, CsvImportError, selectNewApplications } from './utils/importCsv';
 import type { Application, ApplicationFormData, Filters as FiltersType } from './types';
-
-type View = 'board' | 'table';
 
 export default function App() {
 	const { applications, loading, fetchAll, add, update, remove } = useApplications();
@@ -27,7 +27,6 @@ export default function App() {
 	// In-memory only, so a page refresh clears the effect; set once, so later edits don't light up.
 	const [newlyAdded, setNewlyAdded] = useState<Set<string>>(new Set());
 
-	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [importResult, setImportResult] = useState<ImportOutcome | null>(null);
 	const [showResetConfirm, setShowResetConfirm] = useState(false);
 	const [resetting, setResetting] = useState(false);
@@ -92,29 +91,10 @@ export default function App() {
 			setImportResult({ tone: 'warning', title: 'Nothing to import', message: 'No applications were found in that CSV.' });
 			return;
 		}
-		// Skip applications already on the board, and collapse in-file duplicates. Identity is the set of
-		// tracked Gmail message ids (globally unique): two rows are the same application iff they share a
-		// message id. This keeps genuinely-distinct applications that merely share a company+role — several
-		// "Unknown Role" postings at one employer, or the same generic role applied to twice — from being
-		// wrongly merged. Rows with no tracked emails (manual entries) fall back to a company+role key.
 		// Dedup against the COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications`
 		// list is narrowed by an active search filter and can be momentarily stale.
-		const key = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
 		const existing = await getApplications();
-		const seenMsgIds = new Set(existing.flatMap(a => a.emails.map(e => e.messageId)));
-		const seenKeys = new Set(existing.map(a => key(a.company, a.role)));
-		const toAdd = parsed.filter(a => {
-			if (a.emails.length > 0) {
-				if (a.emails.some(e => seenMsgIds.has(e.messageId))) return false;   // shares an email → already here
-				a.emails.forEach(e => seenMsgIds.add(e.messageId));
-				return true;
-			}
-			const k = key(a.company, a.role);   // no emails to identify it → fall back to company+role
-			if (seenKeys.has(k)) return false;
-			seenKeys.add(k);
-			return true;
-		});
-		const duplicates = parsed.length - toAdd.length;
+		const { toAdd, duplicates } = selectNewApplications(parsed, existing);
 
 		const results = await Promise.allSettled(toAdd.map(a => add(a)));
 		const created = results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : []));
@@ -179,64 +159,15 @@ export default function App() {
 			<main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-4">
 				<div className="flex flex-wrap items-center justify-between gap-4">
 					<StatsBar applications={applications} />
-					<div className="flex flex-wrap items-center gap-2">
-						<div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium">
-							<button
-								data-testid="view-board"
-								onClick={() => setView('board')}
-								className={`px-3 py-2 ${view === 'board' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
-							>⊞ Board</button>
-							<button
-								data-testid="view-table"
-								onClick={() => setView('table')}
-								className={`px-3 py-2 border-l border-gray-200 ${view === 'table' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:bg-gray-50'}`}
-							>☰ Table</button>
-						</div>
-						<div className="w-px h-6 bg-gray-300 mx-1" />
-						<input
-							ref={fileInputRef}
-							type="file"
-							accept=".csv,text/csv"
-							className="hidden"
-							onChange={e => {
-								const file = e.target.files?.[0];
-								e.target.value = '';
-								if (file) handleImport(file);
-							}}
-						/>
-						<button
-							data-testid="btn-import-csv"
-							onClick={() => fileInputRef.current?.click()}
-							className="px-3 py-2 border border-emerald-200 bg-white text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-100"
-							title="Import applications from a CSV file"
-						>
-							⤒ Import CSV
-						</button>
-						<button
-							data-testid="btn-export-csv"
-							onClick={() => downloadApplicationsCsv(applications)}
-							disabled={applications.length === 0}
-							className="px-3 py-2 border border-blue-200 bg-white text-blue-600 text-sm font-medium rounded-lg hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
-							title="Download the current applications as a CSV file"
-						>
-							⤓ Export CSV
-						</button>
-						<button
-							data-testid="btn-reset-db"
-							onClick={() => setShowResetConfirm(true)}
-							className="px-3 py-2 border border-red-200 bg-white text-red-500 text-sm font-medium rounded-lg hover:bg-red-50"
-							title="Wipe all applications and sync history"
-						>
-							⚠ Reset DB
-						</button>
-						<button
-							data-testid="btn-add-application"
-							onClick={() => setModal({})}
-							className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
-						>
-							+ Add Application
-						</button>
-					</div>
+					<Toolbar
+						view={view}
+						onViewChange={setView}
+						onImportFile={handleImport}
+						onExport={() => downloadApplicationsCsv(applications)}
+						exportDisabled={applications.length === 0}
+						onReset={() => setShowResetConfirm(true)}
+						onAdd={() => setModal({})}
+					/>
 				</div>
 
 				<Filters filters={filters} onChange={setFilters} />
@@ -274,34 +205,12 @@ export default function App() {
 			)}
 
 			{showResetConfirm && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowResetConfirm(false)}>
-					<div data-testid="reset-confirm-modal" className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
-						<div className="text-3xl mb-3 text-center">⚠️</div>
-						<h2 className="text-lg font-bold text-gray-900 text-center mb-1">Reset database?</h2>
-						<p className="text-sm text-gray-500 text-center mb-6">
-							This deletes <span className="font-semibold text-gray-700">all {applications.length} applications</span> and
-							clears the Gmail sync history, so the next sync re-processes everything from scratch.
-							This cannot be undone.
-						</p>
-						<div className="flex gap-3">
-							<button
-								data-testid="reset-cancel"
-								onClick={() => setShowResetConfirm(false)}
-								className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50"
-							>
-								Cancel
-							</button>
-							<button
-								data-testid="reset-confirm"
-								onClick={handleReset}
-								disabled={resetting}
-								className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
-							>
-								{resetting ? 'Resetting…' : 'Yes, reset everything'}
-							</button>
-						</div>
-					</div>
-				</div>
+				<ResetConfirmModal
+					applicationCount={applications.length}
+					resetting={resetting}
+					onCancel={() => setShowResetConfirm(false)}
+					onConfirm={handleReset}
+				/>
 			)}
 		</div>
 	);

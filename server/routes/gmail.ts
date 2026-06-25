@@ -1,324 +1,23 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmailService';
+import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmail/messages';
 import { classifyEmail } from '../services/classifier';
-import { parseEmail, extractGeneralCompanyRole, extractJobNumber, recoverRoleFromBody, tidyRole } from '../services/parser';
+import { parseEmail } from '../services/parser/templates';
+import { extractGeneralCompanyRole } from '../services/parser/companyRole';
+import { extractJobNumber } from '../services/parser/reqId';
+import { recoverRoleFromBody, tidyRole } from '../services/parser/roles';
 import * as db from '../services/db';
 import { isIgnorableEmail } from '../services/filters';
-import { errMsg, formatDuration } from '../utils';
-import type { Application } from '../types';
+import {
+	normalizeCompany,
+	companyDomainFromSender,
+	companiesSameEntity,
+} from '../services/companyIdentity';
+import { findExisting } from '../services/applicationMatcher';
+import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
 
 const router = Router();
-
-// ATS platforms and generic mail providers — never treat their domain as a company name.
-const ATS_DOMAINS = new Set([
-	'greenhouse.io', 'greenhouse-mail.io', 'lever.co', 'icims.com', 'taleo.net', 'bamboohr.com',
-	'smartrecruiters.com', 'jobvite.com', 'jazz.co', 'breezy.hr',
-	'workday.com', 'myworkday.com', 'successfactors.com', 'applytojob.com',
-	'recruitingbypaycor.com', 'paylocity.com', 'adp.com', 'ultipro.com',
-	'indeed.com', 'linkedin.com', 'glassdoor.com', 'ziprecruiter.com',
-	// More ATS / applicant-mail platforms that send "on behalf of" the employer — the platform
-	// domain is never the company, so the body/sender-name must supply the real name instead.
-	'rippling.com', 'brassring.com', 'ashbyhq.com', 'applyresponse.com', 'workablemail.com', 'kula.ai',
-	'candidatecare.com',   // iCIMS Candidate Care portal — a shared ATS host, never the employer's own domain
-	'governmentjobs.com', 'clearcompany.com',   // NEOGOV gov-jobs board & ClearCompany ATS — shared hosts, not the employer
-	// Recruiting CRMs / shared mail hosts / multi-tenant clouds that send for many UNRELATED employers —
-	// each can't be a company key. (gem.com → Narmi/FanDuel/Bilt; oracle.com = Oracle Recruiting Cloud;
-	// ns2cloud.com = SAP NS2 multi-tenant cloud; applicantemails.com = a shared applicant-mail host.)
-	// NOTE: highalpha.com is deliberately NOT here — it's a venture-studio domain whose mail is about its
-	// own portfolio (Backstroke), so letting it bridge "High Alpha" ↔ "Backstroke" is desired.
-	'gem.com', 'oracle.com', 'ns2cloud.com', 'applicantemails.com',
-	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
-	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
-	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
-]);
-
-// Brand labels of the ATS_DOMAINS above ("icims", "greenhouse", "workday"…). Lets us reject regional /
-// alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
-// even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
-// company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
-
-// Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
-// "Sun West Mortgage" resolve to the same dedup key.
-// The lookbehind (?<=\w) prevents matching " Co." in "Foo & Co." (which would
-// leave a broken trailing "&") — only strip when preceded by a word character.
-const COMPANY_SUFFIX_RE = /(?<=\w)[,.]?\s+(?:company|incorporated|inc\.?|llc|ltd\.?|corp\.?|corporation|co\.)$/i;
-
-// LinkedIn company-page qualifiers appended after a spaced dash ("CLEAR - Corporate" → "CLEAR").
-const LINKEDIN_QUALIFIER_RE = /\s+[-–]\s+(?:Corporate|Corp|HQ|Headquarters|Global|US|USA|U\.S\.A?\.?|North America|EMEA|APAC|Worldwide)\.?$/i;
-
-function normalizeCompany(name: string): string {
-	// "X dba Y" / "X d/b/a Y" → Y, the trade name people actually use ("CP Payroll, LLC dba ConnectPay" → "ConnectPay").
-	name = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
-	name = name.replace(LINKEDIN_QUALIFIER_RE, '').trim();
-	return name.replace(COMPANY_SUFFIX_RE, '').trim();
-}
-
-// Generic local-part prefixes that identify the ATS or HR function, not the employer.
-// "globalhr" is RTX's shared HR Workday address — not a company slug.
-const GENERIC_LOCAL = /^(no.?reply|noreply|donotreply|workday|notifications?|info|support|careers|talent|hr|recruiting|jobs?|globalhr)$/i;
-
-/**
- * Last-resort fallback: parse the employer name from the sender domain.
- * e.g. "noreply@walmart.com" → "Walmart", "careers@stripe.com" → "Stripe".
- * Returns null for ATS platforms, generic providers, and unrecognised senders.
- *
- * Special case: Workday branded subdomains use the local part as the company
- * slug (e.g. "cableone@myworkday.com" → "CableONE"). The LLM already knows
- * this rule but fails when the email body contains no company name.
- */
-function extractCompanyFromSender(from: string): string | null {
-	const rawEmail = from.match(/<([^>]+)>/)?.[1] ?? from.match(/\S+@\S+/)?.[0];
-	if (!rawEmail) return null;
-	const [localPart, domain] = rawEmail.toLowerCase().split('@');
-	if (!domain) return null;
-
-	// Workday branded subdomains: "cableone@myworkday.com" → company slug is "cableone".
-	// Slugs ≤ 2 chars (e.g. "ms" for Morgan Stanley) are abbreviations the fallback
-	// can't meaningfully expand — return null and let the LLM extract from the body.
-	if (domain === 'myworkday.com') {
-		if (!localPart || GENERIC_LOCAL.test(localPart) || localPart.length <= 2) return null;
-		return localPart.charAt(0).toUpperCase() + localPart.slice(1);
-	}
-
-	if (ATS_DOMAINS.has(domain)) return null;
-	// Also check parent domain for subdomained ATS hosts (e.g. "us.greenhouse-mail.io").
-	const labels = domain.split('.');
-	if (labels.length >= 3 && ATS_DOMAINS.has(labels.slice(1).join('.'))) return null;
-
-	// "careers.walmart.com" → "walmart";  "walmart.com" → "walmart"
-	const companySlug = labels.length >= 3 ? labels[labels.length - 2] : labels[0];
-	return companySlug.charAt(0).toUpperCase() + companySlug.slice(1);
-}
-
-// HR/ATS-function words that get appended to a corporate sender's display name. Their presence is the
-// signal that the display name is a COMPANY (not a person), so we only trust the name when one strips off.
-const SENDER_NAME_SUFFIX = /[\s,]*(?:[-–|]\s*)?(?:(?:p&o|people(?:\s*&\s*organization)?)\s+)?(?:workday\s+)?(?:talent acquisition(?:\s+team)?|talent team|career opportunities|careers|recruit(?:ing|ment)(?:\s+team)?|human resources|hiring(?:\s+team)?|notifications?)\s*$/i;
-
-/**
- * Fallback for ATS senders whose body omits the company: recover it from the sender DISPLAY NAME.
- * Only trusted when the name (a) carries an HR/ATS suffix we can strip ("RTX Workday Notifications" →
- * "RTX", "Siemens P&O Talent Acquisition" → "Siemens") or (b) uses the icims " @ " form ("Charles
- * Schwab Corporation @ icims" → "Charles Schwab Corporation"). A plain personal/company name with no
- * such marker is ignored — it's as likely to be a recruiter's name as an employer.
- */
-function extractCompanyFromSenderName(from: string): string | null {
-	const name = (from.split('<')[0] ?? '').trim().replace(/^["']|["']$/g, '').trim();
-	if (!name) return null;
-
-	// icims form: "<Company> @ icims" — the part after " @ " is the ATS, not the company.
-	const atIdx = name.indexOf(' @ ');
-	if (atIdx > 0) return name.slice(0, atIdx).trim() || null;
-	if (name.includes('@')) return null;   // a raw address slipped through — no usable display name
-
-	// Strip one or more trailing HR/ATS suffix runs ("Siemens P&O Talent Acquisition" → "Siemens").
-	let stripped = name;
-	for (let prev = ''; prev !== stripped; ) { prev = stripped; stripped = stripped.replace(SENDER_NAME_SUFFIX, '').trim(); }
-	if (stripped === name || stripped.length < 2) return null;   // nothing stripped → likely a person, not a company
-	return stripped;
-}
-
-// Normalize a role for comparison: lower-case, strip everything but letters/digits. So "Software
-// Engineer 2 (Backend)" and "software engineer 2 - backend" compare equal, but "Software Engineer"
-// and "Software Engineer 2 (Backend)" do NOT — they're distinct postings.
-const normRole = (r: string | null) => (r ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-
-// Signals that an email is a STATUS UPDATE on an EXISTING application (not a fresh confirmation), used
-// to override an "applied" classification. The SUBJECT can be loose — a short subject mentioning
-// "update" almost always means a status change. The BODY must be TIGHT: it requires "update" right
-// next to "your application", because the bare phrase "your application status" appears as portal-link
-// boilerplate in CONFIRMATION emails ("Check your application status and manage your profile") and
-// would otherwise misread every such confirmation as an update.
-const UPDATE_SUBJECT = /\bupdate\b/i;
-const UPDATE_BODY = /\bupdate (?:on|regarding|about|to) (?:the status of )?your application\b|\bapplication status update\b/i;
-
-// Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
-// is the same entity under a fuller name ("SS&C" → "SS&C Technologies"). A non-descriptor extra word
-// ("Epic" → "Epic Kids") signals a DIFFERENT company that merely shares a first word.
-const COMPANY_DESCRIPTOR = new Set([
-	// corporate structure / generic
-	'group', 'holdings', 'capital', 'partners', 'ventures', 'international', 'global', 'worldwide',
-	'industries', 'enterprises', 'company', 'brands', 'labs', 'studios', 'inc', 'llc', 'ltd', 'plc',
-	'corp', 'corporation', 'co', 'management', 'advisors', 'advisory', 'asset', 'investments',
-	// tech / functional descriptors
-	'technologies', 'technology', 'tech', 'sciences', 'science', 'systems', 'solutions', 'software',
-	'hardware', 'digital', 'services', 'consulting', 'networks', 'communications', 'analytics',
-	'security', 'cloud', 'data', 'robotics', 'semiconductor', 'semiconductors', 'electronics',
-	// industry sectors — "Fora Travel" is the same company as "Fora"; "Travel" is its sector, not a new brand
-	'financial', 'finance', 'trust', 'health', 'healthcare', 'bank', 'media', 'pharmaceuticals', 'pharma',
-	'bio', 'biosciences', 'therapeutics', 'diagnostics', 'energy', 'power', 'retail', 'foods', 'food',
-	'motors', 'automotive', 'aerospace', 'travel', 'hospitality', 'insurance', 'mortgage', 'realty',
-	'logistics', 'transport', 'transportation', 'education', 'learning', 'payments', 'lending',
-	'entertainment', 'games', 'gaming', 'sports', 'fitness', 'apparel', 'beverages', 'restaurants',
-	'hotels', 'airlines', 'telecom', 'telecommunications', 'mobility', 'space', 'defense', 'materials',
-]);
-
-/**
- * The sender's real company domain, or null. Returns null for ATS / job-board / generic-provider
- * senders (LinkedIn, Indeed, Workday, Greenhouse, gmail.com…) so only a genuine company talent-team
- * address ("careers@epic.com" → "epic.com") is kept. Stored on the application and used to
- * disambiguate companies that share a first word during matching.
- */
-function companyDomainFromSender(from: string): string | null {
-	const rawEmail = from.match(/<([^>]+)>/)?.[1] ?? from.match(/\S+@\S+/)?.[0];
-	const domain = rawEmail?.toLowerCase().split('@')[1];
-	if (!domain) return null;
-	if (ATS_DOMAINS.has(domain)) return null;
-	const labels = domain.split('.');
-	// registrable domain ≈ last two labels ("careers.epic.com" → "epic.com"), but last THREE for multi-part
-	// TLDs ("careers.acme.co.uk" → "acme.co.uk", not the shared "co.uk").
-	let registrable = labels.length >= 2 ? labels.slice(-2).join('.') : domain;
-	if (labels.length >= 3 && /^(?:co|com|org|net|gov|edu|ac|or|ne|go)\.[a-z]{2}$/.test(registrable)) {
-		registrable = labels.slice(-3).join('.');
-	}
-	if (ATS_DOMAINS.has(registrable)) return null;            // subdomained ATS host ("us.greenhouse-mail.io")
-	if (ATS_BRANDS.has(registrable.split('.')[0])) return null;   // regional/alternate TLD of a known ATS ("icims.eu")
-	return registrable;
-}
-
-const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
-
-/**
- * LOOSE name match — one name's words are a leading prefix of the other's ("Epic" ⊂ "Epic Kids",
- * "Lila" ⊂ "Lila Sciences"). Used only to GATHER candidates cheaply; findExisting then confirms the
- * real employer with the sender domain and companiesSameEntity. Keeps "Morgan Stanley" vs "Morgan
- * Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
- */
-function companiesCompatible(a: string, b: string): boolean {
-	const wa = companyWords(a), wb = companyWords(b);
-	if (!wa.length || !wb.length) return false;
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return short.every((w, i) => w === long[i]);
-}
-
-/**
- * STRICT same-employer check — a prefix match where the longer name only ADDS generic
- * corporate/industry descriptors ("SS&C" ↔ "SS&C Technologies", "Fora" ↔ "Fora Travel"). A distinct
- * proper noun in the extra words means a DIFFERENT company sharing a first word ("Epic" ✗ "Epic Kids").
- * This is the fallback when the sender domain can't decide (e.g. both records came from ATS senders).
- */
-function companiesSameEntity(a: string, b: string): boolean {
-	if (!companiesCompatible(a, b)) return false;
-	const wa = companyWords(a), wb = companyWords(b);
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return long.slice(short.length).every(w => COMPANY_DESCRIPTOR.has(w));
-}
-
-/** The original application for a company: earliest date_applied, id as tiebreak. */
-function oldest(apps: Application[]): Application {
-	return apps.reduce((a, b) => {
-		const da = a.date_applied ?? '', db_ = b.date_applied ?? '';
-		if (da !== db_) return da < db_ ? a : b;
-		return a.id < b.id ? a : b;
-	});
-}
-
-/**
- * Match an incoming email to an existing application, or undefined to create a new one. COMPANY is
- * the primary key (gathered by domain ∪ name above); within a company the req number then the ROLE
- * disambiguate, and the email's CATEGORY decides intent:
- *
- *  - req number present         → the record with that req; a different req is a different posting
- *  - role present, exact match  → that posting (re-confirmation / status update for it)
- *  - role present, no exact     → a STATUS email upgrades a single still-roleless record; a
- *                                  CONFIRMATION ("applied") is a new application → create new
- *  - no role, CONFIRMATION      → new application (so role-less confirmations don't all collapse —
- *                                  e.g. several Google "Thanks for applying" emails stay separate)
- *  - no role, STATUS update     → the company's original application (oldest)
- */
-async function findExisting(company: string, role: string | null, externalId: string | null, domain: string | null, isConfirmation: boolean, isFastApply: boolean, date: string): Promise<Application | undefined> {
-	// COMPANY FIRST — gather every record that could be THIS employer, then disambiguate by role below.
-	// We probe two ways and UNION the results, rather than "domain, else name":
-	//   • by DOMAIN — a real company domain (ATS/job-board hosts already excluded) is unique to one
-	//     employer, and bridges name spellings for free ("JPMorgan" ↔ "JPMorganChase").
-	//   • by NAME   — first-word candidates, kept only when they're the same entity ("Epic" ✗ "Epic
-	//     Kids") and don't carry a DIFFERENT real domain (a known other employer the name resembles).
-	// Both are needed because one employer's records can be split across them: some carry the sender
-	// domain, others don't yet (CSV imports, manual/legacy entries, or siblings whose domain hasn't been
-	// backfilled). If the name probe were skipped whenever the domain probe found even one record, those
-	// domain-less siblings would stay invisible and the email would spawn a DUPLICATE of the same employer.
-	const byDomain = domain ? await db.findByCompanyDomain(domain) : [];
-	const byName = (await db.findByCompanyFirstWord(company.split(/\s+/)[0])).filter(m =>
-		companiesSameEntity(m.company, company) && (!domain || !m.company_domain || m.company_domain === domain),
-	);
-	const seen = new Set(byDomain.map(m => m.id));
-	let matches = [...byDomain, ...byName.filter(m => !seen.has(m.id))];
-
-	// No candidate → new application. We deliberately do NOT fall back to a global req-number lookup: req
-	// numbers are only unique WITHIN a company, so a global match could wrongly merge a different employer.
-	if (matches.length === 0) return undefined;
-
-	// Within the company, the req/job number is the strongest disambiguator.
-	if (externalId) {
-		const byId = matches.find(m => m.external_id === externalId);
-		if (byId) return byId;
-		// This email names a req number none of the existing records share → a DISTINCT posting. Only
-		// records that carry no req of their own can still be the same job (their number may simply not
-		// have been extracted yet); a record with a DIFFERENT req is a different job, so drop it.
-		matches = matches.filter(m => !m.external_id);
-		if (matches.length === 0) return undefined;
-	}
-
-	// Resolve the role. A CONFIRMATION ("applied") is a NEW application: it adopts an existing record by
-	// exact role ONLY to pair a LinkedIn/Indeed fast-apply with the company's own email — two regular
-	// confirmations with the same title stay separate unless they share a req number. A STATUS update
-	// (interview/offer/rejected) is about an EXISTING application, so it matches by title freely and may
-	// also carry the role an earlier role-less confirmation lacked and upgrade it.
-	const incomingHasRole = !!role && role !== 'Unknown Role';
-	if (incomingHasRole) {
-		// Exact title = same posting. But a CONFIRMATION ("applied") only merges by title when one side is a
-		// LinkedIn/Indeed FAST-APPLY: that's the job-board email pairing with the company's own confirmation.
-		// Two REGULAR confirmations with the same title are DISTINCT applications (a shared req number, handled
-		// above, is the only thing that merges them) — so applying to two like-named postings directly stays
-		// as two records. A STATUS update (rejection/interview/offer) always matches its application by title.
-		// EXCEPTION: an AWAITING exact-title record is a status email (e.g. a rejection processed first, since
-		// the sync runs newest-first) explicitly waiting for its own confirmation — that confirmation always
-		// claims it, fast-apply or not, so an application and its rejection don't end up as two records.
-		const exact = matches.find(m => normRole(m.role) === normRole(role));
-		if (exact && (!isConfirmation || isFastApply || exact.fast_apply || exact.awaiting_application)) return exact;
-		const roleless = matches.filter(m => !m.role || m.role === 'Unknown Role');
-		// A STATUS update (interview/rejected/…) fills in the role on a lone still-roleless record.
-		if (!isConfirmation && roleless.length === 1) return roleless[0];
-		// A CONFIRMATION normally stays separate (so distinct postings don't collapse) — but it DOES claim
-		// a roleless record that an earlier status update left AWAITING its application. That record is this
-		// posting's other half: the status email (e.g. a rejection) arrived and created the record before
-		// its confirmation was processed (the sync runs newest-first, so a later rejection lands before its
-		// own older confirmation). Claiming it backfills the role + application date and clears the wait,
-		// instead of spawning a second record. The date guard keeps a confirmation that POSTDATES the
-		// awaiting record's activity from grabbing an unrelated rejection.
-		if (isConfirmation) {
-			const awaiting = roleless.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
-			if (awaiting.length) return oldest(awaiting);
-		}
-		return undefined;
-	}
-	// Incoming email has NO role.
-	if (isConfirmation) {
-		// A role-less confirmation first backfills an "awaiting" record: a status update that arrived before
-		// its (older, out-of-window) confirmation. Its role came from that update; this confirmation just
-		// supplies the application date and clears the flag.
-		// DATE GUARD: only backfill a record whose status update is NOT older than this application — an
-		// application that POSTDATES a rejection is a NEW application to the company, not the confirmation
-		// that rejection was waiting for, so it must keep its own record.
-		const awaiting = matches.filter(m => m.awaiting_application && (!m.date_applied || date <= m.date_applied));
-		if (awaiting.length) return oldest(awaiting);
-		// No awaiting record to claim. If a ROLED application to this company already exists, this title-less
-		// email is the company's own confirmation of one of them (the company-side of a LinkedIn/Indeed
-		// fast-apply, or the confirmation paired with a rejection that already created the record) — fold it
-		// in to backfill the application date/domain instead of spawning a blank "Unknown Role" duplicate.
-		// Only ROLED records are eligible, so several genuinely title-less applications to one company
-		// (e.g. multiple "Thanks for applying to Google" with no role anywhere) still stay separate. Same
-		// DATE GUARD as above: a title-less confirmation that POSTDATES the existing application is a NEW
-		// application to the company, not that one's confirmation, so it keeps its own record.
-		const roled = matches.filter(m => m.role && m.role !== 'Unknown Role' && (!m.date_applied || date <= m.date_applied));
-		if (roled.length) return oldest(roled);
-		return undefined;
-	}
-	// A role-less status update attaches to the company's original application (oldest).
-	return oldest(matches);
-}
 
 /** The auto-detection note for an application, flagging when the role still needs manual entry. */
 function gmailNote(subject: string, hasRole: boolean): string {
@@ -364,16 +63,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		send({ phase: 'start', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
 
 		let processed = 0;
+		// Emit progress reflecting the counts AFTER the current email is handled — called at each exit point
+		// so added/updated/skipped are always current rather than lagging one email behind.
+		const emitProgress = () => send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 		for await (const email of streamJobMessages(req.session.tokens!, newIds, failedIds)) {
 			const { threadId, messageId, subject, from, body } = email;
 			processed++;
-			send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 
 			// Hard-filter obvious non-job emails before calling the LLM.
 			if (isIgnorableEmail(subject, from, body)) {
 				console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
+				emitProgress();
 				continue;
 			}
 
@@ -390,6 +92,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					console.error(`[classify] error for subject="${subject}":`, err);
 					await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 					skipped++;
+					emitProgress();
 					continue;
 				}
 
@@ -431,23 +134,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
             if (classifier_code === 'indeed_applied') indeedParsed++;
             if (classifier_code === 'general_template') generalParsed++;
 
-			// If the LLM couldn't identify the company, fall back to parsing the sender domain
-			// (e.g. "noreply@walmart.com" → "Walmart").
-			if (!company && category !== 'ignored') {
-				const domainCompany = extractCompanyFromSender(from);
-				if (domainCompany) {
-					console.log(`[sync] company from domain fallback: "${domainCompany}" subject="${subject}"`);
-					company = domainCompany;
-				} else {
-					// Domain is an ATS/generic host. Last resort: the sender's display name with its
-					// HR/ATS suffix stripped ("RTX Workday Notifications" → "RTX").
-					const nameCompany = extractCompanyFromSenderName(from);
-					if (nameCompany) {
-						console.log(`[sync] company from sender-name fallback: "${nameCompany}" subject="${subject}"`);
-						company = nameCompany;
-					}
-				}
-			}
+			// Company comes solely from the parser/LLM. The classifier prompt already reads the sender
+			// domain + display name (including the Workday-subdomain rule), so there's no regex fallback
+			// here — an email the model can't attribute to a company is dropped below, not guessed at.
 
 			// Normalize legal suffixes for consistent dedup.
 			if (company) company = normalizeCompany(company);
@@ -465,6 +154,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
+				emitProgress();
 				continue;
 			}
 
@@ -475,13 +165,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
 			// stored signal that disambiguates first-word twins on future syncs.
 			const senderDomain = companyDomainFromSender(from);
-			// A fresh application confirmation vs a status update. Interview/offer/rejected are always
-			// updates; an "applied" email is a confirmation UNLESS its subject OR body marks it as a
-			// status update (the classifier sometimes defaults those to "applied").
-			const isConfirmation = category === 'applied' && !UPDATE_SUBJECT.test(subject) && !UPDATE_BODY.test(body);
-			// A LinkedIn/Indeed fast-apply email — its job-board confirmation and the company's own
-			// confirmation are merged by company+role; a regular confirmation is not (see findExisting).
-			const isFastApply = /^(?:linkedin|indeed)_/.test(classifier_code ?? '');
+			// A fresh confirmation vs a later status ping. An "applied" email is a confirmation when it
+			// carries confirmation language, or when its subject doesn't read as an update; an update-titled
+			// email with no confirmation language is demoted so it doesn't fill an apply slot.
+			const isConfirmation = category === 'applied'
+				&& (looksLikeConfirmation(subject, body) || !looksLikeStatusUpdate(subject));
+			// A LinkedIn/Indeed fast-apply NOTICE ("your application was sent") — its job-board confirmation
+			// pairs with the company's own confirmation by company+role; a regular confirmation does not (see
+			// findExisting). Only the "_applied" notice counts (see isFastApplyNotice).
+			const isFastApply = isFastApplyNotice(classifier_code);
 			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
@@ -496,10 +188,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			if (existing) {
-				// "Newest wins" (status, last_activity, auto note) and "earliest wins" (date_applied) are
-				// decided by the email's precise internalDate, not the day-string — so same-day emails order
-				// correctly and processing order never matters. ts 0 means "no recorded activity yet", so any
-				// email is treated as newer.
+				// Status moves FORWARD only (resolveStatus) — a later email never rolls it back. Activity fields
+				// (last_activity, auto note, detected_by) track the NEWEST email by precise internalDate, and
+				// date_applied the EARLIEST. ts 0 means "no recorded activity yet", so any email counts as newer.
 				const isNewer   = email.internalDate >= existing.last_activity_ts;
 				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
 				// Upgrade "Unknown Role" when this email provides a specific role
@@ -507,11 +198,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				const upgradedRole = existing.role === 'Unknown Role' && role ? role : null;
 				const roleUpgrade = upgradedRole ? { role: upgradedRole } : {};
 				const effectiveRole = upgradedRole ?? existing.role;
-				// The newest email owns status, last_activity, and the auto note (a 'manual' note is
-				// never overwritten).
-				const newerUpdate = isNewer
+				const resolved = resolveStatus(existing.status, category);
+				const statusUpdate = resolved !== existing.status ? { status: resolved } : {};
+				// The newest email owns last_activity and the auto note (a 'manual' note is never overwritten).
+				const activityUpdate = isNewer
 					? {
-						status: category,
 						last_activity: email.lastMessageDate,
 						last_activity_ts: email.internalDate,
 						detected_by: detectedBy,   // record how the newest (status-driving) email was classified
@@ -538,11 +229,15 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				// company confirmation (a regular email) still pair with this record by title later, instead of
 				// being split off as a separate record.
 				const fastApplyMark = isFastApply && !existing.fast_apply ? { fast_apply: true } : {};
+				// Fill the CONFIRMATION slot when a company (non-fast) confirmation merges in; once set, a
+				// second confirmation can't pair into this record.
+				const confirmedMark = isConfirmation && !isFastApply && !existing.confirmed ? { confirmed: true } : {};
 				// Backfill the application's Gmail account if it doesn't have one yet (e.g. a record created
 				// before this account was known) — one account per application drives all its email links.
 				const accountBackfill = accountEmail && !existing.account ? { account: accountEmail } : {};
 				const merged = {
-					...newerUpdate,
+					...statusUpdate,
+					...activityUpdate,
 					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
 					...roleUpgrade,
 					...reachedUpdate,
@@ -550,10 +245,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...domainUpdate,
 					...awaitingClear,
 					...fastApplyMark,
+					...confirmedMark,
 					...accountBackfill,
 				};
-				if (Object.keys(merged).length) await db.update(existing.id, merged);
-				await db.addEmailRef(existing.id, emailRef);   // always track the email, even when no field changed
+				// One round-trip: apply the field updates and append the email ref (deduped by messageId).
+				await db.updateWithEmail(existing.id, merged, emailRef);
 				updated++;
 			} else {
 				await db.create({
@@ -574,6 +270,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					// than the scan window, or simply not synced) — mark it so a later confirmation backfills it.
 					awaiting_application: !isConfirmation,
 					fast_apply:      isFastApply,
+					// Confirmation slot: a company (non-fast) confirmation fills it; a fast notice fills
+					// fast_apply instead; a status email fills neither (stays awaiting).
+					confirmed:       isConfirmation && !isFastApply,
 					source:          'gmail',
 					gmail_thread_id: threadId,
 					account:         accountEmail,   // the inbox these emails live in (one per application)
@@ -583,6 +282,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
+			emitProgress();
 		}
         const durationMs = Date.now() - start;
         const failed = failedIds.length;

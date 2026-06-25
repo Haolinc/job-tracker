@@ -1,9 +1,6 @@
-import type { NewApplication, Status, InterviewStep } from '../types';
+import type { Application, NewApplication, Status, InterviewStep } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 import { parseEmails } from './emailRefs';
-
-/** The shape `createApplication` accepts — an application minus its server-assigned fields. */
-export type ImportableApplication = NewApplication;
 
 /** Thrown when a CSV can't be imported as a whole (e.g. no Company column, or a row missing a company). */
 export class CsvImportError extends Error {}
@@ -112,7 +109,7 @@ function parseCsv(text: string): string[][] {
  * is thrown and nothing is imported). Every other field falls back to empty, and a missing/unknown
  * status defaults to "applied".
  */
-export function parseApplicationsCsv(text: string): ImportableApplication[] {
+export function parseApplicationsCsv(text: string): NewApplication[] {
 	const rows = parseCsv(stripBom(text));
 	if (rows.length < 2) return [];
 
@@ -164,4 +161,35 @@ export function parseApplicationsCsv(text: string): ImportableApplication[] {
 			emails: parseEmails(cell(row, 'emails')),
 		};
 	});
+}
+
+/**
+ * Pick the parsed rows that are NOT already on the board, and collapse in-file duplicates. Identity is
+ * the set of tracked Gmail message ids (globally unique): two rows are the same application iff they
+ * share a message id. This keeps genuinely-distinct applications that merely share a company+role —
+ * several "Unknown Role" postings at one employer, or the same generic role applied to twice — from
+ * being wrongly merged. Rows with no tracked emails (manual entries) fall back to a company+role key.
+ *
+ * `existing` should be the COMPLETE board (fetched fresh and unfiltered), since an active search filter
+ * narrows the in-memory list and would let already-present applications slip back in as "new".
+ */
+export function selectNewApplications(
+	parsed: NewApplication[],
+	existing: Application[],
+): { toAdd: NewApplication[]; duplicates: number } {
+	const key = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
+	const seenMsgIds = new Set(existing.flatMap(a => a.emails.map(e => e.messageId)));
+	const seenKeys = new Set(existing.map(a => key(a.company, a.role)));
+	const toAdd = parsed.filter(a => {
+		if (a.emails.length > 0) {
+			if (a.emails.some(e => seenMsgIds.has(e.messageId))) return false;   // shares an email → already here
+			a.emails.forEach(e => seenMsgIds.add(e.messageId));
+			return true;
+		}
+		const k = key(a.company, a.role);   // no emails to identify it → fall back to company+role
+		if (seenKeys.has(k)) return false;
+		seenKeys.add(k);
+		return true;
+	});
+	return { toAdd, duplicates: parsed.length - toAdd.length };
 }

@@ -28,6 +28,7 @@ interface AppDoc {
 	company_domain: string | null;
 	awaiting_application: boolean;
 	fast_apply: boolean;
+	confirmed: boolean;
 	source: string;
 	gmail_thread_id: string | null;
 	account: string | null;
@@ -61,6 +62,7 @@ const appSchema = new Schema<AppDoc>({
 	company_domain:  { type: String, index: true, default: null },
 	awaiting_application: { type: Boolean, default: false },
 	fast_apply:      { type: Boolean, default: false },
+	confirmed:       { type: Boolean, default: false },
 	source:          { type: String, default: 'manual' },
 	gmail_thread_id: { type: String, default: null },
 	account:         { type: String, default: null },
@@ -89,6 +91,7 @@ function toApp(doc: AppDoc): Application {
 		company_domain:  doc.company_domain ?? null,
 		awaiting_application: doc.awaiting_application ?? false,
 		fast_apply:      doc.fast_apply ?? false,
+		confirmed:       doc.confirmed ?? false,
 		source:          doc.source as Application['source'],
 		gmail_thread_id: doc.gmail_thread_id,
 		account:         doc.account ?? null,
@@ -170,14 +173,19 @@ export const remove = async (id: string): Promise<boolean> => {
 };
 
 /**
- * Append a Gmail message reference to an application, deduped by messageId so re-processing the same
- * email (e.g. after the synced-email log is cleared) never double-records it.
+ * Apply field updates to an application AND append a Gmail message reference in ONE round-trip. The ref
+ * is appended only when its messageId isn't already present (deduped in the aggregation pipeline), so
+ * re-processing the same email never double-records it — while the field updates still apply either way.
  */
-export const addEmailRef = async (id: string, ref: EmailRef): Promise<void> => {
-	await AppModel.updateOne(
-		{ _id: id, 'emails.messageId': { $ne: ref.messageId } },
-		{ $push: { emails: ref } },
-	);
+export const updateWithEmail = async (id: string, updates: Record<string, unknown>, ref: EmailRef): Promise<void> => {
+	await AppModel.updateOne({ _id: id }, [
+		...(Object.keys(updates).length ? [{ $set: updates }] : []),
+		{ $set: { emails: { $cond: [
+			{ $in: [ref.messageId, { $ifNull: ['$emails.messageId', []] }] },
+			'$emails',
+			{ $concatArrays: [{ $ifNull: ['$emails', []] }, [ref]] },
+		] } } },
+	]);
 };
 
 /**
