@@ -63,16 +63,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		send({ phase: 'start', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
 
 		let processed = 0;
+		// Emit progress reflecting the counts AFTER the current email is handled — called at each exit point
+		// so added/updated/skipped are always current rather than lagging one email behind.
+		const emitProgress = () => send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 		for await (const email of streamJobMessages(req.session.tokens!, newIds, failedIds)) {
 			const { threadId, messageId, subject, from, body } = email;
 			processed++;
-			send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
 
 			// Hard-filter obvious non-job emails before calling the LLM.
 			if (isIgnorableEmail(subject, from, body)) {
 				console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
+				emitProgress();
 				continue;
 			}
 
@@ -89,6 +92,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					console.error(`[classify] error for subject="${subject}":`, err);
 					await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 					skipped++;
+					emitProgress();
 					continue;
 				}
 
@@ -150,6 +154,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 				console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
 				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
 				skipped++;
+				emitProgress();
 				continue;
 			}
 
@@ -243,8 +248,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					...confirmedMark,
 					...accountBackfill,
 				};
-				if (Object.keys(merged).length) await db.update(existing.id, merged);
-				await db.addEmailRef(existing.id, emailRef);   // always track the email, even when no field changed
+				// One round-trip: apply the field updates and append the email ref (deduped by messageId).
+				await db.updateWithEmail(existing.id, merged, emailRef);
 				updated++;
 			} else {
 				await db.create({
@@ -277,6 +282,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
+			emitProgress();
 		}
         const durationMs = Date.now() - start;
         const failed = failedIds.length;

@@ -173,14 +173,19 @@ export const remove = async (id: string): Promise<boolean> => {
 };
 
 /**
- * Append a Gmail message reference to an application, deduped by messageId so re-processing the same
- * email (e.g. after the synced-email log is cleared) never double-records it.
+ * Apply field updates to an application AND append a Gmail message reference in ONE round-trip. The ref
+ * is appended only when its messageId isn't already present (deduped in the aggregation pipeline), so
+ * re-processing the same email never double-records it — while the field updates still apply either way.
  */
-export const addEmailRef = async (id: string, ref: EmailRef): Promise<void> => {
-	await AppModel.updateOne(
-		{ _id: id, 'emails.messageId': { $ne: ref.messageId } },
-		{ $push: { emails: ref } },
-	);
+export const updateWithEmail = async (id: string, updates: Record<string, unknown>, ref: EmailRef): Promise<void> => {
+	await AppModel.updateOne({ _id: id }, [
+		...(Object.keys(updates).length ? [{ $set: updates }] : []),
+		{ $set: { emails: { $cond: [
+			{ $in: [ref.messageId, { $ifNull: ['$emails.messageId', []] }] },
+			'$emails',
+			{ $concatArrays: [{ $ifNull: ['$emails', []] }, [ref]] },
+		] } } },
+	]);
 };
 
 /**

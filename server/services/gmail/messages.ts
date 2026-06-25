@@ -65,7 +65,13 @@ function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 	const headers      = msg.payload?.headers ?? [];
 	const subject      = headers.find(h => h.name === 'Subject')?.value ?? '';
 	const from         = headers.find(h => h.name === 'From')?.value    ?? '';
-	const internalDate = msg.internalDate ? parseInt(msg.internalDate) : Date.now();
+	// internalDate (epoch ms) is Gmail's canonical receipt time and is effectively always present. Fall
+	// back to the Date header, then to now, so a freak missing value still yields a real-ish timestamp
+	// instead of skewing date_applied/ordering.
+	const dateHeader   = headers.find(h => h.name === 'Date')?.value;
+	const internalDate = msg.internalDate
+		? parseInt(msg.internalDate)
+		: (dateHeader && Date.parse(dateHeader)) || Date.now();
 	return {
 		threadId:        msg.threadId ?? '',
 		messageId:       msg.id!,

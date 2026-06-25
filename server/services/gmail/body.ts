@@ -67,6 +67,10 @@ function decodeEntities(text: string): string {
 		.replace(/&ldquo;/gi,  '"')
 		.replace(/&hellip;/gi, '...')
 		.replace(/&zwnj;/gi,   '')
+		.replace(/&#x0*27;/gi,    "'")    // hex apostrophe (&#x27;) \u2014 keep "don't" intact
+		.replace(/&#x201[89];/gi, "'")    // hex curly single quotes (&#x2018; &#x2019;)
+		.replace(/&#x201[cd];/gi, '"')    // hex curly double quotes (&#x201C; &#x201D;)
+		.replace(/&#x[0-9a-f]+;/gi, ' ')  // any other hex entity \u2192 space (mirrors the decimal rule below)
 		.replace(/&#\d+;/g,    ' ')
 		.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
 }
