@@ -37,4 +37,13 @@ describe('EmailLinks', () => {
 		expect(screen.queryByTestId('email-links')).toBeNull();
 		expect(screen.queryByTestId('email-link')).toBeNull();
 	});
+
+	it('labels a fast-apply notice "⚡ Fast Applied" while other emails keep their stage label', () => {
+		render(<EmailLinks emails={[
+			{ messageId: 'm-fast', category: 'applied',  date: '2026-02-01', fast_apply: true },
+			{ messageId: 'm-rej',  category: 'rejected', date: '2026-04-02' },
+		]} account="me@work.com" />);
+		const links = screen.getAllByTestId('email-link');
+		expect(links.map(a => a.textContent?.trim())).toEqual(['⚡ Fast Applied', '✉ Rejected']);
+	});
 });

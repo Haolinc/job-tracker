@@ -179,7 +179,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
 			// email later. `category` is already narrowed to the four non-'ignored' stages by the guard above.
 			// The inbox it lives in is tracked once at the application level (accountEmail), not per ref.
-			const emailRef = { messageId, category, date: email.lastMessageDate };
+			const emailRef = { messageId, category, date: email.lastMessageDate, fast_apply: isFastApply };
 
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).

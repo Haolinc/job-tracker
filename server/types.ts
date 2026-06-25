@@ -25,6 +25,7 @@ export interface EmailRef {
 	messageId: string;
 	category: Exclude<Category, 'ignored'>;
 	date: string;            // 'YYYY-MM-DD'
+	fast_apply?: boolean;    // this email is a LinkedIn/Indeed fast-apply NOTICE (drives the email's "Fast Applied" tag)
 }
 
 export interface Application {

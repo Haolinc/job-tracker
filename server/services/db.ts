@@ -7,6 +7,7 @@ interface EmailRefDoc {
 	messageId: string;
 	category: string;
 	date: string;
+	fast_apply?: boolean;
 }
 
 interface AppDoc {
@@ -42,6 +43,7 @@ const emailRefSchema = new Schema<EmailRefDoc>({
 	messageId: { type: String, required: true },
 	category:  { type: String, required: true },
 	date:      { type: String, required: true },
+	fast_apply: { type: Boolean, default: false },
 }, { _id: false });
 
 const appSchema = new Schema<AppDoc>({
@@ -99,6 +101,7 @@ function toApp(doc: AppDoc): Application {
 			messageId: e.messageId,
 			category:  e.category as EmailRef['category'],
 			date:      e.date,
+			fast_apply: e.fast_apply ?? false,
 		})),
 		created_at:      doc.created_at.toISOString(),
 		updated_at:      doc.updated_at.toISOString(),
@@ -178,6 +181,8 @@ export const remove = async (id: string): Promise<boolean> => {
  * re-processing the same email never double-records it — while the field updates still apply either way.
  */
 export const updateWithEmail = async (id: string, updates: Record<string, unknown>, ref: EmailRef): Promise<void> => {
+	// An aggregation-pipeline update so the conditional $push can read the existing array. Mongoose 9
+	// requires updatePipeline:true to accept the array form.
 	await AppModel.updateOne({ _id: id }, [
 		...(Object.keys(updates).length ? [{ $set: updates }] : []),
 		{ $set: { emails: { $cond: [
@@ -185,7 +190,7 @@ export const updateWithEmail = async (id: string, updates: Record<string, unknow
 			'$emails',
 			{ $concatArrays: [{ $ifNull: ['$emails', []] }, [ref]] },
 		] } } },
-	]);
+	], { updatePipeline: true });
 };
 
 /**

@@ -8,6 +8,7 @@ export interface EmailRef {
 	messageId: string;       // Gmail message id → deep-link with gmailUrl()
 	category: Status;        // which stage this email represents (applied/interview/offer/rejected)
 	date: string;            // 'YYYY-MM-DD' of the email
+	fast_apply?: boolean;    // this email is a LinkedIn/Indeed fast-apply notice → shown as "⚡ Fast Applied"
 }
 
 export interface Application {

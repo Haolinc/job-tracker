@@ -25,10 +25,14 @@ export default function EmailLinks({ emails, account }: Props) {
 					href={gmailUrl(e.messageId, account)}
 					target="_blank"
 					rel="noopener noreferrer"
-					title={`Open the ${STATUS_LABELS[e.category]} email in Gmail${e.date ? ` (${e.date})` : ''}`}
+					title={
+						e.fast_apply
+							? `Open the LinkedIn/Indeed fast-apply email in Gmail${e.date ? ` (${e.date})` : ''}`
+							: `Open the ${STATUS_LABELS[e.category]} email in Gmail${e.date ? ` (${e.date})` : ''}`
+					}
 					className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full hover:underline ${STATUS_COLORS[e.category]}`}
 				>
-					✉ {STATUS_LABELS[e.category]}
+					{e.fast_apply ? `⚡ Fast Applied` : `✉ ${STATUS_LABELS[e.category]}`}
 				</a>
 			))}
 		</div>
