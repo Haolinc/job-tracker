@@ -10,7 +10,8 @@ Return ONLY valid JSON in this exact shape:
   "company": "Company name or null",
   "role_source": "The verbatim snippet of email text the role is taken from, copied exactly, or null if no role is stated. Fill this BEFORE deciding role.",
   "role": "Job title or null",
-  "req_id": "ATS requisition/job number kept exactly as written (e.g. 2026-0013799, 722493BR), or null"
+  "req_id_source": "The verbatim snippet of email text the req_id is taken from, copied exactly, or null if no req_id is stated. Fill this BEFORE deciding req_id.",
+  "req_id": "ATS requisition/job/reference number kept exactly as written (e.g. 2026-0013799, 722493BR), or null"
 }
 
 Categories:
@@ -143,10 +144,10 @@ role: the company follows "applying/considering/interest in", the role is the ti
   follows. When in doubt, keep the original text.
 
 Requisition / job number (the "req_id" field):
-- Extract the posting's requisition/job number when the email shows one — either EXPLICITLY LABELLED
-  ("Job ID: …", "Job Number: …", "Req #…", "Requisition …", "(ID: …)") OR written in an UNMISTAKABLE
-  requisition FORMAT even without a label: a year-hyphen-number ("2026-71968"), a letter+digits code
-  ("R232753", "722493BR", "R0859802"), or a long standalone digit id ("3092179"). The same number appears
+- Extract the posting's requisition/job/reference number when the email shows one — either EXPLICITLY LABELLED
+  ("Job ID: …", "Job Number: …", "Req #…", "Requisition …", "reference number: …", "(ID: …)") OR written in
+  an UNMISTAKABLE requisition FORMAT even without a label: a year-hyphen-number ("2026-71968"), a letter+digits
+  code ("R232753", "722493BR", "R0859802"), or a long standalone digit id ("3092179"). The same number appears
   on the confirmation and its later status/rejection email, so it links them.
 - Keep it EXACTLY AS WRITTEN — preserve any letter prefix/suffix and internal hyphens. Do NOT reduce to digits.
 - Only return null when you are genuinely NOT CONFIDENT a number is a requisition. A plain small number, a
@@ -161,24 +162,46 @@ Requisition / job number (the "req_id" field):
 WORKED EXAMPLES (input cue → output). These are the source of truth for the tricky decisions; when a
 new case is classified wrong, ADD a short example here rather than relying on prose rules alone:
 1. From "JPMorgan Chase & Co. <noreply@cloud.oracle.com>", body "...interested in a career at JPMorganChase..."
-   → {"category":"applied","company":"JPMorganChase","role":null,"req_id":null}
+   → {"category":"applied","company":"JPMorganChase","role_source":null,"role":null,"req_id_source":null,"req_id":null}
    (the body's working name wins over BOTH the legal signature name and the Oracle ATS sender domain)
 2. Subject "Thank you for your Resume", body "...your application for the Test Engineer at Sherpa 6. We..."
-   → {"category":"applied","company":"Sherpa 6","role":"Test Engineer","req_id":null}   (keep the number — it is part of the name)
+   → {"category":"applied","company":"Sherpa 6","role_source":"your application for the Test Engineer at Sherpa 6","role":"Test Engineer","req_id_source":null,"req_id":null}   (keep the number — it is part of the name)
 3. Body "...Thanks for applying! ... Thank you, PMC Talent Acquisition Team"  (company appears ONLY in the sign-off)
-   → {"category":"applied","company":"PMC","role":null,"req_id":null}
+   → {"category":"applied","company":"PMC","role_source":null,"role":null,"req_id_source":null,"req_id":null}
 4. Subject "Application received by City of Scottsdale", body is unrendered junk ("*---*---*---*")
-   → {"category":"applied","company":"City of Scottsdale","role":null,"req_id":null}   (body is junk → take the company from the SUBJECT)
+   → {"category":"applied","company":"City of Scottsdale","role_source":null,"role":null,"req_id_source":null,"req_id":null}   (body is junk → take the company from the SUBJECT)
 5. Body "...Thank you for your interest in employment at CP Payroll, LLC dba ConnectPay..."
-   → {"category":"applied","company":"ConnectPay","role":null,"req_id":null}   (use the "dba" trade name, not the legal entity)
+   → {"category":"applied","company":"ConnectPay","role_source":null,"role":null,"req_id_source":null,"req_id":null}   (use the "dba" trade name, not the legal entity)
 6. Subject "Your HackerRank for Acme Corp - Backend Engineer Invitation", from "HackerRank <...>"
-   → {"category":"interview","company":"Acme Corp","role":"Backend Engineer","req_id":null}   (the EMPLOYER, never the assessment platform)
+   → {"category":"interview","company":"Acme Corp","role_source":"Your HackerRank for Acme Corp - Backend Engineer Invitation","role":"Backend Engineer","req_id_source":null,"req_id":null}   (the EMPLOYER, never the assessment platform)
 7. Subject "Update regarding your application for Software Engineer 1 (React + API + Cloud Migration) Job ID# 2026-0013799"
-   → {"category":"rejected","company":"U.S. Bank","role":"Software Engineer 1 (React + API + Cloud Migration)","req_id":"2026-0013799"}   (req number kept OUT of the role, returned WHOLE in req_id)
+   → {"category":"rejected","company":"U.S. Bank","role_source":"your application for Software Engineer 1 (React + API + Cloud Migration)","role":"Software Engineer 1 (React + API + Cloud Migration)","req_id_source":"Job ID# 2026-0013799","req_id":"2026-0013799"}   (req number kept OUT of the role, returned WHOLE in req_id)
 8. Body "...Thank you for your interest in Software Engineer (ID: 3092179)..." from "noreply@mail.amazon.jobs"
-   → {"category":"applied","company":"Amazon","role":"Software Engineer","req_id":"3092179"}`;
+   → {"category":"applied","company":"Amazon","role_source":"your interest in Software Engineer","role":"Software Engineer","req_id_source":"Software Engineer (ID: 3092179)","req_id":"3092179"}
+9. Body "...Thanks for applying to the Web Application Developer position (reference number: 776380)! We have received your application..." from "...@cityjobsupport.nyc.gov"
+   → {"category":"applied","company":"City of New York","role_source":"the Web Application Developer position (reference number: 776380)","role":"Web Application Developer","req_id_source":"(reference number: 776380)","req_id":"776380"}   (a labelled reference number IS the req, even on a confirmation)
+10. Body "...Now that your application is complete, please complete this brief voluntary WOTC (Work Opportunity Tax Credit) questionnaire..." from "TargetCareers@target.com"
+   → {"category":"ignored","company":null,"role_source":null,"role":null,"req_id_source":null,"req_id":null}   (a tax-credit / EEO / demographic survey or other post-application ADMIN request is NOT an application event → "ignored", even though it is hiring-adjacent and names a company)`;
 
 const VALID_CATEGORIES = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
+
+// JSON Schema handed to Ollama's `format` — the server compiles it into a grammar that CONSTRAINS token
+// sampling, so the model physically cannot emit a category outside this enum (no invented "none"/"other")
+// nor any prose outside the object. Property ORDER is preserved by the grammar, so the *_source scratch
+// fields are still generated before the value they justify (the chain-of-thought that drives extraction).
+const nullableString = { type: ['string', 'null'] };
+const responseSchema = {
+	type: 'object',
+	properties: {
+		category:      { type: 'string', enum: [...VALID_CATEGORIES] },
+		company:       nullableString,
+		role_source:   nullableString,
+		role:          nullableString,
+		req_id_source: nullableString,
+		req_id:        nullableString,
+	},
+	required: ['category', 'company', 'role_source', 'role', 'req_id_source', 'req_id'],
+};
 
 async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
 	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
@@ -188,17 +211,20 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },
 		],
+		format: responseSchema,   // grammar-constrain output to the schema — category can ONLY be the enum
 		options: {
 			num_predict: 150,  // JSON output is ~40-60 tokens — extra room for longer role names
 			temperature: 0,    // deterministic output, no randomness needed for classification
 		},
 	});
 	const text = res.message.content.trim();
+    console.log(`[classify] result:`, text);
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
-	const json = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-
-	const parsed = JSON.parse(json) as Record<string, unknown>;
-	console.log(`[classify] result:`, parsed);
+	const jsonText = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+	// The worked examples show "{json}  (note)", so the model sometimes appends a trailing parenthetical
+	// after its JSON. Take just the first object — first "{" to last "}" — and ignore any commentary tail.
+	const start = jsonText.indexOf('{'), end = jsonText.lastIndexOf('}');
+	const parsed = JSON.parse(start !== -1 && end !== -1 ? jsonText.slice(start, end + 1) : jsonText) as Record<string, unknown>;
 	if (!parsed || !VALID_CATEGORIES.has(parsed.category as string)) {
 		throw new Error(`Unexpected classifier response: ${text}`);
 	}
