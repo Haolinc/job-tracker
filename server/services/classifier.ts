@@ -215,6 +215,8 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 		options: {
 			num_predict: 150,  // JSON output is ~40-60 tokens — extra room for longer role names
 			temperature: 0,    // deterministic output, no randomness needed for classification
+			// Temporary increase num_ctx to 8192 to avoid latency for long prompts
+			num_ctx: 8192,
 		},
 	});
 	const text = res.message.content.trim();
