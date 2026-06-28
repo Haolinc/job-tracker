@@ -38,6 +38,7 @@ export const AUTOMATED_SUBJECT = new RegExp(
 		// Jacobs generic portal-reminder emails — subject is exactly "Jacobs - Application Update"
 		// with no role after it. The valid Jacobs emails always have ", [Role]" after "Update".
 		'jacobs - application update(?!,)',
+        'one-time passcode',
 	].join('|'),
 	'i',
 );
