@@ -97,6 +97,7 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 			temperature: 0,    // deterministic output, no randomness needed for classification
 		},
 	});
+	console.log(`[classify] tokens: prompt=${res.prompt_eval_count ?? 0}`);
 	const text = res.message.content.trim();
     console.log(`[classify] result:`, text);
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
