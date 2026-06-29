@@ -19,11 +19,15 @@ export const AUTOMATED_SUBJECT = new RegExp(
 		'new jobs? for you',
 		'\\d+ new jobs?',
 		'your career opportunities at',       // recruitment marketing, not application confirmation
-		// Account-activation / email-verification emails from ATS portals — the application is NOT yet
-		// submitted (e.g. Siemens "Email address validation request"), so this isn't an application event.
+		// Account-activation / email-verification / OTP emails from ATS portals — the application is NOT yet
+		// submitted (e.g. Siemens "Email address validation request", or a "Your verification code" /
+		// one-time-passcode email), so this isn't an application event. "one[\s-]?time" matches the
+		// hyphen, space, and run-together spellings (one-time / one time / onetime).
 		'email address validation',
 		'verify your email',
 		'confirm your email',
+		'verification code',
+		'one[\\s-]?time',
 		'activate your account',
 		// Auth / magic-link emails from ATS portals (e.g. ClearCompany "Sign-in link for your application
 		// at …") — a login link to RESUME an application, not an application event. The body often names
@@ -38,7 +42,6 @@ export const AUTOMATED_SUBJECT = new RegExp(
 		// Jacobs generic portal-reminder emails — subject is exactly "Jacobs - Application Update"
 		// with no role after it. The valid Jacobs emails always have ", [Role]" after "Update".
 		'jacobs - application update(?!,)',
-        'one-time passcode',
 	].join('|'),
 	'i',
 );

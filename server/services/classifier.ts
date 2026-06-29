@@ -61,9 +61,6 @@ Body "Thank you for your interest in Morgan & Morgan and for taking the time to 
 -> {"category":"applied","company":"Morgan & Morgan","role_source":"apply to our Software Engineer posting","role":"Software Engineer","req_id_source":null,"req_id":null} 
 
 Body "...complete this voluntary WOTC questionnaire...", from target.com
--> {"category":"ignored","company":null,"role_source":null,"role":null,"req_id_source":null,"req_id":null}
-
-Subject "Your verification code", from "Goldman Sachs Recruiting <GSRecruiting@oracle.com>" Body "...one-time passcode: 583724..."
 -> {"category":"ignored","company":null,"role_source":null,"role":null,"req_id_source":null,"req_id":null}`;
 
 const VALID_CATEGORIES = new Set(['applied', 'interview', 'offer', 'rejected', 'ignored']);
