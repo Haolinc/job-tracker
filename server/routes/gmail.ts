@@ -16,6 +16,7 @@ import {
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
+import type { EmailResult, Status } from '../types';
 
 const router = Router();
 
@@ -23,6 +24,132 @@ const router = Router();
 function gmailNote(subject: string, hasRole: boolean): string {
 	const base = `Auto-detected from Gmail: ${subject}`;
 	return hasRole ? base : `${base}\n⚠️ Role could not be extracted — please update manually.`;
+}
+
+// The result of classifying ONE email: either a skip marker, or a `merge` record carrying everything the
+// (sequential) merge step needs. `classifierCode` rides along on both so the parsed-by counters tally the
+// same set of emails as before. No raw body is retained — it's consumed during classification.
+type ClassifyResult =
+	| { kind: 'skip'; threadId: string; messageId: string; classifiedAs: 'ignored'; classifierCode?: string }
+	| {
+		kind: 'merge'; threadId: string; messageId: string; subject: string;
+		category: Status; company: string; role: string | null;
+		externalId: string | null; senderDomain: string | null;
+		isConfirmation: boolean; isFastApply: boolean;
+		detectedBy: 'parser' | 'llm'; classifierCode?: string;
+		internalDate: number; lastMessageDate: string;
+	};
+
+/**
+ * The order-INDEPENDENT half of processing one email: hard-filter, parser, LLM (full classify or role-only
+ * fill), tidy/normalize, and the body-derived signals (req number, sender domain, confirmation kind). It
+ * reads only this email's text — no DB, no shared state — so it is safe to run concurrently. NEVER throws,
+ * so one bad email can't break the concurrency window; LLM failures return a skip marker instead.
+ */
+async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
+	const { threadId, messageId, subject, from, body } = email;
+
+	// Hard-filter obvious non-job emails before calling the LLM.
+	if (isIgnorableEmail(subject, from, body)) {
+		console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
+		return { kind: 'skip', threadId, messageId, classifiedAs: 'ignored' };
+	}
+
+	// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
+	// with zero AI cost. Falls back to the LLM for everything else.
+	let classification = parseEmail(subject, from, body);
+	const detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+
+	if (!classification) {
+		try {
+			classification = await classifyEmail(subject, from, body);
+		} catch (err) {
+			// Mark synced (by the caller) so a malformed LLM response isn't retried on every subsequent sync.
+			console.error(`[classify] error for subject="${subject}":`, err);
+			return { kind: 'skip', threadId, messageId, classifiedAs: 'ignored' };
+		}
+
+		// The LLM is the SOURCE OF TRUTH for company/role on this path. The deterministic regex only
+		// FILLS GAPS — when the LLM returned null — and never overrides a value the LLM produced.
+		// (Overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa".)
+		if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
+			const ext = extractGeneralCompanyRole(subject, body);
+			if (!classification.company && ext) classification.company = ext.company;
+			if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
+		}
+	} else if (classification.category !== 'ignored' && !classification.role) {
+		// The parser nailed company + category but couldn't pull a role from the templated text. Consult the
+		// LLM for the ROLE ONLY — the parser's company/category stay authoritative. A failed or empty call
+		// just leaves the role null → "Unknown Role", same as before.
+		try {
+			const ai = await classifyEmail(subject, from, body);
+			if (ai.role) {
+				classification = { ...classification, role: ai.role };
+				console.log(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
+			}
+			// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
+			if (ai.req_id) classification.req_id = ai.req_id;
+		} catch (err) {
+			console.error(`[classify] role-fill error for subject="${subject}":`, err);
+		}
+	}
+
+	// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
+	// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
+	if (classification.role) classification.role = tidyRole(classification.role) || null;
+	const { category, role } = classification;
+	const classifierCode = classification.classifier_code;
+	let { company } = classification;
+
+	// Normalize legal suffixes for consistent dedup.
+	if (company) company = normalizeCompany(company);
+
+	// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an employer
+	// and sometimes names itself as the company. Drop "HackerRank" as a company ONLY when the email is from
+	// that product domain — a genuine application to HackerRank itself keeps its real name.
+	if (company && /^hacker\s?rank\b/i.test(company) && /hackerrankforwork\.(?:com|io)/i.test(from)) {
+		console.log(`[sync] drop assessment-platform name as company: "${company}" subject="${subject}"`);
+		company = null;
+	}
+
+	if (category === 'ignored' || !company) {
+		console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
+		return { kind: 'skip', threadId, messageId, classifiedAs: 'ignored', classifierCode };
+	}
+
+	// Deterministic extraction first (reliable, never hallucinates); fall back to the req number the AI
+	// surfaced. Both keep the number in the SAME literal form, so a posting matches across parser/AI paths.
+	const externalId = extractJobNumber(subject, body) ?? classification.req_id ?? null;
+	// Real company domain (null for ATS/job-board senders) — a matching safeguard and a stored signal.
+	const senderDomain = companyDomainFromSender(from);
+	// A fresh confirmation vs a later status ping: an "applied" email is a confirmation when it carries
+	// confirmation language, or when its subject doesn't read as an update.
+	const isConfirmation = category === 'applied'
+		&& (looksLikeConfirmation(subject, body) || !looksLikeStatusUpdate(subject));
+	const isFastApply = isFastApplyNotice(classifierCode);
+
+	return {
+		kind: 'merge', threadId, messageId, subject,
+		category, company, role, externalId, senderDomain,
+		isConfirmation, isFastApply, detectedBy, classifierCode,
+		internalDate: email.internalDate, lastMessageDate: email.lastMessageDate,
+	};
+}
+
+/**
+ * Map an async stream through `fn` with bounded concurrency, yielding results in the ORIGINAL input order.
+ * Up to `depth` calls run at once (the slow LLM step overlaps across emails), but each result is released in
+ * arrival order — so a downstream sequential, order-sensitive consumer (the merge) sees exactly the sequence
+ * it would under fully-serial processing. Throughput improves; ordering/grouping is unchanged. Peak memory is
+ * the `depth` in-flight results, independent of how many items the stream produces.
+ */
+export async function* mapAhead<T, R>(source: AsyncIterable<T>, depth: number, fn: (item: T) => Promise<R>): AsyncGenerator<R> {
+	const inflight: Promise<R>[] = [];
+	for await (const item of source) {
+		inflight.push(fn(item));                            // starts now → up to `depth` run concurrently
+		if (inflight.length >= depth) yield await inflight.shift()!;   // await the OLDEST → preserves order
+	}
+	while (inflight.length) yield await inflight.shift()!;
 }
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
@@ -66,114 +193,31 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// Emit progress reflecting the counts AFTER the current email is handled — called at each exit point
 		// so added/updated/skipped are always current rather than lagging one email behind.
 		const emitProgress = () => send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
-		for await (const email of streamJobMessages(req.session.tokens!, newIds, failedIds)) {
-			const { threadId, messageId, subject, from, body } = email;
+		// Classify with bounded concurrency (SYNC_CONCURRENCY, default 3): the slow LLM step overlaps across
+		// emails, while the merge below stays strictly sequential and in the SAME order as a serial run — so
+		// grouping is byte-identical. A speedup requires Ollama to allow parallel requests (OLLAMA_NUM_PARALLEL).
+		const concurrency = Number(process.env.SYNC_CONCURRENCY) || 3;
+		for await (const r of mapAhead(streamJobMessages(req.session.tokens!, newIds, failedIds), concurrency, classifyOne)) {
 			processed++;
+			// Parsed-by counters: tallied for every email the parser classified (classifier_code present) —
+			// the same set and position as before (after classify, before the no-company skip).
+			if (r.classifierCode === 'linkedin_applied') linkedinApplyParsed++;
+			if (r.classifierCode === 'linkedin_rejected') linkedinRejectParsed++;
+			if (r.classifierCode === 'indeed_applied') indeedParsed++;
+			if (r.classifierCode === 'general_template') generalParsed++;
 
-			// Hard-filter obvious non-job emails before calling the LLM.
-			if (isIgnorableEmail(subject, from, body)) {
-				console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
-				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
+			if (r.kind === 'skip') {
+				await db.markEmailSynced({ thread_id: r.threadId, message_id: r.messageId, classified_as: r.classifiedAs });
 				skipped++;
 				emitProgress();
 				continue;
 			}
 
-			// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
-			// with zero AI cost. Falls back to the LLM for everything else.
-			let classification = parseEmail(subject, from, body);
-			const detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+			// Merge half — strictly sequential, in input order. Re-bind r's fields under the names the logic
+			// below uses; `email` is a thin stand-in for the two date fields that block reads.
+			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy } = r;
+			const email = { internalDate: r.internalDate, lastMessageDate: r.lastMessageDate };
 
-			if (!classification) {
-				try {
-					classification = await classifyEmail(subject, from, body);
-				} catch (err) {
-					// Mark synced so a malformed LLM response isn't retried on every subsequent sync.
-					console.error(`[classify] error for subject="${subject}":`, err);
-					await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
-					skipped++;
-					emitProgress();
-					continue;
-				}
-
-				// The LLM is the SOURCE OF TRUTH for company/role on this path. The deterministic regex only
-				// FILLS GAPS — when the LLM returned null — and never overrides a value the LLM produced.
-				// (Overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa".) The
-				// normalize/tidy/fallback steps below then canonicalize whatever value we end up with.
-				if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
-					const ext = extractGeneralCompanyRole(subject, body);
-					if (!classification.company && ext) classification.company = ext.company;
-					if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
-				}
-			} else if (classification.category !== 'ignored' && !classification.role) {
-				// The parser nailed the company + category but couldn't pull a role from the templated text.
-				// The title may still be present in prose the regex doesn't model, so consult the LLM for the
-				// ROLE ONLY — the parser's company/category are reliable and stay authoritative. A failed or
-				// empty LLM call just leaves the role null → "Unknown Role", same as before.
-				try {
-					const ai = await classifyEmail(subject, from, body);
-					if (ai.role) {
-						classification = { ...classification, role: ai.role };
-						console.log(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
-					}
-					// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
-					if (ai.req_id) classification.req_id = ai.req_id;
-				} catch (err) {
-					console.error(`[classify] role-fill error for subject="${subject}":`, err);
-				}
-			}
-
-			// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
-			// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
-			if (classification.role) classification.role = tidyRole(classification.role) || null;
-			const { category, role, classifier_code } = classification;
-			let { company } = classification;
-
-            if (classifier_code === 'linkedin_applied') linkedinApplyParsed++;
-            if (classifier_code === 'linkedin_rejected') linkedinRejectParsed++;
-            if (classifier_code === 'indeed_applied') indeedParsed++;
-            if (classifier_code === 'general_template') generalParsed++;
-
-			// Company comes solely from the parser/LLM. The classifier prompt already reads the sender
-			// domain + display name (including the Workday-subdomain rule), so there's no regex fallback
-			// here — an email the model can't attribute to a company is dropped below, not guessed at.
-
-			// Normalize legal suffixes for consistent dedup.
-			if (company) company = normalizeCompany(company);
-
-			// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an
-			// employer and sometimes names itself as the company. Drop "HackerRank" as a company ONLY
-			// when the email is from that product domain — a genuine application to HackerRank itself
-			// (e.g. careers@hackerrank.com) comes from a different domain and keeps its real name.
-			if (company && /^hacker\s?rank\b/i.test(company) && /hackerrankforwork\.(?:com|io)/i.test(from)) {
-				console.log(`[sync] drop assessment-platform name as company: "${company}" subject="${subject}"`);
-				company = null;
-			}
-
-			if (category === 'ignored' || !company) {
-				console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
-				await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: 'ignored' });
-				skipped++;
-				emitProgress();
-				continue;
-			}
-
-			// Deterministic extraction first (reliable, never hallucinates); fall back to the req number the
-			// AI surfaced from a format the regex doesn't model. Both keep the number in the SAME literal form
-			// (as written), so a posting matches whether its confirmation and rejection were read by parser or AI.
-			const externalId = extractJobNumber(subject, body) ?? classification.req_id ?? null;
-			// Real company domain (null for ATS/job-board senders) — an extra safeguard for matching and a
-			// stored signal that disambiguates first-word twins on future syncs.
-			const senderDomain = companyDomainFromSender(from);
-			// A fresh confirmation vs a later status ping. An "applied" email is a confirmation when it
-			// carries confirmation language, or when its subject doesn't read as an update; an update-titled
-			// email with no confirmation language is demoted so it doesn't fill an apply slot.
-			const isConfirmation = category === 'applied'
-				&& (looksLikeConfirmation(subject, body) || !looksLikeStatusUpdate(subject));
-			// A LinkedIn/Indeed fast-apply NOTICE ("your application was sent") — its job-board confirmation
-			// pairs with the company's own confirmation by company+role; a regular confirmation does not (see
-			// findExisting). Only the "_applied" notice counts (see isFastApplyNotice).
-			const isFastApply = isFastApplyNotice(classifier_code);
 			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
