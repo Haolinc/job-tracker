@@ -137,19 +137,27 @@ async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 }
 
 /**
- * Map an async stream through `fn` with bounded concurrency, yielding results in the ORIGINAL input order.
- * Up to `depth` calls run at once (the slow LLM step overlaps across emails), but each result is released in
- * arrival order — so a downstream sequential, order-sensitive consumer (the merge) sees exactly the sequence
- * it would under fully-serial processing. Throughput improves; ordering/grouping is unchanged. Peak memory is
- * the `depth` in-flight results, independent of how many items the stream produces.
+ * Map an async stream through `fn` with bounded concurrency, yielding results in COMPLETION order (whichever
+ * `fn` call finishes first). Up to `depth` calls run at once; when the window is full we wait for ANY one to
+ * finish (not the oldest), so a single slow item never stalls the window — the freed slot is refilled at once,
+ * keeping the backend maximally fed. Order is not preserved: the sole consumer sorts results by date afterward,
+ * so arrival order is irrelevant. Peak memory is the `depth` in-flight results, independent of stream length.
  */
 export async function* mapAhead<T, R>(source: AsyncIterable<T>, depth: number, fn: (item: T) => Promise<R>): AsyncGenerator<R> {
-	const inflight: Promise<R>[] = [];
+	// Key each in-flight promise so the race winner — and only it — can be evicted before the next race.
+	const inflight = new Map<number, Promise<[number, R]>>();
+	let nextKey = 0;
+	const settle = async (): Promise<R> => {
+		const [finishedKey, value] = await Promise.race(inflight.values());   // first to FINISH, not the oldest to start
+		inflight.delete(finishedKey);
+		return value;
+	};
 	for await (const item of source) {
-		inflight.push(fn(item));                            // starts now → up to `depth` run concurrently
-		if (inflight.length >= depth) yield await inflight.shift()!;   // await the OLDEST → preserves order
+		const taskKey = nextKey++;
+		inflight.set(taskKey, fn(item).then((value): [number, R] => [taskKey, value]));   // starts now → up to `depth` run at once
+		if (inflight.size >= depth) yield await settle();
 	}
-	while (inflight.length) yield await inflight.shift()!;
+	while (inflight.size) yield await settle();
 }
 
 router.post('/sync', requireAuth, async (req: Request, res: Response) => {
@@ -193,30 +201,39 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// Emit progress reflecting the counts AFTER the current email is handled — called at each exit point
 		// so added/updated/skipped are always current rather than lagging one email behind.
 		const emitProgress = () => send({ phase: 'progress', processed, total: newIds.length, added, updated, skipped });
-		// Classify with bounded concurrency (SYNC_CONCURRENCY, default 3): the slow LLM step overlaps across
-		// emails, while the merge below stays strictly sequential and in the SAME order as a serial run — so
-		// grouping is byte-identical. A speedup requires Ollama to allow parallel requests (OLLAMA_NUM_PARALLEL).
+		// PHASE 1 — classify with bounded concurrency (SYNC_CONCURRENCY, default 3): the slow LLM step overlaps
+		// across emails (needs OLLAMA_NUM_PARALLEL for an actual speedup). Skips are finalized as they arrive;
+		// merge-eligible results are COLLECTED. Completion order is irrelevant here — phase 2 re-sorts by date.
 		const concurrency = Number(process.env.SYNC_CONCURRENCY) || 3;
-		for await (const r of mapAhead(streamJobMessages(req.session.tokens!, newIds, failedIds), concurrency, classifyOne)) {
+		const pending: Extract<ClassifyResult, { kind: 'merge' }>[] = [];
+		for await (const classified of mapAhead(streamJobMessages(req.session.tokens!, newIds, failedIds), concurrency, classifyOne)) {
 			processed++;
-			// Parsed-by counters: tallied for every email the parser classified (classifier_code present) —
-			// the same set and position as before (after classify, before the no-company skip).
-			if (r.classifierCode === 'linkedin_applied') linkedinApplyParsed++;
-			if (r.classifierCode === 'linkedin_rejected') linkedinRejectParsed++;
-			if (r.classifierCode === 'indeed_applied') indeedParsed++;
-			if (r.classifierCode === 'general_template') generalParsed++;
+			// Parsed-by counters: tallied for every email the parser classified (classifier_code present).
+			if (classified.classifierCode === 'linkedin_applied') linkedinApplyParsed++;
+			if (classified.classifierCode === 'linkedin_rejected') linkedinRejectParsed++;
+			if (classified.classifierCode === 'indeed_applied') indeedParsed++;
+			if (classified.classifierCode === 'general_template') generalParsed++;
 
-			if (r.kind === 'skip') {
-				await db.markEmailSynced({ thread_id: r.threadId, message_id: r.messageId, classified_as: r.classifiedAs });
+			if (classified.kind === 'skip') {
+				await db.markEmailSynced({ thread_id: classified.threadId, message_id: classified.messageId, classified_as: classified.classifiedAs });
 				skipped++;
 				emitProgress();
 				continue;
 			}
+			pending.push(classified);
+			emitProgress();
+		}
 
-			// Merge half — strictly sequential, in input order. Re-bind r's fields under the names the logic
-			// below uses; `email` is a thin stand-in for the two date fields that block reads.
-			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy } = r;
-			const email = { internalDate: r.internalDate, lastMessageDate: r.lastMessageDate };
+		// PHASE 1.5 — sort into a DETERMINISTIC merge order: oldest first (the matcher's "predates"/"nearest"
+		// rules are causal, so oldest→newest is their best case), ties broken by messageId so grouping is
+		// reproducible across resyncs regardless of the order Gmail/concurrency produced results in.
+		pending.sort((a, b) => a.internalDate - b.internalDate || (a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0));
+
+		// PHASE 2 — sequential, order-sensitive merge, in date order. Re-bind the classified result's fields
+		// under the names the logic below uses; `email` is a thin stand-in for the two date fields it reads.
+		for (const classified of pending) {
+			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy } = classified;
+			const email = { internalDate: classified.internalDate, lastMessageDate: classified.lastMessageDate };
 
 			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
 

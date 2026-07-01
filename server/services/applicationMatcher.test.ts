@@ -102,6 +102,61 @@ describe('findExisting', () => {
 		expect(await findExisting('Acme', 'Engineer', null, null, false, false, '2026-02-18')).toBeUndefined();
 	});
 
+	it('a role-bearing rejection claims the OLDEST predating role-less record (forward-order FIFO)', async () => {
+		// The role lives on the rejection, not on the untitled applies, so there's no title to match. With
+		// emails now processed oldest→newest, claim the oldest predating role-less record rather than giving
+		// up. (The old `=== 1` guard split this into a separate rejected card whenever >1 role-less existed.)
+		const older = app({ id: 'OLD', role: 'Unknown Role', status: 'applied', date_applied: '2026-02-10' });
+		const newer = app({ id: 'NEW', role: 'Unknown Role', status: 'applied', date_applied: '2026-02-14' });
+		setExisting([newer, older]);   // db order must not matter
+		expect(await findExisting('Acme', 'Engineer', null, null, false, false, '2026-02-20')).toMatchObject({ id: 'OLD' });
+	});
+
+	it('two untitled applies + two role-bearing rejections pair FIFO oldest→newest', async () => {
+		// The regression case end-to-end: older rejection → older application, newer rejection → newer one.
+		// The first claim renames its record (no longer role-less), so the second claims the next-oldest.
+		const store: Application[] = [];
+		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
+		const seq: { role: string | null; cat: 'applied' | 'rejected'; date: string; conf: boolean }[] = [
+			{ role: null,       cat: 'applied',  date: '2026-02-01', conf: true  },  // apply A (untitled)
+			{ role: null,       cat: 'applied',  date: '2026-02-05', conf: true  },  // apply B (untitled)
+			{ role: 'Engineer', cat: 'rejected', date: '2026-02-20', conf: false },  // reject A (older rejection)
+			{ role: 'Analyst',  cat: 'rejected', date: '2026-02-25', conf: false },  // reject B (newer rejection)
+		];
+		let ts = 0;
+		for (const e of seq) {
+			ts++;
+			const existing = await findExisting('Acme', e.role, null, null, e.conf, false, e.date);
+			const ref = { messageId: `${e.cat}-${e.date}`, category: e.cat, date: e.date };
+			if (existing) {
+				if (ts >= existing.last_activity_ts) { existing.status = e.cat; existing.last_activity_ts = ts; }
+				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
+				if (existing.role === 'Unknown Role' && e.role) existing.role = e.role;
+				existing.emails.push(ref);
+			} else {
+				store.push(app({ role: e.role ?? 'Unknown Role', status: e.cat, date_applied: e.date, last_activity_ts: ts, confirmed: e.conf, emails: [ref] }));
+			}
+		}
+		const summary = store.map(a => `${a.role}/${a.status}:[${a.emails.map(x => x.category).join(',')}]`).sort();
+		expect(store.length).toBe(2);
+		expect(summary).toEqual(['Analyst/rejected:[applied,rejected]', 'Engineer/rejected:[applied,rejected]']);
+	});
+
+	it('cross-window: role-less applies backfill awaiting rejects oldest-first (FIFO)', async () => {
+		// Two role-bearing rejections were stored as AWAITING records in an earlier (narrower) sync; their
+		// applies only arrive now, in a wider sync. Processed oldest-first, each apply backfills the OLDEST
+		// awaiting reject — older apply → older rejection.
+		const store = [
+			app({ id: 'RA', role: 'Engineer', status: 'rejected', date_applied: '2026-06-20', awaiting_application: true }),
+			app({ id: 'RB', role: 'Analyst',  status: 'rejected', date_applied: '2026-06-22', awaiting_application: true }),
+		];
+		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
+		const applyA = await findExisting('Acme', null, null, null, true, false, '2026-05-10');
+		expect(applyA).toMatchObject({ id: 'RA' });               // older apply → oldest awaiting reject
+		applyA!.awaiting_application = false; applyA!.confirmed = true;   // route fills the slot
+		expect(await findExisting('Acme', null, null, null, true, false, '2026-05-15')).toMatchObject({ id: 'RB' });
+	});
+
 	it('an interview joins a same-title awaiting record even when that record postdates it', async () => {
 		// rejected@Feb-18 created an awaiting record; an older interview@Feb-16 is still a round of THAT
 		// application — it merges in rather than stranding as a separate record (the route keeps status rejected).
