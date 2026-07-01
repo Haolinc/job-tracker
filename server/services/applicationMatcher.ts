@@ -129,10 +129,13 @@ export async function findExisting(company: string, role: string | null, externa
 		// status value itself is resolved on the route; duplicate notices collapse onto the same record.
 		const attachable = postingMatches.filter(app => appliedBefore(app) || app.awaiting_application);
 		if (attachable.length) return attachable.reduce((a, b) => (b.date_applied ?? '') > (a.date_applied ?? '') ? b : a);
-		// …or it names the role on a lone still-role-less record that PREDATES it (a LATER untitled application
-		// is a different posting an older rejection must not rename).
-		const stillRoleless = companyApps.filter(isRoleless);
-		if (stillRoleless.length === 1 && appliedBefore(stillRoleless[0])) return stillRoleless[0];
+		// …or it names the role on a still-role-less record that PREDATES it. Emails are now processed
+		// oldest→newest, so any earlier role-less apply already exists when this status arrives; claim the
+		// OLDEST predating one. Merging renames it (no longer role-less), so the NEXT rejection claims the
+		// next-oldest — pairing an older rejection to the older application (FIFO). `appliedBefore` still
+		// bars renaming a LATER application, and the strong req/role matches above always win first.
+		const stillRoleless = companyApps.filter(app => isRoleless(app) && appliedBefore(app));
+		if (stillRoleless.length) return oldest(stillRoleless);
 		return undefined;
 	}
 	// Incoming email has NO role.
