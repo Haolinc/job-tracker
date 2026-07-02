@@ -4,7 +4,7 @@
 	"private": true,
 	"description": "Dev launcher: ensures Ollama is up, then runs the server and client together in one terminal.",
 	"scripts": {
-		"predev": "node scripts/ensure-ollama.mjs",
+		"predev": "node scripts/ensure-mongo.mjs && node scripts/ensure-ollama.mjs",
 		"dev": "concurrently -k -n server,client -c green,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
 		"install:all": "npm install && npm --prefix server install && npm --prefix client install"
 	},
