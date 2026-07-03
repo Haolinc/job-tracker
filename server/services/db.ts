@@ -1,239 +1,317 @@
-import mongoose, { Schema } from 'mongoose';
+import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 import type { Application, CreateApplicationData, MarkSyncedData, EmailRef } from '../types';
 
-// ── Application ────────────────────────────────────────────────────────────
+// ── Storage ─────────────────────────────────────────────────────────────────
+// Embedded SQLite (better-sqlite3, synchronous) — one file, no server process. The exported API keeps the
+// same async signatures it had on Mongoose so no caller changes; the awaits just resolve immediately.
+// `emails` is stored as a JSON column: an application and its email refs are a single aggregate (always
+// read/written together, never queried independently), so splitting them into a child table buys nothing.
 
-interface EmailRefDoc {
-	messageId: string;
-	category: string;
-	date: string;
-	fast_apply?: boolean;
+// Repo-root data/ is gitignored, so the database can never be committed. DB_PATH overrides for tests/tools.
+const databaseFilePath = () => process.env.DB_PATH || path.resolve(__dirname, '../../data/job-tracker.db');
+
+let database: Database.Database | null = null;
+
+/** Open the database file (creating it and its directory if needed) — connection concerns only, no schema. */
+function openDatabaseFile(filePath: string): Database.Database {
+	if (filePath !== ':memory:') mkdirSync(path.dirname(filePath), { recursive: true });
+	const connection = new Database(filePath);
+	connection.pragma('journal_mode = WAL');
+	// The documented WAL pairing: skip the per-commit fsync (FULL) — WAL stays corruption-proof and an app
+	// crash loses nothing; only an OS/power failure can drop the last few commits. Matters because a sync's
+	// merge phase issues hundreds of small sequential commits.
+	connection.pragma('synchronous = NORMAL');
+	return connection;
 }
 
-interface AppDoc {
-	_id: mongoose.Types.ObjectId;
-	company: string;
-	role: string;
-	status: string;
-	interview_step: string | null;
-	reached_interview: boolean;
-	date_applied: string | null;
-	last_activity: string | null;
-	last_activity_ts: number;
-	job_url: string | null;
-	notes: string | null;
-	notes_source: string;
-	external_id: string | null;
-	edited: boolean;
-	detected_by: string | null;
-	company_domain: string | null;
-	awaiting_application: boolean;
-	fast_apply: boolean;
-	confirmed: boolean;
-	source: string;
-	gmail_thread_id: string | null;
-	account: string | null;
-	emails: EmailRefDoc[];
-	created_at: Date;
-	updated_at: Date;
+// ── Schema ──────────────────────────────────────────────────────────────────
+
+/** An applications row as SQLite returns it: booleans as 0/1, the emails array as JSON text. */
+interface ApplicationRow {
+	id: number; company: string; role: string; status: string; interview_step: string | null;
+	reached_interview: number; date_applied: string | null; last_activity: string | null;
+	last_activity_ts: number; job_url: string | null; notes: string | null; notes_source: string;
+	external_id: string | null; edited: number; detected_by: string | null; company_domain: string | null;
+	awaiting_application: number; fast_apply: number; confirmed: number; source: string;
+	gmail_thread_id: string | null; account: string | null; emails: string;
+	created_at: string; updated_at: string;
 }
 
-// Embedded subdoc — no own _id, just the three fields needed to link back to the Gmail message.
-const emailRefSchema = new Schema<EmailRefDoc>({
-	messageId: { type: String, required: true },
-	category:  { type: String, required: true },
-	date:      { type: String, required: true },
-	fast_apply: { type: Boolean, default: false },
-}, { _id: false });
+// The single source of truth for the applications table: every column (id excepted) with its SQL type,
+// compile-time-bound to ApplicationRow by the `satisfies` — add a field to the interface and tsc demands
+// a line here (and vice versa). The CREATE TABLE, the INSERT, and the update whitelist all derive from
+// this record, so they can never drift out of sync with each other or with the type.
+const APPLICATION_COLUMN_TYPES = {
+	company:              'TEXT NOT NULL',
+	role:                 'TEXT NOT NULL',
+	status:               "TEXT NOT NULL DEFAULT 'applied'",
+	interview_step:       'TEXT',
+	reached_interview:    'INTEGER NOT NULL DEFAULT 0',
+	date_applied:         'TEXT',
+	last_activity:        'TEXT',
+	last_activity_ts:     'INTEGER NOT NULL DEFAULT 0',
+	job_url:              'TEXT',
+	notes:                'TEXT',
+	notes_source:         "TEXT NOT NULL DEFAULT 'auto'",
+	external_id:          'TEXT',
+	edited:               'INTEGER NOT NULL DEFAULT 0',
+	detected_by:          'TEXT',
+	company_domain:       'TEXT',
+	awaiting_application: 'INTEGER NOT NULL DEFAULT 0',
+	fast_apply:           'INTEGER NOT NULL DEFAULT 0',
+	confirmed:            'INTEGER NOT NULL DEFAULT 0',
+	source:               "TEXT NOT NULL DEFAULT 'manual'",
+	gmail_thread_id:      'TEXT',
+	account:              'TEXT',
+	emails:               "TEXT NOT NULL DEFAULT '[]'",
+	created_at:           'TEXT NOT NULL',
+	updated_at:           'TEXT NOT NULL',
+} as const satisfies Record<Exclude<keyof ApplicationRow, 'id'>, string>;
 
-const appSchema = new Schema<AppDoc>({
-	company:         { type: String, required: true },
-	role:            { type: String, required: true },
-	status:          { type: String, default: 'applied' },
-	interview_step:  { type: String, default: null },
-	reached_interview: { type: Boolean, default: false },
-	date_applied:    { type: String, default: null },
-	last_activity:   { type: String, default: null },
-	last_activity_ts: { type: Number, default: 0 },
-	job_url:         { type: String, default: null },
-	notes:           { type: String, default: null },
-	notes_source:    { type: String, default: 'auto' },
-	external_id:     { type: String, index: true, default: null },
-	edited:          { type: Boolean, default: false },
-	detected_by:     { type: String, default: null },
-	company_domain:  { type: String, index: true, default: null },
-	awaiting_application: { type: Boolean, default: false },
-	fast_apply:      { type: Boolean, default: false },
-	confirmed:       { type: Boolean, default: false },
-	source:          { type: String, default: 'manual' },
-	gmail_thread_id: { type: String, default: null },
-	account:         { type: String, default: null },
-	emails:          { type: [emailRefSchema], default: [] },
-}, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
+type ApplicationColumn = keyof typeof APPLICATION_COLUMN_TYPES;
+const APPLICATION_COLUMNS = Object.keys(APPLICATION_COLUMN_TYPES) as ApplicationColumn[];
 
-const AppModel = mongoose.model<AppDoc>('Application', appSchema);
+// Timestamps are system-managed (updated_at is bumped by every write); everything else is writable
+// via update()/updateWithEmail(). Callers whitelist at the route level too; this is the data layer's
+// own guarantee that no unknown key can reach SQL as a column name.
+const MUTABLE_COLUMNS = new Set<string>(APPLICATION_COLUMNS.filter(column => column !== 'created_at' && column !== 'updated_at'));
 
-function toApp(doc: AppDoc): Application {
+/** Create the tables and indexes (idempotent DDL) — separate from opening so each step has one job. */
+function createSchema(connection: Database.Database): void {
+	connection.exec(`
+		CREATE TABLE IF NOT EXISTS applications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			${APPLICATION_COLUMNS.map(column => `${column} ${APPLICATION_COLUMN_TYPES[column]}`).join(',\n\t\t\t')}
+		);
+		CREATE INDEX IF NOT EXISTS idx_apps_company_domain ON applications(company_domain);
+		CREATE INDEX IF NOT EXISTS idx_apps_external_id    ON applications(external_id);
+		CREATE INDEX IF NOT EXISTS idx_apps_company        ON applications(company COLLATE NOCASE);
+		CREATE TABLE IF NOT EXISTS synced_emails (
+			message_id    TEXT PRIMARY KEY,
+			thread_id     TEXT NOT NULL,
+			classified_as TEXT,
+			synced_at     TEXT NOT NULL
+		);
+	`);
+}
+
+/**
+ * Open the database and ensure its schema exists. Call ONCE at process startup (index.ts, scripts, test
+ * setup) before anything asks for the handle — the explicit call makes the boot order visible instead of
+ * hiding creation behind whichever caller touches the database first. Throws on a second call.
+ */
+export function initializeDatabase(): Database.Database {
+	if (database) throw new Error('Database already initialized — initializeDatabase() must be called exactly once');
+	database = openDatabaseFile(databaseFilePath());
+	createSchema(database);
+	return database;
+}
+
+/** The initialized handle. Pure accessor — never creates; throws when initializeDatabase() hasn't run. */
+export function getDatabase(): Database.Database {
+	if (!database) throw new Error('Database not initialized — call initializeDatabase() at startup first');
+	return database;
+}
+
+// ── Row mapping ─────────────────────────────────────────────────────────────
+
+// SQLite has no boolean/array types: booleans ↔ 0/1, the emails array ↔ JSON text.
+const toStored = (value: unknown): unknown => {
+	if (typeof value === 'boolean') return value ? 1 : 0;
+	if (Array.isArray(value)) return JSON.stringify(value);
+	return value;
+};
+
+function toApplication(row: ApplicationRow): Application {
 	return {
-		id:              doc._id.toString(),
-		company:         doc.company,
-		role:            doc.role,
-		status:          doc.status as Application['status'],
-		interview_step:  (doc.interview_step ?? null) as Application['interview_step'],
-		reached_interview: doc.reached_interview ?? false,
-		date_applied:    doc.date_applied,
-		last_activity:   doc.last_activity,
-		last_activity_ts: doc.last_activity_ts ?? 0,
-		job_url:         doc.job_url,
-		notes:           doc.notes,
-		notes_source:    (doc.notes_source ?? 'auto') as Application['notes_source'],
-		external_id:     doc.external_id ?? null,
-		edited:          doc.edited ?? false,
-		detected_by:     (doc.detected_by ?? null) as Application['detected_by'],
-		company_domain:  doc.company_domain ?? null,
-		awaiting_application: doc.awaiting_application ?? false,
-		fast_apply:      doc.fast_apply ?? false,
-		confirmed:       doc.confirmed ?? false,
-		source:          doc.source as Application['source'],
-		gmail_thread_id: doc.gmail_thread_id,
-		account:         doc.account ?? null,
-		emails:          (doc.emails ?? []).map(e => ({
-			messageId: e.messageId,
-			category:  e.category as EmailRef['category'],
-			date:      e.date,
-			fast_apply: e.fast_apply ?? false,
-		})),
-		created_at:      doc.created_at.toISOString(),
-		updated_at:      doc.updated_at.toISOString(),
+		id:              String(row.id),
+		company:         row.company,
+		role:            row.role,
+		status:          row.status as Application['status'],
+		interview_step:  row.interview_step as Application['interview_step'],
+		reached_interview: !!row.reached_interview,
+		date_applied:    row.date_applied,
+		last_activity:   row.last_activity,
+		last_activity_ts: row.last_activity_ts,
+		job_url:         row.job_url,
+		notes:           row.notes,
+		notes_source:    row.notes_source as Application['notes_source'],
+		external_id:     row.external_id,
+		edited:          !!row.edited,
+		detected_by:     row.detected_by as Application['detected_by'],
+		company_domain:  row.company_domain,
+		awaiting_application: !!row.awaiting_application,
+		fast_apply:      !!row.fast_apply,
+		confirmed:       !!row.confirmed,
+		source:          row.source as Application['source'],
+		gmail_thread_id: row.gmail_thread_id,
+		account:         row.account,
+		// Normalize fast_apply on read — the Mongo schema defaulted it per ref, so callers always saw it.
+		emails:          (JSON.parse(row.emails) as EmailRef[]).map(emailRef => ({ ...emailRef, fast_apply: emailRef.fast_apply ?? false })),
+		created_at:      row.created_at,
+		updated_at:      row.updated_at,
 	};
 }
 
-// ── Synced Emails ──────────────────────────────────────────────────────────
-
-const syncedEmailSchema = new Schema({
-	thread_id:     { type: String, required: true },           // not unique — many messages share a thread
-	message_id:    { type: String, unique: true, required: true }, // dedup key: one record per Gmail message
-	classified_as: String,
-	synced_at:     { type: Date, default: () => new Date() },
-});
-
-const SyncedEmailModel = mongoose.model('SyncedEmail', syncedEmailSchema);
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-// Escape special regex characters in user-supplied strings to prevent ReDoS
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// ── Connection ─────────────────────────────────────────────────────────────
-
-export const connect = async (): Promise<typeof mongoose> => {
-	const m = await mongoose.connect(process.env.MONGODB_URI!);
-
-	// Migration 1: drop old thread_id unique index (replaced by message_id unique index).
-	try {
-		await SyncedEmailModel.collection.dropIndex('thread_id_1');
-	} catch { /* already dropped or never existed */ }
-
-	// Migration 2: drop the retired lookup_key index — matching now gathers candidates by company
-	// domain/name and resolves the role in memory, so the pre-computed key is no longer used.
-	try {
-		await AppModel.collection.dropIndex('lookup_key_1');
-	} catch { /* already dropped or never existed */ }
-
-	return m;
-};
+const getRow = (id: string): ApplicationRow | undefined =>
+	getDatabase().prepare('SELECT * FROM applications WHERE id = ?').get(Number(id)) as ApplicationRow | undefined;
 
 // ── DB Functions ───────────────────────────────────────────────────────────
 
 interface GetAllFilters { search?: string; status?: string; }
 
+// Escape LIKE wildcards in user-supplied search text; queries pair this with ESCAPE '\'.
+const escapeLike = (text: string) => text.replace(/[\\%_]/g, '\\$&');
+
 export const getAll = async (filters: GetAllFilters = {}): Promise<Application[]> => {
-	const query: Record<string, unknown> = {};
+	const where: string[] = [];
+	const params: unknown[] = [];
 	if (filters.search) {
-		const re = new RegExp(escapeRegex(filters.search), 'i');
-		query.$or = [{ company: re }, { role: re }];
+		where.push("(company LIKE ? ESCAPE '\\' OR role LIKE ? ESCAPE '\\')");
+		const pattern = `%${escapeLike(filters.search)}%`;
+		params.push(pattern, pattern);
 	}
-	if (filters.status) query.status = filters.status;
-	const docs = await AppModel.find(query).sort({ updated_at: -1 }).lean<AppDoc[]>();
-	return docs.map(toApp);
+	if (filters.status) {
+		where.push('status = ?');
+		params.push(filters.status);
+	}
+	const sql = `SELECT * FROM applications ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY updated_at DESC, id DESC`;
+	return (getDatabase().prepare(sql).all(...params) as ApplicationRow[]).map(toApplication);
 };
+
+// Columns, placeholders, and (in create below) parameters all read from APPLICATION_COLUMNS in the same
+// order, so nothing can slip out of alignment. Column names come from the literal above, never from input.
+const INSERT_APPLICATION_SQL = `
+	INSERT INTO applications (${APPLICATION_COLUMNS.join(', ')})
+	VALUES (${APPLICATION_COLUMNS.map(() => '?').join(', ')})
+`;
 
 export const create = async (data: CreateApplicationData): Promise<Application> => {
-	const doc = await AppModel.create(data);
-	const lean = doc.toObject() as AppDoc;
-	return toApp(lean);
+	const now = new Date().toISOString();
+	// The full column→value record for the new row: CreateApplicationData's optionals get their defaults
+	// here. Typing it by ApplicationColumn makes tsc demand a value for every column — a new field can't
+	// be forgotten silently.
+	const columnValues: Record<ApplicationColumn, unknown> = {
+		company:              data.company,
+		role:                 data.role,
+		status:               data.status,
+		interview_step:       data.interview_step,
+		reached_interview:    data.reached_interview ?? false,
+		date_applied:         data.date_applied,
+		last_activity:        data.last_activity,
+		last_activity_ts:     data.last_activity_ts ?? 0,
+		job_url:              data.job_url,
+		notes:                data.notes,
+		notes_source:         data.notes_source ?? 'auto',
+		external_id:          data.external_id ?? null,
+		edited:               data.edited ?? false,
+		detected_by:          data.detected_by ?? null,
+		company_domain:       data.company_domain ?? null,
+		awaiting_application: data.awaiting_application ?? false,
+		fast_apply:           data.fast_apply ?? false,
+		confirmed:            data.confirmed ?? false,
+		source:               data.source,
+		gmail_thread_id:      data.gmail_thread_id,
+		account:              data.account ?? null,
+		emails:               data.emails ?? [],
+		created_at:           now,
+		updated_at:           now,
+	};
+	const result = getDatabase().prepare(INSERT_APPLICATION_SQL)
+		.run(...APPLICATION_COLUMNS.map(column => toStored(columnValues[column])));
+	return toApplication(getRow(String(result.lastInsertRowid))!);
 };
 
+/** SET clause + params for a whitelisted update, always bumping updated_at. Throws on an unknown column. */
+function buildSet(data: Record<string, unknown>): { clause: string; params: unknown[] } {
+	const columns = Object.keys(data);
+	for (const column of columns) if (!MUTABLE_COLUMNS.has(column)) throw new Error(`Unknown column: ${column}`);
+	return {
+		clause: [...columns.map(column => `${column} = ?`), 'updated_at = ?'].join(', '),
+		params: [...columns.map(column => toStored(data[column])), new Date().toISOString()],
+	};
+}
+
 export const update = async (id: string, data: Record<string, unknown>): Promise<Application> => {
-	const doc = await AppModel.findByIdAndUpdate(id, { $set: data }, { returnDocument: 'after' }).lean<AppDoc>();
-	if (!doc) throw new Error('Not found');
-	return toApp(doc);
+	const { clause, params } = buildSet(data);
+	const result = getDatabase().prepare(`UPDATE applications SET ${clause} WHERE id = ?`).run(...params, Number(id));
+	if (result.changes === 0) throw new Error('Not found');
+	return toApplication(getRow(id)!);
 };
 
 export const remove = async (id: string): Promise<boolean> => {
-	const doc = await AppModel.findByIdAndDelete(id).lean();
-	return !!doc;
+	return getDatabase().prepare('DELETE FROM applications WHERE id = ?').run(Number(id)).changes > 0;
 };
 
 /**
- * Apply field updates to an application AND append a Gmail message reference in ONE round-trip. The ref
- * is appended only when its messageId isn't already present (deduped in the aggregation pipeline), so
- * re-processing the same email never double-records it — while the field updates still apply either way.
+ * Apply field updates to an application AND append a Gmail message reference in ONE transaction. The ref
+ * is appended only when its messageId isn't already present, so re-processing the same email never
+ * double-records it — while the field updates still apply either way.
  */
-export const updateWithEmail = async (id: string, updates: Record<string, unknown>, ref: EmailRef): Promise<void> => {
-	// An aggregation-pipeline update so the conditional $push can read the existing array. Mongoose 9
-	// requires updatePipeline:true to accept the array form.
-	await AppModel.updateOne({ _id: id }, [
-		...(Object.keys(updates).length ? [{ $set: updates }] : []),
-		{ $set: { emails: { $cond: [
-			{ $in: [ref.messageId, { $ifNull: ['$emails.messageId', []] }] },
-			'$emails',
-			{ $concatArrays: [{ $ifNull: ['$emails', []] }, [ref]] },
-		] } } },
-	], { updatePipeline: true });
+export const updateWithEmail = async (id: string, updates: Record<string, unknown>, emailRef: EmailRef): Promise<void> => {
+	getDatabase().transaction(() => {
+		const row = getRow(id);
+		if (!row) return;   // matches the previous updateOne semantics: a missing id is a silent no-op
+		const emails = JSON.parse(row.emails) as EmailRef[];
+		const merged = emails.some(existingRef => existingRef.messageId === emailRef.messageId)
+			? { ...updates }
+			: { ...updates, emails: [...emails, emailRef] };
+		const { clause, params } = buildSet(merged);
+		getDatabase().prepare(`UPDATE applications SET ${clause} WHERE id = ?`).run(...params, row.id);
+	})();
 };
 
 /**
  * Candidate name variants: applications whose company starts with `firstWord`, bounded so the next
- * character isn't alphanumeric. `^Lila(?![a-z0-9])` matches "Lila" and "Lila Sciences" but not
- * "Lilac"; the caller then confirms with a full word-prefix check. A negative lookahead is used
- * instead of `\b` so a first word ENDING in punctuation still matches — `\b` has no word boundary
- * after the trailing "." of "U.S.", which silently dropped every "U.S. Bank" candidate.
+ * character isn't alphanumeric — "Lila" matches "Lila" and "Lila Sciences" but not "Lilac"; the caller
+ * then confirms with a full word-prefix check. The LIKE prefix does the indexed narrowing; the negative
+ * lookahead runs in JS because SQLite has no regex. A lookahead is used instead of `\b` so a first word
+ * ENDING in punctuation still matches — `\b` has no word boundary after the trailing "." of "U.S.",
+ * which silently dropped every "U.S. Bank" candidate.
  */
 export const findByCompanyFirstWord = async (firstWord: string): Promise<Application[]> => {
-	const docs = await AppModel.find({
-		company: new RegExp(`^${escapeRegex(firstWord)}(?![a-z0-9])`, 'i'),
-	}).lean<AppDoc[]>();
-	return docs.map(toApp);
+	const rows = getDatabase()
+		.prepare("SELECT * FROM applications WHERE company LIKE ? ESCAPE '\\'")
+		.all(`${escapeLike(firstWord)}%`) as ApplicationRow[];
+	const escapedFirstWord = firstWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const boundedFirstWord = new RegExp(`^${escapedFirstWord}(?![a-z0-9])`, 'i');
+	return rows.filter(row => boundedFirstWord.test(row.company)).map(toApplication);
 };
 
 /** All applications from the same real company domain — the strongest dedup key (one domain = one employer). */
 export const findByCompanyDomain = async (domain: string): Promise<Application[]> => {
-	const docs = await AppModel.find({ company_domain: domain }).lean<AppDoc[]>();
-	return docs.map(toApp);
+	const rows = getDatabase().prepare('SELECT * FROM applications WHERE company_domain = ?').all(domain) as ApplicationRow[];
+	return rows.map(toApplication);
 };
 
 export const getSyncedMessageIds = async (messageIds: string[]): Promise<Set<string>> => {
-	const docs = await SyncedEmailModel
-		.find({ message_id: { $in: messageIds } }, 'message_id')
-		.lean<{ message_id: string }[]>();
-	return new Set(docs.map(d => d.message_id));
+	const synced = new Set<string>();
+	// Chunked IN lists — SQLite caps bound parameters per statement.
+	for (let offset = 0; offset < messageIds.length; offset += 500) {
+		const chunk = messageIds.slice(offset, offset + 500);
+		const rows = getDatabase()
+			.prepare(`SELECT message_id FROM synced_emails WHERE message_id IN (${chunk.map(() => '?').join(',')})`)
+			.all(...chunk) as { message_id: string }[];
+		for (const row of rows) synced.add(row.message_id);
+	}
+	return synced;
 };
 
 export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
-	await SyncedEmailModel.updateOne(
-		{ message_id: data.message_id },
-		{ $setOnInsert: { thread_id: data.thread_id, classified_as: data.classified_as } },
-		{ upsert: true },
-	);
+	// OR IGNORE preserves the first record for a message (same as the previous $setOnInsert upsert).
+	getDatabase().prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)')
+		.run(data.message_id, data.thread_id, data.classified_as, new Date().toISOString());
 };
 
-/** Wipe all applications AND the synced-email log so the next sync re-processes everything. */
+/** Wipe all applications AND the synced-email log so the next sync re-processes everything. One
+ *  transaction: a crash between the two deletes would otherwise leave emails marked synced with no
+ *  application records — a state the sync skips over and can never repair. */
 export const clearAll = async (): Promise<{ applications: number; syncedEmails: number }> => {
-	const [apps, emails] = await Promise.all([
-		AppModel.deleteMany({}),
-		SyncedEmailModel.deleteMany({}),
-	]);
-	return { applications: apps.deletedCount, syncedEmails: emails.deletedCount };
+	return getDatabase().transaction(() => {
+		const deletedApplications = getDatabase().prepare('DELETE FROM applications').run().changes;
+		const deletedSyncedEmails = getDatabase().prepare('DELETE FROM synced_emails').run().changes;
+		return { applications: deletedApplications, syncedEmails: deletedSyncedEmails };
+	})();
 };
-
