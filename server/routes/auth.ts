@@ -18,8 +18,8 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 	try {
 		const tokens = await exchangeCode(code);
 		req.session.tokens = tokens;
-		// Explicitly save before redirecting — MongoStore saves asynchronously, and the
-		// browser may follow the redirect before the session is persisted, causing a
+		// Explicitly save before redirecting — express-session only auto-saves when the response
+		// ends, so the browser may follow the redirect before the session is persisted, causing a
 		// phantom "not connected" state on the very next request.
 		req.session.save((err) => {
 			if (err) {
