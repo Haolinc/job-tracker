@@ -6,15 +6,15 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 
-const HOST = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
-const PING = `${HOST}/api/tags`;   // cheap authenticated-free endpoint that 200s once the daemon is up
+const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+const HEALTH_CHECK_URL = `${OLLAMA_BASE_URL}/api/tags`;   // cheap auth-free endpoint that 200s once the daemon is up
 
-const log = (msg) => console.log(`[ensure-ollama] ${msg}`);
+const log = (message) => console.log(`[ensure-ollama] ${message}`);
 
 /** True when the Ollama HTTP API answers. */
 async function isUp() {
 	try {
-		return (await fetch(PING, { signal: AbortSignal.timeout(1500) })).ok;
+		return (await fetch(HEALTH_CHECK_URL, { signal: AbortSignal.timeout(1500) })).ok;
 	} catch {
 		return false;   // connection refused / timeout → not up
 	}
@@ -22,19 +22,19 @@ async function isUp() {
 
 /** The resolved `ollama` executable path if it's on PATH, else null. */
 function resolveOllama() {
-	const probe = process.platform === 'win32' ? 'where' : 'which';
-	const res = spawnSync(probe, ['ollama'], { encoding: 'utf8' });
-	if (res.status !== 0) return null;
-	return res.stdout.split(/\r?\n/).find(Boolean)?.trim() ?? null;
+	const probeCommand = process.platform === 'win32' ? 'where' : 'which';
+	const probeResult = spawnSync(probeCommand, ['ollama'], { encoding: 'utf8' });
+	if (probeResult.status !== 0) return null;
+	return probeResult.stdout.split(/\r?\n/).find(Boolean)?.trim() ?? null;
 }
 
 if (await isUp()) {
-	log(`already running at ${HOST}`);
+	log(`already running at ${OLLAMA_BASE_URL}`);
 	process.exit(0);
 }
 
-const bin = resolveOllama();
-if (!bin) {
+const ollamaExecutable = resolveOllama();
+if (!ollamaExecutable) {
 	log('not found on PATH — continuing without it. LLM classification will be unavailable.');
 	log('install it from https://ollama.com to enable email classification.');
 	process.exit(0);
@@ -42,13 +42,13 @@ if (!bin) {
 
 log('not running — starting `ollama serve`…');
 // Detached + unref so the daemon outlives this preflight (and the dev servers) as a shared background service.
-spawn(bin, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+spawn(ollamaExecutable, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 
 const deadline = Date.now() + 20_000;
 while (Date.now() < deadline) {
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	if (await isUp()) {
-		log(`up at ${HOST}`);
+		log(`up at ${OLLAMA_BASE_URL}`);
 		process.exit(0);
 	}
 }

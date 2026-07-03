@@ -28,15 +28,14 @@ email classification runs **locally** via Ollama, so your inbox content never le
 | Layer | Stack |
 |---|---|
 | Client | React + Vite + Tailwind, axios |
-| Server | Node + Express (TypeScript), Mongoose |
-| Database | MongoDB |
+| Server | Node + Express (TypeScript) |
+| Database | Embedded SQLite (better-sqlite3) — no database server needed |
 | Auth / email | Google OAuth 2.0 + Gmail API (read-only) |
 | Classification | **Ollama** running `qwen2.5:7b` (local) |
 
 ## Prerequisites
 
 - **Node.js** (18+) and **npm**
-- **MongoDB** running locally (or a connection string to a remote instance)
 - **[Ollama](https://ollama.com)** installed and running, with the model pulled:
   ```bash
   ollama pull qwen2.5:7b
@@ -54,24 +53,17 @@ cp .env.example server/.env
 
 ### 2. Install dependencies
 ```bash
-cd server && npm install
-cd ../client && npm install
+npm run install:all   # root + server + client
 ```
 
-### 3. Make sure MongoDB and Ollama are running
+### 3. Run the app (one terminal)
 ```bash
-ollama serve            # if not already running as a service
-ollama pull qwen2.5:7b  # one-time
+npm run dev   # starts Ollama if needed, then the backend and frontend together
 ```
-
-### 4. Run the app (two terminals)
 ```bash
-# Terminal 1 — backend
-cd server && npm run dev
-
-# Terminal 2 — frontend
-cd client && npm run dev
+ollama pull qwen2.5:7b  # one-time, before the first sync
 ```
+(The two parts can still be run separately: `cd server && npm run dev` and `cd client && npm run dev`.)
 
 Open http://localhost:5173, click **Connect Gmail**, then **Sync**.
 
@@ -90,7 +82,7 @@ Copy `.env.example` to `server/.env` and fill in:
 
 | Variable | Description |
 |---|---|
-| `MONGODB_URI` | MongoDB connection string (e.g. `mongodb://localhost:27017/job-tracker`) |
+| `DB_PATH` | Optional — SQLite file location (default `data/job-tracker.db`) |
 | `PORT` | Backend port (default `3001`) |
 | `CLIENT_URL` | Frontend origin (default `http://localhost:5173`) |
 | `GOOGLE_CLIENT_ID` | From Google Cloud Console |
@@ -106,5 +98,5 @@ Copy `.env.example` to `server/.env` and fill in:
 - The Gmail scope is **read-only** — the app never modifies or sends mail.
 - Re-syncing is cheap: already-processed messages are skipped before any body is downloaded, so widening
   the scan window only backfills newly in-range emails.
-- All data lives in your local MongoDB; there is no per-account separation — everything you sync (from any
+- All data lives in a local SQLite file (`data/job-tracker.db`, gitignored); there is no per-account separation — everything you sync (from any
   connected Gmail account) accumulates in one board and dedups together.
