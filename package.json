@@ -6,9 +6,13 @@
 	"scripts": {
 		"predev": "node scripts/ensure-ollama.mjs",
 		"dev": "concurrently -k -n server,client -c green,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
-		"install:all": "npm install && npm --prefix server install && npm --prefix client install"
+		"install:all": "npm install && npm --prefix server install && npm --prefix client install",
+		"desktop:build": "npm --prefix client run build && tsc -p desktop && tsc -p desktop/tsconfig.renderer.json",
+		"desktop": "npm run desktop:build && electron desktop/dist/main.js"
 	},
 	"devDependencies": {
-		"concurrently": "^9.1.0"
+		"concurrently": "^9.1.0",
+		"electron": "^43.0.0",
+		"typescript": "^6.0.3"
 	}
 }

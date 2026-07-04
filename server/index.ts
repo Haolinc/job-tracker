@@ -12,6 +12,8 @@ for (const key of required) {
 	}
 }
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
@@ -53,6 +55,17 @@ app.use('/api/auth', authRouter);
 app.use('/api/gmail', gmailRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+
+// Single-process mode: when a client build exists, serve it from this server (same origin, so the client's
+// relative /api baseURL just works). Dev workflow is unchanged — Vite on :5173 proxies /api here and this
+// block is simply unused; without a build (fresh clone, dev-only), the server is API-only as before.
+const clientDistPath = path.resolve(__dirname, '../client/dist');
+if (existsSync(clientDistPath)) {
+	app.use(express.static(clientDistPath));
+	// SPA fallback: any non-API GET serves index.html so client-side routes survive a refresh.
+	app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(clientDistPath, 'index.html')));
+	console.log('Serving client build from client/dist');
+}
 
 const PORT = process.env.PORT || 3001;
 
