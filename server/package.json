@@ -5,6 +5,8 @@
 	"scripts": {
 		"start": "tsx index.ts",
 		"dev": "tsx watch index.ts",
+		"build": "tsc -p tsconfig.build.json",
+		"start:compiled": "node dist/index.js",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
 		"typecheck": "tsc --noEmit",

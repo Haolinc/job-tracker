@@ -3,16 +3,23 @@
 	"version": "1.0.0",
 	"private": true,
 	"description": "Dev launcher: ensures Ollama is up, then runs the server and client together in one terminal.",
+	"author": "haolin <haolin5175@gmail.com>",
+	"main": "desktop/dist/main.js",
 	"scripts": {
 		"predev": "node scripts/ensure-ollama.mjs",
 		"dev": "concurrently -k -n server,client -c green,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
 		"install:all": "npm install && npm --prefix server install && npm --prefix client install",
-		"desktop:build": "npm --prefix client run build && tsc -p desktop && tsc -p desktop/tsconfig.renderer.json",
-		"desktop": "npm run desktop:build && electron desktop/dist/main.js"
+		"build:client": "npm --prefix client run build",
+		"build:server": "npm --prefix server run build",
+		"build:desktop": "tsc -p desktop && tsc -p desktop/tsconfig.renderer.json",
+		"desktop:build": "npm run build:client && npm run build:desktop",
+		"desktop": "npm run desktop:build && electron desktop/dist/main.js",
+		"package": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder"
 	},
 	"devDependencies": {
 		"concurrently": "^9.1.0",
-		"electron": "^43.0.0",
+		"electron": "^42.6.0",
+		"electron-builder": "^25.1.8",
 		"typescript": "^6.0.3"
 	}
 }

@@ -17,7 +17,12 @@ data/
 
 # ─── Build Output ────────────────────────────────────────────────────────────
 client/dist/
+desktop/dist/
 server/dist/
+
+# ─── Packaging (electron-builder) ────────────────────────────────────────────
+build-staging/
+release/
 
 # ─── TypeScript ──────────────────────────────────────────────────────────────
 *.tsbuildinfo

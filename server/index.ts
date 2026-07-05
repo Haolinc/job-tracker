@@ -1,8 +1,11 @@
 import dotenv from 'dotenv';
-dotenv.config();
+// ENV_FILE lets the launcher point a packaged server at a writable .env outside the read-only app folder;
+// unset (dev) falls back to dotenv's default of ./.env.
+dotenv.config(process.env.ENV_FILE ? { path: process.env.ENV_FILE } : undefined);
 
 import { enable } from './logger';
-if (process.env.LOG_TO_FILE !== 'false') enable(); // tee console → sync.log; set LOG_TO_FILE=false to silence
+// LOG_FILE likewise redirects sync.log to a writable location when packaged; unset → next to the module.
+if (process.env.LOG_TO_FILE !== 'false') enable(process.env.LOG_FILE ? { filePath: process.env.LOG_FILE } : undefined);
 
 const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
 for (const key of required) {
@@ -59,7 +62,9 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 // Single-process mode: when a client build exists, serve it from this server (same origin, so the client's
 // relative /api baseURL just works). Dev workflow is unchanged — Vite on :5173 proxies /api here and this
 // block is simply unused; without a build (fresh clone, dev-only), the server is API-only as before.
-const clientDistPath = path.resolve(__dirname, '../client/dist');
+// CLIENT_DIST is set by the launcher in a package (where the build lives under resources/, not beside the
+// compiled server); unset (dev) uses the repo-relative build that the tsx-run server sees at ../client/dist.
+const clientDistPath = process.env.CLIENT_DIST || path.resolve(__dirname, '../client/dist');
 if (existsSync(clientDistPath)) {
 	app.use(express.static(clientDistPath));
 	// SPA fallback: any non-API GET serves index.html so client-side routes survive a refresh.

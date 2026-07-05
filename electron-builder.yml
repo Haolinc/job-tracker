@@ -1,0 +1,33 @@
+# Packaging config for the portable launcher. Produces a self-contained Windows app (Electron + bundled
+# Node) as an unpacked folder and a zip — no Node install required on the target machine.
+appId: com.haolin.jobtracker
+productName: Job Tracker
+directories:
+  output: release
+
+# Only the launcher itself goes inside app.asar — main.ts has no runtime npm deps beyond Electron, so the
+# archive stays tiny. The server, client build, and scripts ride alongside as plain files (extraResources)
+# because a spawned Node process and a native .node module cannot run from inside an asar archive.
+files:
+  - desktop/dist/**/*
+  - desktop/control.html
+  - package.json
+
+extraResources:
+  # Production-only, Electron-ABI copy of the server produced by scripts/stage-server.mjs.
+  - from: build-staging/server
+    to: server
+  - from: client/dist
+    to: client/dist
+  - from: scripts
+    to: scripts
+    filter:
+      # Only the runtime preflight ships — stage-server.mjs is a build-time tool.
+      - "ensure-ollama.mjs"
+
+win:
+  # No code-signing certificate, so skip signtool entirely. This also avoids electron-builder unpacking its
+  # winCodeSign helper, whose macOS symlinks can't be extracted on Windows without elevated privilege.
+  signAndEditExecutable: false
+  target:
+    - zip
