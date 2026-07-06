@@ -6,7 +6,7 @@
 // ServerManager) to the window, the IPC channels, and the app lifecycle. The real work lives in those
 // modules; the renderer is a pure display surface.
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -329,6 +329,8 @@ async function promptOllamaInstall(): Promise<void> {
 // ── Window ────────────────────────────────────────────────────────────────────
 
 function createControlWindow(): void {
+	// This is a launcher panel, not an editor — drop Electron's default File/Edit/View/Window menu bar.
+	Menu.setApplicationMenu(null);
 	controlWindow = new BrowserWindow({
 		width: 1024,
 		height: 720,
