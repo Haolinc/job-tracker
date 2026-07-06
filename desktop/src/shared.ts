@@ -36,8 +36,16 @@ export interface LauncherBridge {
 	saveConfig(config: LauncherConfig): Promise<void>;
 	/** Names of the models installed in the running Ollama, or null when Ollama is unreachable. */
 	listInstalledModels(): Promise<string[] | null>;
-	/** Pull a model into Ollama; progress streams to the log pane, result reports success/failure/already-present. */
-	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }>;
+	/** Pull a model into Ollama; progress streams to the log pane, result reports success/failure/already-present/cancelled. */
+	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean; cancelled?: boolean }>;
+	/** Abort the in-flight model pull. Ollama keeps partial data, so a later pull resumes. */
+	cancelPull(): void;
+	/** Remove an installed model from Ollama, freeing its disk space (a confirm dialog gates it). */
+	deleteModel(modelName: string): Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
+	/** Model downloads we recorded as interrupted, reconciled against what's actually installed. */
+	listIncompleteDownloads(): Promise<string[]>;
+	/** Delete all partial download data to free disk and clear the record. Returns bytes freed. */
+	reclaimIncompleteDownloads(): Promise<{ freedBytes: number }>;
 	/** Open Ollama's model catalog (ollama.com/library) in the default browser. */
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;

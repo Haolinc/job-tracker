@@ -35,7 +35,11 @@ interface ControlPanelBridge {
 	getConfig(): Promise<ControlPanelConfig>;
 	saveConfig(config: ControlPanelConfig): Promise<void>;
 	listInstalledModels(): Promise<string[] | null>;
-	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }>;
+	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean; cancelled?: boolean }>;
+	cancelPull(): void;
+	deleteModel(modelName: string): Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
+	listIncompleteDownloads(): Promise<string[]>;
+	reclaimIncompleteDownloads(): Promise<{ freedBytes: number }>;
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: ControlPanelStatus) => void): void;
@@ -72,6 +76,11 @@ const refreshModelsButton = document.getElementById('refresh-models-button') as 
 const pullModelInput = document.getElementById('pull-model-input') as HTMLInputElement;
 const pullModelButton = document.getElementById('pull-model-button') as HTMLButtonElement;
 const browseModelsLink = document.getElementById('browse-models-link') as HTMLAnchorElement;
+const removeModelButton = document.getElementById('remove-model-button') as HTMLButtonElement;
+const cancelDownloadButton = document.getElementById('cancel-download-button') as HTMLButtonElement;
+const incompleteDownloads = document.getElementById('incomplete-downloads') as HTMLElement;
+const incompleteList = document.getElementById('incomplete-list') as HTMLUListElement;
+const reclaimIncompleteButton = document.getElementById('reclaim-incomplete-button') as HTMLButtonElement;
 
 const MAX_LOG_LINES = 2000;
 // Duplicates config.ts DEFAULT_PORT by necessity — see the no-import note above.
@@ -79,10 +88,23 @@ const DEFAULT_PORT = '3001';
 // The recommended default model — floated to the top of the picker and pre-selected on a fresh start.
 // Mirrors main.ts DEFAULT_MODEL (the no-import boundary again).
 const DEFAULT_MODEL = 'qwen2.5:7b';
+// The progress stream labels the one-time Ollama runtime download with this modelName (see ollamaService.ts);
+// model pulls carry the real model name. Used to tell them apart — only model pulls are cancellable.
+const OLLAMA_DOWNLOAD_LABEL = 'Ollama';
 
 // The model saved in .env, remembered so that saving while the picker is disabled (Ollama down, or no models
 // installed) preserves the user's choice instead of overwriting it with an empty selection.
 let savedOllamaModel = '';
+
+// Whether Ollama is reachable enough to pull into (set by refreshModelPicker) and whether a download is
+// currently running (driven by the progress stream). The download field reflects BOTH — no second pull while
+// one is already in flight.
+let ollamaReachableForPull = false;
+let downloadInProgress = false;
+// Whether the selected model is an installed one that can be removed, and whether the active download is a
+// model pull we can cancel (the Ollama runtime download itself is not cancellable from here).
+let hasInstalledSelection = false;
+let activeDownloadIsCancellable = false;
 
 // ── Log console ─────────────────────────────────────────────────────────────
 
@@ -132,9 +154,14 @@ function createProgressLine(logContainer: HTMLDivElement): (progress: ControlPan
 		}
 
 		if (progress.done) {
-			const failed = progress.status.startsWith('error');
-			line.textContent = failed ? `✗ ${progress.modelName} — ${progress.status}` : `✓ ${progress.modelName} downloaded`;
-			if (failed) line.classList.add('error-line');
+			if (progress.status === 'cancelled') {
+				line.textContent = `⊘ ${progress.modelName} — cancelled`;
+			} else if (progress.status.startsWith('error')) {
+				line.textContent = `✗ ${progress.modelName} — ${progress.status}`;
+				line.classList.add('error-line');
+			} else {
+				line.textContent = `✓ ${progress.modelName} downloaded`;
+			}
 			line = null;   // finalize — the next download gets its own line
 		} else if (progress.total > 0) {
 			const percent = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
@@ -147,7 +174,13 @@ function createProgressLine(logContainer: HTMLDivElement): (progress: ControlPan
 	};
 }
 
-launcher.onPullProgress(createProgressLine(logConsole));
+const renderProgressLine = createProgressLine(logConsole);
+launcher.onPullProgress((progress) => {
+	downloadInProgress = !progress.done;
+	activeDownloadIsCancellable = !progress.done && progress.modelName !== OLLAMA_DOWNLOAD_LABEL;
+	syncDownloadControls();
+	renderProgressLine(progress);
+});
 
 // ── Status dots & buttons ───────────────────────────────────────────────────
 
@@ -170,6 +203,7 @@ async function loadConfigIntoPanel(): Promise<void> {
 	for (const configField of configFields) configInputs[configField].value = config[configField];
 	savedOllamaModel = config.ollamaModel;
 	await refreshModelPicker(savedOllamaModel);
+	await refreshIncompleteDownloads();
 }
 
 /** The recommended default first (when installed), then every other model alphabetically. */
@@ -178,10 +212,20 @@ function orderModels(models: string[]): string[] {
 	return models.includes(DEFAULT_MODEL) ? [DEFAULT_MODEL, ...others] : others;
 }
 
-/** Enable or disable the "download a model" field — off when there is no reachable Ollama to pull into. */
-function setDownloadEnabled(enabled: boolean): void {
-	pullModelInput.disabled = !enabled;
-	pullModelButton.disabled = !enabled;
+/**
+ * Reflect the download service on the field: usable only when Ollama can be pulled into AND nothing is already
+ * downloading. The button reads "Downloading…" while a pull runs, so re-opening Config mid-download can't present
+ * an enabled button to click again.
+ */
+function syncDownloadControls(): void {
+	const canDownload = ollamaReachableForPull && !downloadInProgress;
+	pullModelInput.disabled = !canDownload;
+	pullModelButton.disabled = !canDownload;
+	pullModelButton.textContent = downloadInProgress ? 'Downloading…' : 'Download';
+	cancelDownloadButton.hidden = !activeDownloadIsCancellable;
+	removeModelButton.disabled = !hasInstalledSelection || downloadInProgress;
+	reclaimIncompleteButton.disabled = downloadInProgress;
+	for (const incompleteButton of incompleteList.querySelectorAll('button')) incompleteButton.disabled = downloadInProgress;
 }
 
 /**
@@ -200,7 +244,9 @@ async function refreshModelPicker(savedModel: string): Promise<void> {
 		modelSelect.appendChild(new Option('Ollama not running', ''));
 		modelSelect.value = '';
 		modelSelect.disabled = true;
-		setDownloadEnabled(false);
+		ollamaReachableForPull = false;
+		hasInstalledSelection = false;
+		syncDownloadControls();
 		return;
 	}
 
@@ -209,7 +255,9 @@ async function refreshModelPicker(savedModel: string): Promise<void> {
 		modelSelect.appendChild(new Option('No models installed — download one below', ''));
 		modelSelect.value = '';
 		modelSelect.disabled = true;
-		setDownloadEnabled(true);
+		ollamaReachableForPull = true;
+		hasInstalledSelection = false;
+		syncDownloadControls();
 		return;
 	}
 
@@ -220,7 +268,9 @@ async function refreshModelPicker(savedModel: string): Promise<void> {
 		modelSelect.appendChild(new Option(label, modelName));
 	}
 	modelSelect.disabled = false;
-	setDownloadEnabled(true);
+	ollamaReachableForPull = true;
+	hasInstalledSelection = true;
+	syncDownloadControls();
 
 	const savedIsInstalled = savedModel !== '' && installedModels.includes(savedModel);
 	modelSelect.value = savedIsInstalled
@@ -242,21 +292,67 @@ browseModelsLink.addEventListener('click', (event) => {
 	launcher.openModelLibrary();
 });
 
-// Download a model into Ollama; progress streams to the log pane. On success, select it in the dropdown.
-pullModelButton.addEventListener('click', async () => {
-	const modelName = pullModelInput.value.trim();
-	if (!modelName) return;
-	pullModelButton.disabled = true;
-	pullModelButton.textContent = 'Downloading…';
+cancelDownloadButton.addEventListener('click', () => launcher.cancelPull());
+
+// Remove the selected installed model (frees disk). A confirm dialog in the main process gates it.
+removeModelButton.addEventListener('click', async () => {
+	const modelName = modelSelect.value;
+	if (!modelName || downloadInProgress) return;
+	const result = await launcher.deleteModel(modelName);
+	if (result.ok) await refreshModelPicker(savedOllamaModel);
+});
+
+// Start (or resume) a model download; progress streams to the live line. Shared by the Download button and
+// the Resume buttons in the incomplete-downloads list.
+async function startModelDownload(modelName: string): Promise<void> {
+	if (downloadInProgress || !modelName) return;
+	downloadInProgress = true;
+	activeDownloadIsCancellable = true;
+	syncDownloadControls();
 	const result = await launcher.pullModel(modelName);
-	pullModelButton.disabled = false;
+	downloadInProgress = false;
+	activeDownloadIsCancellable = false;
 	if (result.ok) {
 		pullModelInput.value = '';
-		await refreshModelPicker(modelName);   // now installed (or already was) → select it
+		await refreshModelPicker(modelName);   // now installed (or already was) → select it; also re-syncs controls
+	} else {
+		syncDownloadControls();
 	}
-	// Confirm right on the button, since the user clicked here — "already installed" vs a fresh download.
-	pullModelButton.textContent = result.alreadyInstalled ? 'Already installed' : 'Download';
-	if (result.alreadyInstalled) window.setTimeout(() => { pullModelButton.textContent = 'Download'; }, 2500);
+	await refreshIncompleteDownloads();   // a cancel records a partial; a success clears it
+	// Confirm right on the button, since the user clicked here — a re-download reports "already installed".
+	if (result.alreadyInstalled) {
+		pullModelButton.textContent = 'Already installed';
+		window.setTimeout(() => { pullModelButton.textContent = 'Download'; }, 2500);
+	}
+}
+
+pullModelButton.addEventListener('click', () => void startModelDownload(pullModelInput.value.trim()));
+
+/** Show the interrupted-downloads section with per-model Resume buttons, or hide it when there are none. */
+async function refreshIncompleteDownloads(): Promise<void> {
+	const incompleteModels = await launcher.listIncompleteDownloads();
+	incompleteList.replaceChildren();
+	incompleteDownloads.hidden = incompleteModels.length === 0;
+	for (const modelName of incompleteModels) {
+		const listItem = document.createElement('li');
+		const nameLabel = document.createElement('span');
+		nameLabel.textContent = modelName;
+		const resumeButton = document.createElement('button');
+		resumeButton.type = 'button';
+		resumeButton.className = 'mini';
+		resumeButton.textContent = 'Resume';
+		resumeButton.addEventListener('click', () => void startModelDownload(modelName));
+		listItem.append(nameLabel, resumeButton);
+		incompleteList.appendChild(listItem);
+	}
+	syncDownloadControls();   // apply the current download-in-progress state to the reclaim/resume buttons
+}
+
+// Delete all partial download data to reclaim disk (a confirm dialog in the main process gates it).
+reclaimIncompleteButton.addEventListener('click', async () => {
+	if (downloadInProgress) return;
+	await launcher.reclaimIncompleteDownloads();
+	await refreshIncompleteDownloads();
 });
 
 saveConfigButton.addEventListener('click', async () => {

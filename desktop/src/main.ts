@@ -8,6 +8,8 @@
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { DEFAULT_PORT, readConfig, readEnvFile, writeConfig } from './config';
 import type { LauncherConfig } from './config';
 import type { LauncherStatus, PullProgress } from './shared';
@@ -16,6 +18,7 @@ import { createLog } from './log';
 import { isReachable } from './health';
 import { OllamaService } from './ollamaService';
 import { ServerManager } from './serverManager';
+import { IncompleteDownloadStore } from './incompleteDownloads';
 
 // Match the preflight (ensure-ollama.mjs): honour OLLAMA_HOST so a custom port/host reaches the same daemon.
 const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
@@ -32,6 +35,7 @@ const paths = resolveLauncherPaths();
 
 let controlWindow: BrowserWindow | null = null;
 const log = createLog(() => controlWindow);
+const incompleteStore = new IncompleteDownloadStore(paths.incompleteDownloadsPath, log);
 const serverUrl = () => `http://localhost:${readEnvFile(paths.serverEnvPath).get('PORT') || DEFAULT_PORT}`;
 
 // Shown at most once per session: when the preflight reports no Ollama, ask the user before downloading it.
@@ -62,6 +66,16 @@ function sendPullProgress(progress: PullProgress): void {
 
 // ── Models ──────────────────────────────────────────────────────────────────
 
+// The in-flight model pull's abort handle, so the panel's Cancel can stop it (Ollama keeps partial blobs, so a
+// later pull resumes). Null when nothing is downloading.
+let activePullController: AbortController | null = null;
+
+/** A model name with its tag made explicit: `/api/tags` reports `name:tag`, and a bare name means `:latest`,
+ *  so normalise before comparing names to what's installed. */
+function withImplicitLatestTag(modelName: string): string {
+	return modelName.includes(':') ? modelName : `${modelName}:latest`;
+}
+
 /**
  * Names of the models installed in the running Ollama, or null when Ollama is unreachable. The panel needs
  * to tell "Ollama is down" (keep the saved choice) apart from "Ollama is up but has no models" (offer none) —
@@ -79,22 +93,25 @@ async function listInstalledModels(): Promise<string[] | null> {
 }
 
 /** Pull a model via Ollama's streaming API, emitting byte-level progress so the panel shows one live line. */
-async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }> {
+async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean; cancelled?: boolean }> {
 	// Already installed? Skip the pull — Ollama would just report "success" and we'd falsely say "downloaded".
 	// A bare name (no tag) resolves to :latest, which is how /api/tags reports it, so normalise before matching.
 	const installedModels = await listInstalledModels();
-	const requestedTag = modelName.includes(':') ? modelName : `${modelName}:latest`;
+	const requestedTag = withImplicitLatestTag(modelName);
 	if (installedModels?.includes(requestedTag)) {
 		log('launcher', `Model ${modelName} is already installed — skipping the download.`);
+		incompleteStore.remove(modelName);
 		return { ok: true, alreadyInstalled: true };
 	}
 
 	log('launcher', `Downloading model ${modelName}…`);
+	activePullController = new AbortController();
 	try {
 		const response = await fetch(`${OLLAMA_BASE_URL}/api/pull`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ name: modelName, stream: true }),
+			signal: activePullController.signal,
 		});
 		if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -102,6 +119,7 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 		const decoder = new TextDecoder();
 		let pending = '';
 		let lastSentAt = 0;
+		let recordedIncomplete = false;
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
@@ -113,6 +131,7 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 				if (!line) continue;
 				const event = JSON.parse(line) as { error?: string; status?: string; total?: number; completed?: number };
 				if (event.error) throw new Error(event.error);
+				if (event.completed && !recordedIncomplete) { incompleteStore.add(modelName); recordedIncomplete = true; }
 				// Throttle to ~5/sec; always emit when a layer completes so the line lands on the exact final byte count.
 				if (Date.now() - lastSentAt >= 200 || event.completed === event.total) {
 					lastSentAt = Date.now();
@@ -121,13 +140,123 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 			}
 		}
 		sendPullProgress({ modelName, status: 'success', completed: 0, total: 0, done: true });
+		incompleteStore.remove(modelName);
 		return { ok: true };
 	} catch (error) {
+		if (activePullController?.signal.aborted) {
+			sendPullProgress({ modelName, status: 'cancelled', completed: 0, total: 0, done: true });
+			log('launcher', `Cancelled the download of ${modelName}.`);
+			return { ok: false, cancelled: true };
+		}
 		const message = error instanceof Error ? error.message : String(error);
 		sendPullProgress({ modelName, status: `error: ${message}`, completed: 0, total: 0, done: true });
 		log('launcher', `Failed to download ${modelName}: ${message}`);
 		return { ok: false, error: message };
+	} finally {
+		activePullController = null;
 	}
+}
+
+/** Abort the in-flight model pull, if any. Ollama keeps partial blobs, so a later download resumes. */
+function cancelActivePull(): void {
+	activePullController?.abort();
+}
+
+/** Delete an installed model from Ollama, freeing its disk space. */
+async function deleteModel(modelName: string): Promise<{ ok: boolean; error?: string }> {
+	log('launcher', `Removing model ${modelName}…`);
+	try {
+		const response = await fetch(`${OLLAMA_BASE_URL}/api/delete`, {
+			method: 'DELETE',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ name: modelName }),
+		});
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		log('launcher', `Model ${modelName} removed.`);
+		incompleteStore.remove(modelName);
+		return { ok: true };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		log('launcher', `Failed to remove ${modelName}: ${message}`);
+		return { ok: false, error: message };
+	}
+}
+
+/**
+ * The models we recorded as interrupted, minus any that have since completed (reconciled against /api/tags),
+ * so a stale entry never lingers. Prunes the store as it goes.
+ */
+async function listIncompleteDownloads(): Promise<string[]> {
+	const trackedNames = incompleteStore.list();
+	if (trackedNames.length === 0) return [];
+	const installedTags = await listInstalledModels();
+	if (installedTags === null) return trackedNames;   // Ollama unreachable — can't reconcile, show what we have
+	for (const modelName of trackedNames) {
+		if (installedTags.includes(withImplicitLatestTag(modelName))) incompleteStore.remove(modelName);   // it finished
+	}
+	return incompleteStore.list();
+}
+
+/**
+ * Free disk from abandoned partial downloads by deleting Ollama's `*-partial` blob files — the only way to
+ * reclaim a partial without finishing it (Ollama exposes no API for it). Coarse by nature: clears ALL partial
+ * data at once. Must not run while a download is in flight (it would corrupt the in-progress one).
+ */
+function reclaimIncompleteDownloads(): { freedBytes: number } {
+	if (activePullController) return { freedBytes: 0 };   // never delete blobs out from under an in-flight pull
+	const modelsDirectories = [
+		process.env.OLLAMA_MODELS,
+		path.join(paths.ollamaPortableDir, 'models'),        // our portable Ollama
+		path.join(os.homedir(), '.ollama', 'models'),        // a default system Ollama
+	].filter((directory): directory is string => Boolean(directory));
+	let freedBytes = 0;
+	for (const modelsDirectory of modelsDirectories) {
+		const blobsDirectory = path.join(modelsDirectory, 'blobs');
+		if (!existsSync(blobsDirectory)) continue;
+		for (const entry of readdirSync(blobsDirectory)) {
+			if (!entry.includes('-partial')) continue;
+			const partialPath = path.join(blobsDirectory, entry);
+			try {
+				freedBytes += statSync(partialPath).size;
+				rmSync(partialPath, { force: true });
+			} catch {
+				// A file we can't stat/remove (locked, already gone) — skip it; cleanup is best-effort.
+			}
+		}
+	}
+	incompleteStore.clear();
+	log('launcher', `Reclaimed ${(freedBytes / 1_000_000).toFixed(0)} MB from incomplete downloads.`);
+	return { freedBytes };
+}
+
+/** Confirm before removing a model — deletion frees disk but can only be undone by downloading it again. */
+async function confirmModelDeletion(modelName: string): Promise<boolean> {
+	if (!controlWindow) return false;
+	const { response } = await dialog.showMessageBox(controlWindow, {
+		type: 'warning',
+		title: 'Remove model',
+		message: `Remove the model "${modelName}"?`,
+		detail: 'This deletes it from Ollama and frees its disk space. You can download it again later.',
+		buttons: ['Remove', 'Cancel'],
+		defaultId: 1,
+		cancelId: 1,
+	});
+	return response === 0;
+}
+
+/** Confirm before wiping partial downloads — it frees disk but discards any partially downloaded models. */
+async function confirmReclaimDisk(): Promise<boolean> {
+	if (!controlWindow) return false;
+	const { response } = await dialog.showMessageBox(controlWindow, {
+		type: 'warning',
+		title: 'Reclaim disk',
+		message: 'Delete all incomplete download data?',
+		detail: 'This frees disk space but discards any partially downloaded models — you would start those downloads over.',
+		buttons: ['Delete', 'Cancel'],
+		defaultId: 1,
+		cancelId: 1,
+	});
+	return response === 0;
 }
 
 /** Ask before a model download starts, so a multi-gigabyte pull is always the user's explicit choice. */
@@ -227,6 +356,16 @@ ipcMain.handle('launcher:get-config', () => readConfig(paths.serverEnvPath));
 ipcMain.handle('launcher:save-config', (_event, config: LauncherConfig) => saveConfig(config));
 ipcMain.handle('launcher:list-models', () => listInstalledModels());
 ipcMain.handle('launcher:pull-model', (_event, modelName: string) => pullModel(modelName));
+ipcMain.on('launcher:cancel-pull', () => cancelActivePull());
+ipcMain.handle('launcher:delete-model', async (_event, modelName: string) => {
+	if (!(await confirmModelDeletion(modelName))) return { ok: false, cancelled: true };
+	return deleteModel(modelName);
+});
+ipcMain.handle('launcher:list-incomplete', () => listIncompleteDownloads());
+ipcMain.handle('launcher:reclaim-incomplete', async () => {
+	if (!(await confirmReclaimDisk())) return { freedBytes: 0 };
+	return reclaimIncompleteDownloads();
+});
 ipcMain.on('launcher:browse-models', () => void shell.openExternal(MODEL_LIBRARY_URL));
 
 // ── App lifecycle ───────────────────────────────────────────────────────────
