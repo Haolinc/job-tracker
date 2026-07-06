@@ -330,8 +330,8 @@ async function promptOllamaInstall(): Promise<void> {
 
 function createControlWindow(): void {
 	controlWindow = new BrowserWindow({
-		width: 860,
-		height: 620,
+		width: 1024,
+		height: 720,
 		title: 'Job Tracker Launcher',
 		webPreferences: { preload: path.join(__dirname, 'preload.js') },
 	});
