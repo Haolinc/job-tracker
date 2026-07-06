@@ -113,6 +113,21 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 	}
 }
 
+/** Ask before a model download starts, so a multi-gigabyte pull is always the user's explicit choice. */
+async function confirmModelDownload(modelName: string): Promise<boolean> {
+	if (!controlWindow) return false;
+	const { response } = await dialog.showMessageBox(controlWindow, {
+		type: 'question',
+		title: 'Download model',
+		message: `Download the classification model "${modelName}"?`,
+		detail: 'Language models are large — this is a one-time download of several gigabytes and can take a while. Progress shows in the log below.',
+		buttons: ['Download', 'Not now'],
+		defaultId: 0,
+		cancelId: 1,
+	});
+	return response === 0;
+}
+
 // ── Config panel ────────────────────────────────────────────────────────────
 
 /** Persist the panel's config and apply it: restart a running server, or start it if first-run left none. */
@@ -143,7 +158,7 @@ async function promptOllamaInstall(): Promise<void> {
 		type: 'warning',
 		title: 'Ollama not found',
 		message: 'Ollama is needed for email classification, and it was not found on this computer.',
-		detail: 'This downloads Ollama (~1.5 GB) plus a default model (~4.7 GB) into the app — a one-time setup. Or get Ollama yourself from ollama.com. The app still works without it — only email classification is unavailable.',
+		detail: 'This installs a portable Ollama (~1.5 GB) into the app — a one-time setup. You then choose a classification model to download. Or get Ollama yourself from ollama.com. The app still works without it — only email classification is unavailable.',
 		buttons: ['Download in the app', 'Open ollama.com', 'Not now'],
 		defaultId: 0,
 		cancelId: 2,
@@ -151,8 +166,12 @@ async function promptOllamaInstall(): Promise<void> {
 	if (response === 0) {
 		log('launcher', 'Setting up Ollama — this is a large one-time download…');
 		await ollama.installPortable();
-		// A fresh portable Ollama ships with no models — pull a sensible default so classification works.
-		if ((await listInstalledModels()).length === 0) await pullModel(DEFAULT_MODEL);
+		// A fresh portable Ollama ships with no models. Ask before pulling the default so the multi-GB model
+		// download is the user's explicit choice — they can also skip and pick one later from Config.
+		if ((await listInstalledModels()).length === 0) {
+			if (await confirmModelDownload(DEFAULT_MODEL)) await pullModel(DEFAULT_MODEL);
+			else log('launcher', 'Skipped the model download — choose or download one anytime from Config.');
+		}
 		void pushStatus();
 	} else if (response === 1) {
 		void shell.openExternal(OLLAMA_DOWNLOAD_URL);
