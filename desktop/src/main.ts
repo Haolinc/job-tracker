@@ -10,7 +10,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { DEFAULT_PORT, readConfig, readEnvFile, writeConfig } from './config';
 import type { LauncherConfig } from './config';
-import type { LauncherStatus } from './shared';
+import type { LauncherStatus, PullProgress } from './shared';
 import { resolveLauncherPaths } from './paths';
 import { createLog } from './log';
 import { isReachable } from './health';
@@ -40,7 +40,7 @@ const ollama = new OllamaService(paths, log, () => {
 	if (ollamaPromptShown) return;
 	ollamaPromptShown = true;
 	void promptOllamaInstall();
-});
+}, sendPullProgress);
 const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushStatus());
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -53,6 +53,11 @@ async function pushStatus(): Promise<void> {
 		ollamaUp: await isReachable(OLLAMA_HEALTH_URL),
 	};
 	controlWindow.webContents.send('launcher:status', status);
+}
+
+// Push a model-download progress update to the panel so it can render one live, in-place line.
+function sendPullProgress(progress: PullProgress): void {
+	controlWindow?.webContents.send('launcher:pull-progress', progress);
 }
 
 // ── Models ──────────────────────────────────────────────────────────────────
@@ -73,7 +78,7 @@ async function listInstalledModels(): Promise<string[] | null> {
 	}
 }
 
-/** Pull a model into the running Ollama via its streaming API, logging progress every ~10% to the panel. */
+/** Pull a model via Ollama's streaming API, emitting byte-level progress so the panel shows one live line. */
 async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }> {
 	// Already installed? Skip the pull — Ollama would just report "success" and we'd falsely say "downloaded".
 	// A bare name (no tag) resolves to :latest, which is how /api/tags reports it, so normalise before matching.
@@ -96,7 +101,7 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 		const reader = response.body.getReader();
 		const decoder = new TextDecoder();
 		let pending = '';
-		let lastLoggedPercent = -10;
+		let lastSentAt = 0;
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
@@ -106,21 +111,20 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 				const line = pending.slice(0, newlineIndex).trim();
 				pending = pending.slice(newlineIndex + 1);
 				if (!line) continue;
-				const event = JSON.parse(line) as { error?: string; total?: number; completed?: number };
+				const event = JSON.parse(line) as { error?: string; status?: string; total?: number; completed?: number };
 				if (event.error) throw new Error(event.error);
-				if (event.total && event.completed) {
-					const percent = Math.floor((event.completed / event.total) * 100);
-					if (percent >= lastLoggedPercent + 10) {
-						lastLoggedPercent = percent;
-						log('ollama', `pulling ${modelName}… ${percent}%`);
-					}
+				// Throttle to ~5/sec; always emit when a layer completes so the line lands on the exact final byte count.
+				if (Date.now() - lastSentAt >= 200 || event.completed === event.total) {
+					lastSentAt = Date.now();
+					sendPullProgress({ modelName, status: event.status ?? '', completed: event.completed ?? 0, total: event.total ?? 0, done: false });
 				}
 			}
 		}
-		log('launcher', `Model ${modelName} downloaded.`);
+		sendPullProgress({ modelName, status: 'success', completed: 0, total: 0, done: true });
 		return { ok: true };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		sendPullProgress({ modelName, status: `error: ${message}`, completed: 0, total: 0, done: true });
 		log('launcher', `Failed to download ${modelName}: ${message}`);
 		return { ok: false, error: message };
 	}

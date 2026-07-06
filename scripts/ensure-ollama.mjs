@@ -31,6 +31,9 @@ const systemBsdTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System3
 
 const log = (message) => console.log(`[ensure-ollama] ${message}`);
 
+// Printed raw on stdout for the launcher to turn into the panel's live download line (must match ollamaService.ts).
+const DOWNLOAD_PROGRESS_MARKER = '@download-progress@';
+
 /** True when the Ollama HTTP API answers. */
 async function isUp() {
 	try {
@@ -57,22 +60,22 @@ async function downloadToFile(url, destinationPath) {
 	const reader = response.body.getReader();
 
 	let receivedBytes = 0;
-	let lastLoggedPercent = -10;
+	let lastSentAt = 0;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		if (!fileStream.write(value)) await once(fileStream, 'drain');   // wait when the buffer is full
 		receivedBytes += value.length;
-		if (totalBytes) {
-			const percent = Math.floor((receivedBytes / totalBytes) * 100);
-			if (percent >= lastLoggedPercent + 10) {
-				lastLoggedPercent = percent;
-				log(`downloading Ollama… ${percent}%`);
-			}
+		// Throttle to ~5/sec; the launcher turns these markers into the panel's live byte/percent line.
+		const now = Date.now();
+		if (now - lastSentAt >= 200) {
+			lastSentAt = now;
+			console.log(`${DOWNLOAD_PROGRESS_MARKER} ${receivedBytes} ${totalBytes}`);
 		}
 	}
 	fileStream.end();
 	await once(fileStream, 'finish');
+	console.log(`${DOWNLOAD_PROGRESS_MARKER} ${receivedBytes} ${totalBytes}`);   // final exact count
 }
 
 /** Download + extract a portable Ollama into app data. Returns its exe path, or null if unavailable. */
@@ -88,7 +91,9 @@ async function ensurePortableOllama() {
 		log('extracting Ollama…');
 		const extraction = spawnSync(systemBsdTar, ['-xf', zipPath, '-C', portableDir], { stdio: 'inherit' });
 		if (extraction.status !== 0) throw new Error(`extraction failed (tar exit ${extraction.status})`);
+		console.log(`${DOWNLOAD_PROGRESS_MARKER} done`);
 	} catch (error) {
+		console.log(`${DOWNLOAD_PROGRESS_MARKER} error`);
 		log(`could not set up portable Ollama: ${error.message}`);
 		return null;
 	} finally {

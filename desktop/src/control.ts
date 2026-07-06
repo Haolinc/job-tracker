@@ -20,6 +20,14 @@ interface ControlPanelConfig {
 	ollamaModel: string;
 }
 
+interface ControlPanelPullProgress {
+	modelName: string;
+	status: string;
+	completed: number;
+	total: number;
+	done: boolean;
+}
+
 interface ControlPanelBridge {
 	startServer(): void;
 	stopServer(): void;
@@ -31,6 +39,7 @@ interface ControlPanelBridge {
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: ControlPanelStatus) => void): void;
+	onPullProgress(handler: (progress: ControlPanelPullProgress) => void): void;
 }
 
 declare const launcher: ControlPanelBridge;   // exposed by preload.ts via contextBridge
@@ -91,6 +100,54 @@ launcher.onLog((line) => {
 	while (logConsole.childElementCount > MAX_LOG_LINES) logConsole.firstElementChild!.remove();
 	if (pinnedToBottom) logConsole.scrollTop = logConsole.scrollHeight;
 });
+
+// ── Model download progress ──────────────────────────────────────────────────
+
+/** Human-readable bytes: 512 B, 3.4 MB, 4.7 GB. Decimal (1000-based) to match ollama.com's own size labels. */
+function formatBytes(byteCount: number): string {
+	if (byteCount <= 0) return '0 B';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	const exponent = Math.min(Math.floor(Math.log(byteCount) / Math.log(1000)), units.length - 1);
+	const value = byteCount / 1000 ** exponent;
+	return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+}
+
+/**
+ * A self-contained live download line for the log console. It owns one <div> that updates IN PLACE (bytes +
+ * percent) instead of appending a line per tick, and finalizes to ✓/✗ when the download ends. Returns the
+ * update handler — feed it every progress event. Reusable for any download source (Ollama, model pulls, …);
+ * each call makes an independent line, so call it once and reuse the returned handler for one stream at a time.
+ */
+function createProgressLine(logContainer: HTMLDivElement): (progress: ControlPanelPullProgress) => void {
+	// Held across updates so the same line is rewritten; null between downloads so the next one starts fresh.
+	let line: HTMLDivElement | null = null;
+	return (progress) => {
+		const pinnedToBottom = logContainer.scrollTop + logContainer.clientHeight >= logContainer.scrollHeight - 8;
+
+		// Reuse the line unless the log-line cap trimmed it away; then start a fresh one.
+		if (!line || !line.isConnected) {
+			line = document.createElement('div');
+			line.className = 'log-line launcher-line';
+			logContainer.appendChild(line);
+		}
+
+		if (progress.done) {
+			const failed = progress.status.startsWith('error');
+			line.textContent = failed ? `✗ ${progress.modelName} — ${progress.status}` : `✓ ${progress.modelName} downloaded`;
+			if (failed) line.classList.add('error-line');
+			line = null;   // finalize — the next download gets its own line
+		} else if (progress.total > 0) {
+			const percent = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
+			line.textContent = `⬇ ${progress.modelName}  ${formatBytes(progress.completed)} / ${formatBytes(progress.total)}  (${percent}%)`;
+		} else {
+			line.textContent = `⬇ ${progress.modelName}  ${progress.status || 'preparing'}…`;
+		}
+
+		if (pinnedToBottom) logContainer.scrollTop = logContainer.scrollHeight;
+	};
+}
+
+launcher.onPullProgress(createProgressLine(logConsole));
 
 // ── Status dots & buttons ───────────────────────────────────────────────────
 

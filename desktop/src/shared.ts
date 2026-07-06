@@ -13,6 +13,20 @@ export interface LauncherStatus {
 	ollamaUp: boolean;
 }
 
+/** A single model-download progress update, streamed as a pull runs so the panel can show one live line. */
+export interface PullProgress {
+	/** The model being pulled. */
+	modelName: string;
+	/** Ollama's phase text for this event, e.g. "pulling manifest", "verifying sha256 digest", "success". */
+	status: string;
+	/** Bytes downloaded so far for the current layer (0 when this phase isn't a byte transfer). */
+	completed: number;
+	/** Total bytes for the current layer (0 when unknown, e.g. manifest/verify phases). */
+	total: number;
+	/** The pull has finished — success unless `status` reports an error. The panel finalizes the line. */
+	done: boolean;
+}
+
 /** The API the preload script exposes to the control panel as `window.launcher`. */
 export interface LauncherBridge {
 	startServer(): void;
@@ -28,4 +42,6 @@ export interface LauncherBridge {
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: LauncherStatus) => void): void;
+	/** Live progress for an in-flight model pull, so the panel can show a single updating line. */
+	onPullProgress(handler: (progress: PullProgress) => void): void;
 }

@@ -5,23 +5,31 @@
 import { spawn, spawnSync } from 'node:child_process';
 import type { LauncherPaths } from './paths';
 import type { LogFn } from './log';
+import type { PullProgress } from './shared';
 
 // ensure-ollama.mjs prints this exact phrase ONLY when it launches the daemon itself (vs finding it already
 // running) — the launcher's signal that Ollama is ours to stop on quit.
 const STARTED_BY_LAUNCHER_MARKER = 'starting `ollama serve`';
 // ...and this one when no Ollama is installed and we haven't been told to download it.
 const MISSING_MARKER = '[ollama-missing]';
+// ensure-ollama.mjs prints this prefix (raw, untagged) for byte-level download progress; we parse it into the
+// panel's live line instead of logging it. Keep in sync with the same constant in ensure-ollama.mjs.
+const DOWNLOAD_PROGRESS_MARKER = '@download-progress@';
 
 export class OllamaService {
 	// True when the preflight had to START Ollama. On quit we stop only what we started: a pre-existing
 	// tray/system Ollama is left alone.
 	private startedByLauncher = false;
+	// Buffers preflight stdout so we can act on whole lines — a progress marker can be split across chunks.
+	private stdoutBuffer = '';
 
 	constructor(
 		private readonly paths: LauncherPaths,
 		private readonly log: LogFn,
 		/** Called when a detect run finds no Ollama installed, so the launcher can prompt the user. */
 		private readonly onMissing: () => void,
+		/** Streams portable-Ollama download progress so the panel can show one live byte line. */
+		private readonly onDownloadProgress: (progress: PullProgress) => void,
 	) {}
 
 	/** Detect + start an existing Ollama (never downloads). Resolves once the preflight exits. */
@@ -55,13 +63,44 @@ export class OllamaService {
 				: spawn(`node "${this.paths.ensureOllamaScript}" ${scriptArgs.join(' ')}`.trim(), { cwd: this.paths.resourcesRoot, shell: true, env: preflightEnv });
 
 			preflight.stdout.on('data', (chunk: Buffer) => {
-				const outputText = chunk.toString();
-				if (outputText.includes(STARTED_BY_LAUNCHER_MARKER)) this.startedByLauncher = true;
-				if (outputText.includes(MISSING_MARKER)) this.onMissing();
-				this.log('ollama', outputText);
+				this.stdoutBuffer += chunk.toString();
+				let newlineIndex;
+				while ((newlineIndex = this.stdoutBuffer.indexOf('\n')) >= 0) {
+					const line = this.stdoutBuffer.slice(0, newlineIndex);
+					this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+					this.handleStdoutLine(line);
+				}
 			});
 			preflight.stderr.on('data', (chunk: Buffer) => this.log('ollama', chunk.toString()));
-			preflight.on('exit', () => resolve());
+			preflight.on('exit', () => {
+				if (this.stdoutBuffer) this.handleStdoutLine(this.stdoutBuffer);   // flush any tail without a newline
+				this.stdoutBuffer = '';
+				resolve();
+			});
 		});
+	}
+
+	private handleStdoutLine(line: string): void {
+		// Download-progress markers drive the panel's live byte line — parse them, don't echo them as raw text.
+		if (line.startsWith(DOWNLOAD_PROGRESS_MARKER)) {
+			this.emitDownloadProgress(line.slice(DOWNLOAD_PROGRESS_MARKER.length).trim());
+			return;
+		}
+		if (line.includes(STARTED_BY_LAUNCHER_MARKER)) this.startedByLauncher = true;
+		if (line.includes(MISSING_MARKER)) this.onMissing();
+		this.log('ollama', line);
+	}
+
+	private emitDownloadProgress(payload: string): void {
+		if (payload === 'done') {
+			this.onDownloadProgress({ modelName: 'Ollama', status: 'success', completed: 0, total: 0, done: true });
+			return;
+		}
+		if (payload === 'error') {
+			this.onDownloadProgress({ modelName: 'Ollama', status: 'error: download failed', completed: 0, total: 0, done: true });
+			return;
+		}
+		const [completed, total] = payload.split(' ').map(Number);
+		this.onDownloadProgress({ modelName: 'Ollama', status: '', completed: completed || 0, total: total || 0, done: false });
 	}
 }
