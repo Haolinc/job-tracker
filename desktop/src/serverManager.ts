@@ -59,10 +59,11 @@ export class ServerManager {
 		if (!this.childProcess) return;
 		this.log('launcher', 'Stopping server…');
 		if (process.platform === 'win32' && this.childProcess.pid) {
-			// shell:true means a process tree (cmd → npm → node); taskkill /T is the only reliable tree kill.
+			// The server is a process tree (cmd → npm → node); taskkill /T is the only reliable tree kill.
 			// SYNCHRONOUS on purpose: this also runs during quit, and an async kill loses the race with app
-			// exit — the launcher disappears while the server lives on.
-			spawnSync(`taskkill /PID ${this.childProcess.pid} /T /F`, { shell: true });
+			// exit — the launcher disappears while the server lives on. Direct exe spawn (no shell) so
+			// windowsHide actually suppresses taskkill's console flash.
+			spawnSync('taskkill', ['/PID', String(this.childProcess.pid), '/T', '/F'], { windowsHide: true });
 		} else {
 			this.childProcess.kill('SIGTERM');
 		}
@@ -75,6 +76,7 @@ export class ServerManager {
 	private spawnPackaged(): ChildProcess {
 		return spawn(process.execPath, [this.paths.serverEntryPoint], {
 			cwd: this.paths.serverDirectory,
+			windowsHide: true,   // don't pop a console window for the server child (Electron is a GUI app)
 			env: {
 				...process.env,
 				ELECTRON_RUN_AS_NODE: '1',
@@ -91,13 +93,16 @@ export class ServerManager {
 
 	// Dev: system Node is present — keep the familiar tsx npm script (its better-sqlite3 is built for system
 	// Node's ABI, unlike the Electron-ABI copy that ships in the package).
+	// LAUNCHER_PID: same force-kill backstop as the packaged path — the dev server (cmd → npm → node) is
+	// exactly what orphaned before, and the tree-kill in stop() only runs on a graceful quit.
 	private spawnDev(): ChildProcess {
-		return spawn('npm run start', {
-			cwd: this.paths.serverDirectory,
-			shell: true,   // npm is npm.cmd on Windows
-			// LAUNCHER_PID: same force-kill backstop as the packaged path — the dev server (cmd → npm → node)
-			// is exactly what orphaned before, and the tree-kill in stop() only runs on a graceful quit.
-			env: { ...process.env, CLIENT_URL: this.serverUrl(), LAUNCHER_PID: String(process.pid) },
-		});
+		const env = { ...process.env, CLIENT_URL: this.serverUrl(), LAUNCHER_PID: String(process.pid) };
+		// npm is npm.cmd on Windows, which needs a shell — but `shell: true` makes Node IGNORE windowsHide,
+		// so the console pops anyway. Spawn cmd.exe ourselves instead: as a direct exe, windowsHide applies
+		// CREATE_NO_WINDOW, and npm → node → tsx inherit that one hidden console rather than each popping a window.
+		if (process.platform === 'win32') {
+			return spawn('cmd.exe', ['/d', '/s', '/c', 'npm run start'], { cwd: this.paths.serverDirectory, windowsHide: true, env });
+		}
+		return spawn('npm run start', { cwd: this.paths.serverDirectory, shell: true, env });
 	}
 }

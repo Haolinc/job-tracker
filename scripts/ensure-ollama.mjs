@@ -1,16 +1,19 @@
-// Preflight: make sure a local Ollama DAEMON is reachable so the email classifier can use it. Model choice
-// and downloading live in the launcher, not here. Strategy:
+// Preflight: work out how the launcher should reach a local Ollama DAEMON for the email classifier. This script
+// only DETECTS (and, on request, downloads) Ollama — it does NOT start `ollama serve` itself; it hands the exe
+// path back and the launcher starts serve (a long-lived, console-less GUI parent gives serve a hidden console so
+// its GPU-discovery probes don't flash windows). Model choice and downloading live in the launcher, not here.
+// Strategy:
 //   • Ollama HTTP already answers            → nothing to do
-//   • ollama on PATH, or a portable copy we  → start `ollama serve`
+//   • ollama on PATH, or a portable copy we  → print @start-serve@ <exe> for the launcher to start
 //     installed earlier, exists
 //   • nothing installed (default run)        → report "[ollama-missing]" and stop — we do NOT download
 //                                              behind the user's back; the launcher asks first
 //   • nothing installed + `--install`        → the user opted in: download a PORTABLE Ollama into app data
-//                                              (nothing system-wide, removable) → serve
+//                                              (nothing system-wide, removable) → hand its path to the launcher
 //   • non-Windows without Ollama             → warn and continue (portable path is Windows-only for now)
 // Always exits 0 so it never blocks startup; classification simply stays unavailable if a step fails.
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { once } from 'node:events';
 import os from 'node:os';
@@ -33,6 +36,10 @@ const log = (message) => console.log(`[ensure-ollama] ${message}`);
 
 // Printed raw on stdout for the launcher to turn into the panel's live download line (must match ollamaService.ts).
 const DOWNLOAD_PROGRESS_MARKER = '@download-progress@';
+// Printed once we've resolved the ollama exe but found the daemon down: the launcher (a long-lived GUI process
+// with no console) starts `ollama serve` itself so its GPU-discovery probes inherit a hidden console instead of
+// each flashing a window. Payload is "<exePath>\t<portableModelsDir or empty>". Keep in sync with ollamaService.ts.
+const START_SERVE_MARKER = '@start-serve@';
 
 /** True when the Ollama HTTP API answers. */
 async function isUp() {
@@ -46,7 +53,7 @@ async function isUp() {
 /** The resolved `ollama` executable path if it's on PATH, else null. */
 function resolveOllamaOnPath() {
 	const probeCommand = process.platform === 'win32' ? 'where' : 'which';
-	const probeResult = spawnSync(probeCommand, ['ollama'], { encoding: 'utf8' });
+	const probeResult = spawnSync(probeCommand, ['ollama'], { encoding: 'utf8', windowsHide: true });
 	if (probeResult.status !== 0) return null;
 	return probeResult.stdout.split(/\r?\n/).find(Boolean)?.trim() ?? null;
 }
@@ -89,7 +96,7 @@ async function ensurePortableOllama() {
 	try {
 		await downloadToFile(PORTABLE_ZIP_URL, zipPath);
 		log('extracting Ollama…');
-		const extraction = spawnSync(systemBsdTar, ['-xf', zipPath, '-C', portableDir], { stdio: 'inherit' });
+		const extraction = spawnSync(systemBsdTar, ['-xf', zipPath, '-C', portableDir], { stdio: 'inherit', windowsHide: true });
 		if (extraction.status !== 0) throw new Error(`extraction failed (tar exit ${extraction.status})`);
 		console.log(`${DOWNLOAD_PROGRESS_MARKER} done`);
 	} catch (error) {
@@ -100,24 +107,6 @@ async function ensurePortableOllama() {
 		rmSync(zipPath, { force: true });
 	}
 	return existsSync(portableExecutable) ? portableExecutable : null;
-}
-
-/** Start `ollama serve` detached so it outlives this preflight. Portable copies keep models in app data. */
-function startServe(ollamaExecutable, usingPortable) {
-	// This exact phrase is the launcher's signal that IT started Ollama (so it stops it on quit) — keep it.
-	log('not running — starting `ollama serve`…');
-	const serveEnv = usingPortable ? { ...process.env, OLLAMA_MODELS: portableModelsDir } : process.env;
-	spawn(ollamaExecutable, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true, env: serveEnv }).unref();
-}
-
-/** Poll until the daemon answers, up to `timeoutMs`. Returns whether it came up. */
-async function waitUntilUp(timeoutMs) {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 500));
-		if (await isUp()) return true;
-	}
-	return false;
 }
 
 // ── Orchestration ──────────────────────────────────────────────────────────
@@ -147,10 +136,9 @@ if (!ollamaExecutable) {
 	}
 }
 
-startServe(ollamaExecutable, usingPortable);
-if (await waitUntilUp(20_000)) {
-	log(`up at ${OLLAMA_BASE_URL}`);
-	process.exit(0);
-}
-log('did not become ready within 20s — continuing anyway (the server will retry on first classify).');
+// Daemon is down but we have an exe. Hand it to the launcher to start (see START_SERVE_MARKER above) rather than
+// starting it here: the launcher outlives this preflight and gives serve a hidden console, so serve survives and
+// its GPU-discovery probes don't flash windows. Payload: "<exePath>\t<portableModelsDir or empty>".
+const serveModelsDir = usingPortable ? portableModelsDir : '';
+console.log(`${START_SERVE_MARKER} ${ollamaExecutable}\t${serveModelsDir}`);
 process.exit(0);
