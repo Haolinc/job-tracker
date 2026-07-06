@@ -57,20 +57,33 @@ async function pushStatus(): Promise<void> {
 
 // ── Models ──────────────────────────────────────────────────────────────────
 
-/** Names of the models installed in the running Ollama, for the config panel's picker (empty if unreachable). */
-async function listInstalledModels(): Promise<string[]> {
+/**
+ * Names of the models installed in the running Ollama, or null when Ollama is unreachable. The panel needs
+ * to tell "Ollama is down" (keep the saved choice) apart from "Ollama is up but has no models" (offer none) —
+ * an empty array can't express that, so unreachable is its own value.
+ */
+async function listInstalledModels(): Promise<string[] | null> {
 	try {
 		const response = await fetch(OLLAMA_HEALTH_URL, { signal: AbortSignal.timeout(1500) });
-		if (!response.ok) return [];
+		if (!response.ok) return null;
 		const body = (await response.json()) as { models?: { name: string }[] };
 		return (body.models ?? []).map((model) => model.name);
 	} catch {
-		return [];
+		return null;
 	}
 }
 
 /** Pull a model into the running Ollama via its streaming API, logging progress every ~10% to the panel. */
-async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string }> {
+async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }> {
+	// Already installed? Skip the pull — Ollama would just report "success" and we'd falsely say "downloaded".
+	// A bare name (no tag) resolves to :latest, which is how /api/tags reports it, so normalise before matching.
+	const installedModels = await listInstalledModels();
+	const requestedTag = modelName.includes(':') ? modelName : `${modelName}:latest`;
+	if (installedModels?.includes(requestedTag)) {
+		log('launcher', `Model ${modelName} is already installed — skipping the download.`);
+		return { ok: true, alreadyInstalled: true };
+	}
+
 	log('launcher', `Downloading model ${modelName}…`);
 	try {
 		const response = await fetch(`${OLLAMA_BASE_URL}/api/pull`, {
@@ -168,7 +181,7 @@ async function promptOllamaInstall(): Promise<void> {
 		await ollama.installPortable();
 		// A fresh portable Ollama ships with no models. Ask before pulling the default so the multi-GB model
 		// download is the user's explicit choice — they can also skip and pick one later from Config.
-		if ((await listInstalledModels()).length === 0) {
+		if (((await listInstalledModels()) ?? []).length === 0) {
 			if (await confirmModelDownload(DEFAULT_MODEL)) await pullModel(DEFAULT_MODEL);
 			else log('launcher', 'Skipped the model download — choose or download one anytime from Config.');
 		}

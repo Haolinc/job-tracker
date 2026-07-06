@@ -20,10 +20,10 @@ export interface LauncherBridge {
 	openApp(): void;
 	getConfig(): Promise<LauncherConfig>;
 	saveConfig(config: LauncherConfig): Promise<void>;
-	/** Names of the models installed in the running Ollama, for the config panel's model picker. */
-	listInstalledModels(): Promise<string[]>;
-	/** Pull a model into Ollama; progress streams to the log pane, result reports success/failure. */
-	pullModel(modelName: string): Promise<{ ok: boolean; error?: string }>;
+	/** Names of the models installed in the running Ollama, or null when Ollama is unreachable. */
+	listInstalledModels(): Promise<string[] | null>;
+	/** Pull a model into Ollama; progress streams to the log pane, result reports success/failure/already-present. */
+	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }>;
 	/** Open Ollama's model catalog (ollama.com/library) in the default browser. */
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;

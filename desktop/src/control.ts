@@ -26,8 +26,8 @@ interface ControlPanelBridge {
 	openApp(): void;
 	getConfig(): Promise<ControlPanelConfig>;
 	saveConfig(config: ControlPanelConfig): Promise<void>;
-	listInstalledModels(): Promise<string[]>;
-	pullModel(modelName: string): Promise<{ ok: boolean; error?: string }>;
+	listInstalledModels(): Promise<string[] | null>;
+	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }>;
 	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: ControlPanelStatus) => void): void;
@@ -67,6 +67,13 @@ const browseModelsLink = document.getElementById('browse-models-link') as HTMLAn
 const MAX_LOG_LINES = 2000;
 // Duplicates config.ts DEFAULT_PORT by necessity — see the no-import note above.
 const DEFAULT_PORT = '3001';
+// The recommended default model — floated to the top of the picker and pre-selected on a fresh start.
+// Mirrors main.ts DEFAULT_MODEL (the no-import boundary again).
+const DEFAULT_MODEL = 'qwen2.5:7b';
+
+// The model saved in .env, remembered so that saving while the picker is disabled (Ollama down, or no models
+// installed) preserves the user's choice instead of overwriting it with an empty selection.
+let savedOllamaModel = '';
 
 // ── Log console ─────────────────────────────────────────────────────────────
 
@@ -104,22 +111,64 @@ openAppButton.addEventListener('click', () => launcher.openApp());
 async function loadConfigIntoPanel(): Promise<void> {
 	const config = await launcher.getConfig();
 	for (const configField of configFields) configInputs[configField].value = config[configField];
-	await populateModelDropdown(config.ollamaModel);
+	savedOllamaModel = config.ollamaModel;
+	await refreshModelPicker(savedOllamaModel);
 }
 
-/** Fill the model dropdown with Ollama's installed models, keeping the saved choice selectable/selected. */
-async function populateModelDropdown(savedModel: string): Promise<void> {
-	const installedModels = await launcher.listInstalledModels();
-	// Keep the saved model in the list even if Ollama is down or it's no longer installed.
-	const options = savedModel && !installedModels.includes(savedModel) ? [savedModel, ...installedModels] : installedModels;
+/** The recommended default first (when installed), then every other model alphabetically. */
+function orderModels(models: string[]): string[] {
+	const others = models.filter((name) => name !== DEFAULT_MODEL).sort((first, second) => first.localeCompare(second));
+	return models.includes(DEFAULT_MODEL) ? [DEFAULT_MODEL, ...others] : others;
+}
 
+/** Enable or disable the "download a model" field — off when there is no reachable Ollama to pull into. */
+function setDownloadEnabled(enabled: boolean): void {
+	pullModelInput.disabled = !enabled;
+	pullModelButton.disabled = !enabled;
+}
+
+/**
+ * Reflect Ollama's state in the model picker and the download field:
+ *   • unreachable    → nothing to pick and no way to pull: both disabled
+ *   • up, no models  → nothing to pick yet, but the user can type a model to download
+ *   • up, has models → the default (qwen) on top, the rest alphabetical; only installed models are selectable
+ * A returning user keeps their saved choice when it's still installed; a fresh start lands on the default.
+ */
+async function refreshModelPicker(savedModel: string): Promise<void> {
+	const installedModels = await launcher.listInstalledModels();   // null → Ollama unreachable
 	modelSelect.replaceChildren();
-	if (options.length === 0) {
-		modelSelect.appendChild(new Option('(no models found — is Ollama running?)', ''));
-	} else {
-		for (const modelName of options) modelSelect.appendChild(new Option(modelName, modelName));
+
+	// State 1 — Ollama not found: can't list or verify anything, so offer nothing and lock the controls.
+	if (installedModels === null) {
+		modelSelect.appendChild(new Option('Ollama not running', ''));
+		modelSelect.value = '';
+		modelSelect.disabled = true;
+		setDownloadEnabled(false);
+		return;
 	}
-	modelSelect.value = savedModel || options[0] || '';
+
+	// State 2 — Ollama up but no models: nothing to select yet; downloading is the way to get one.
+	if (installedModels.length === 0) {
+		modelSelect.appendChild(new Option('No models installed — download one below', ''));
+		modelSelect.value = '';
+		modelSelect.disabled = true;
+		setDownloadEnabled(true);
+		return;
+	}
+
+	// State 3 — Ollama up with models: default first (labelled), the rest alphabetical.
+	const orderedModels = orderModels(installedModels);
+	for (const modelName of orderedModels) {
+		const label = modelName === DEFAULT_MODEL ? `${modelName} (default)` : modelName;
+		modelSelect.appendChild(new Option(label, modelName));
+	}
+	modelSelect.disabled = false;
+	setDownloadEnabled(true);
+
+	const savedIsInstalled = savedModel !== '' && installedModels.includes(savedModel);
+	modelSelect.value = savedIsInstalled
+		? savedModel
+		: installedModels.includes(DEFAULT_MODEL) ? DEFAULT_MODEL : orderedModels[0];
 }
 
 configButton.addEventListener('click', () => {
@@ -127,8 +176,9 @@ configButton.addEventListener('click', () => {
 	if (panelIsNowOpen) void loadConfigIntoPanel();
 });
 
-// Refresh the dropdown, keeping the current pick selected if it's still installed.
-refreshModelsButton.addEventListener('click', () => void populateModelDropdown(modelSelect.value));
+// Re-check Ollama and rebuild the picker, keeping the current pick selected if it's still installed. Always
+// available — it's how the user re-detects models after starting Ollama or downloading one.
+refreshModelsButton.addEventListener('click', () => void refreshModelPicker(modelSelect.value || savedOllamaModel));
 
 browseModelsLink.addEventListener('click', (event) => {
 	event.preventDefault();
@@ -143,17 +193,21 @@ pullModelButton.addEventListener('click', async () => {
 	pullModelButton.textContent = 'Downloading…';
 	const result = await launcher.pullModel(modelName);
 	pullModelButton.disabled = false;
-	pullModelButton.textContent = 'Download';
 	if (result.ok) {
 		pullModelInput.value = '';
-		await populateModelDropdown(modelName);
+		await refreshModelPicker(modelName);   // now installed (or already was) → select it
 	}
+	// Confirm right on the button, since the user clicked here — "already installed" vs a fresh download.
+	pullModelButton.textContent = result.alreadyInstalled ? 'Already installed' : 'Download';
+	if (result.alreadyInstalled) window.setTimeout(() => { pullModelButton.textContent = 'Download'; }, 2500);
 });
 
 saveConfigButton.addEventListener('click', async () => {
 	const config = {} as ControlPanelConfig;
 	for (const configField of configFields) config[configField] = configInputs[configField].value.trim();
-	config.ollamaModel = modelSelect.value;
+	// When the picker is disabled (Ollama down, or nothing installed) there's no real selection to save —
+	// keep the previously saved model rather than overwriting it with an empty value.
+	config.ollamaModel = modelSelect.disabled ? savedOllamaModel : modelSelect.value;
 	if (!config.port) config.port = DEFAULT_PORT;   // an empty PORT= line would break the server
 	await launcher.saveConfig(config);
 	configPanel.classList.remove('open');
