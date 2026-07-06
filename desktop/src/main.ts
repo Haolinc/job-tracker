@@ -6,7 +6,7 @@
 // ServerManager) to the window, the IPC channels, and the app lifecycle. The real work lives in those
 // modules; the renderer is a pure display surface.
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { DEFAULT_PORT, readConfig, readEnvFile, writeConfig } from './config';
 import type { LauncherConfig } from './config';
@@ -17,7 +17,13 @@ import { isReachable } from './health';
 import { OllamaService } from './ollamaService';
 import { ServerManager } from './serverManager';
 
-const OLLAMA_HEALTH_URL = 'http://127.0.0.1:11434/api/tags';
+// Match the preflight (ensure-ollama.mjs): honour OLLAMA_HOST so a custom port/host reaches the same daemon.
+const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+const OLLAMA_HEALTH_URL = `${OLLAMA_BASE_URL}/api/tags`;
+const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+const MODEL_LIBRARY_URL = 'https://ollama.com/library';
+// Pulled automatically only after a fresh portable install (which ships no models); otherwise the user picks.
+const DEFAULT_MODEL = 'qwen2.5:7b';
 const STATUS_POLL_INTERVAL_MS = 2000;
 // After stopping the server, give the tree kill this long to release the port before restarting onto it.
 const SERVER_RESTART_DELAY_MS = 1500;
@@ -28,7 +34,13 @@ let controlWindow: BrowserWindow | null = null;
 const log = createLog(() => controlWindow);
 const serverUrl = () => `http://localhost:${readEnvFile(paths.serverEnvPath).get('PORT') || DEFAULT_PORT}`;
 
-const ollama = new OllamaService(paths, log);
+// Shown at most once per session: when the preflight reports no Ollama, ask the user before downloading it.
+let ollamaPromptShown = false;
+const ollama = new OllamaService(paths, log, () => {
+	if (ollamaPromptShown) return;
+	ollamaPromptShown = true;
+	void promptOllamaInstall();
+});
 const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushStatus());
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -41,6 +53,64 @@ async function pushStatus(): Promise<void> {
 		ollamaUp: await isReachable(OLLAMA_HEALTH_URL),
 	};
 	controlWindow.webContents.send('launcher:status', status);
+}
+
+// ── Models ──────────────────────────────────────────────────────────────────
+
+/** Names of the models installed in the running Ollama, for the config panel's picker (empty if unreachable). */
+async function listInstalledModels(): Promise<string[]> {
+	try {
+		const response = await fetch(OLLAMA_HEALTH_URL, { signal: AbortSignal.timeout(1500) });
+		if (!response.ok) return [];
+		const body = (await response.json()) as { models?: { name: string }[] };
+		return (body.models ?? []).map((model) => model.name);
+	} catch {
+		return [];
+	}
+}
+
+/** Pull a model into the running Ollama via its streaming API, logging progress every ~10% to the panel. */
+async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string }> {
+	log('launcher', `Downloading model ${modelName}…`);
+	try {
+		const response = await fetch(`${OLLAMA_BASE_URL}/api/pull`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ name: modelName, stream: true }),
+		});
+		if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let pending = '';
+		let lastLoggedPercent = -10;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			pending += decoder.decode(value, { stream: true });
+			let newlineIndex;
+			while ((newlineIndex = pending.indexOf('\n')) >= 0) {
+				const line = pending.slice(0, newlineIndex).trim();
+				pending = pending.slice(newlineIndex + 1);
+				if (!line) continue;
+				const event = JSON.parse(line) as { error?: string; total?: number; completed?: number };
+				if (event.error) throw new Error(event.error);
+				if (event.total && event.completed) {
+					const percent = Math.floor((event.completed / event.total) * 100);
+					if (percent >= lastLoggedPercent + 10) {
+						lastLoggedPercent = percent;
+						log('ollama', `pulling ${modelName}… ${percent}%`);
+					}
+				}
+			}
+		}
+		log('launcher', `Model ${modelName} downloaded.`);
+		return { ok: true };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		log('launcher', `Failed to download ${modelName}: ${message}`);
+		return { ok: false, error: message };
+	}
 }
 
 // ── Config panel ────────────────────────────────────────────────────────────
@@ -58,6 +128,36 @@ function saveConfig(config: LauncherConfig): void {
 		// First run: the server had no valid .env and exited, so there's nothing to restart — start it now.
 		log('launcher', 'Starting server with the new config…');
 		void server.start();
+	}
+}
+
+// ── Ollama setup ────────────────────────────────────────────────────────────
+
+/**
+ * The preflight found no Ollama. Warn the user and let them choose: download it in-app (a big one-time
+ * download), get it themselves from ollama.com, or skip. The app runs either way — only classification needs it.
+ */
+async function promptOllamaInstall(): Promise<void> {
+	if (!controlWindow) return;
+	const { response } = await dialog.showMessageBox(controlWindow, {
+		type: 'warning',
+		title: 'Ollama not found',
+		message: 'Ollama is needed for email classification, and it was not found on this computer.',
+		detail: 'This downloads Ollama (~1.5 GB) plus a default model (~4.7 GB) into the app — a one-time setup. Or get Ollama yourself from ollama.com. The app still works without it — only email classification is unavailable.',
+		buttons: ['Download in the app', 'Open ollama.com', 'Not now'],
+		defaultId: 0,
+		cancelId: 2,
+	});
+	if (response === 0) {
+		log('launcher', 'Setting up Ollama — this is a large one-time download…');
+		await ollama.installPortable();
+		// A fresh portable Ollama ships with no models — pull a sensible default so classification works.
+		if ((await listInstalledModels()).length === 0) await pullModel(DEFAULT_MODEL);
+		void pushStatus();
+	} else if (response === 1) {
+		void shell.openExternal(OLLAMA_DOWNLOAD_URL);
+	} else {
+		log('launcher', 'Skipped Ollama setup — classification stays off until Ollama is installed.');
 	}
 }
 
@@ -89,6 +189,9 @@ ipcMain.on('launcher:stop', () => server.stop());
 ipcMain.on('launcher:open-app', () => void shell.openExternal(serverUrl()));   // the app lives in the browser
 ipcMain.handle('launcher:get-config', () => readConfig(paths.serverEnvPath));
 ipcMain.handle('launcher:save-config', (_event, config: LauncherConfig) => saveConfig(config));
+ipcMain.handle('launcher:list-models', () => listInstalledModels());
+ipcMain.handle('launcher:pull-model', (_event, modelName: string) => pullModel(modelName));
+ipcMain.on('launcher:browse-models', () => void shell.openExternal(MODEL_LIBRARY_URL));
 
 // ── App lifecycle ───────────────────────────────────────────────────────────
 

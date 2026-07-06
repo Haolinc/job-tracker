@@ -11,6 +11,9 @@ const launcherBridge: LauncherBridge = {
 	openApp: () => ipcRenderer.send('launcher:open-app'),
 	getConfig: () => ipcRenderer.invoke('launcher:get-config') as Promise<LauncherConfig>,
 	saveConfig: (config: LauncherConfig) => ipcRenderer.invoke('launcher:save-config', config) as Promise<void>,
+	listInstalledModels: () => ipcRenderer.invoke('launcher:list-models') as Promise<string[]>,
+	pullModel: (modelName: string) => ipcRenderer.invoke('launcher:pull-model', modelName) as Promise<{ ok: boolean; error?: string }>,
+	openModelLibrary: () => ipcRenderer.send('launcher:browse-models'),
 	onLog: (handler) => ipcRenderer.on('launcher:log', (_event, line: string) => handler(line)),
 	onStatus: (handler) => ipcRenderer.on('launcher:status', (_event, status: LauncherStatus) => handler(status)),
 };

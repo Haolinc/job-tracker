@@ -15,6 +15,8 @@ export interface LauncherPaths {
 	serverEnvPath: string;
 	serverDatabasePath: string;
 	serverLogPath: string;
+	/** Where a portable Ollama is downloaded/extracted when the machine has none — kept in app data. */
+	ollamaPortableDir: string;
 }
 
 /**
@@ -40,5 +42,6 @@ export function resolveLauncherPaths(): LauncherPaths {
 		serverEnvPath: path.join(writableDataDir, '.env'),
 		serverDatabasePath: path.join(writableDataDir, 'job-tracker.db'),
 		serverLogPath: path.join(writableDataDir, 'sync.log'),
+		ollamaPortableDir: path.join(writableDataDir, 'ollama'),
 	};
 }

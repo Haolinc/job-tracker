@@ -7,6 +7,23 @@ import { enable } from './logger';
 // LOG_FILE likewise redirects sync.log to a writable location when packaged; unset → next to the module.
 if (process.env.LOG_TO_FILE !== 'false') enable(process.env.LOG_FILE ? { filePath: process.env.LOG_FILE } : undefined);
 
+// Watchdog: when the desktop launcher spawns us it passes its own PID as LAUNCHER_PID. The launcher stops us
+// cleanly on a normal quit, but if it is force-killed or crashes, its exit handlers never run and we would
+// orphan (holding the port). So poll the launcher and self-exit once it is gone. `kill(pid, 0)` sends no
+// signal — it only asks "does this process still exist?", throwing if not. unref() keeps this timer from
+// holding the server alive on its own. Absent LAUNCHER_PID (plain dev run) there is no parent to watch.
+const launcherPid = Number(process.env.LAUNCHER_PID);
+if (launcherPid) {
+	setInterval(() => {
+		try {
+			process.kill(launcherPid, 0);
+		} catch {
+			console.log('Launcher process is gone — shutting the server down.');
+			process.exit(0);
+		}
+	}, 3000).unref();
+}
+
 const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
 for (const key of required) {
 	if (!process.env[key]) {

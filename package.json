@@ -13,6 +13,7 @@
 		"build:server": "npm --prefix server run build",
 		"build:desktop": "tsc -p desktop && tsc -p desktop/tsconfig.renderer.json",
 		"desktop:build": "npm run build:client && npm run build:desktop",
+        "desktop:no-ollama":"powershell -NoProfile -Command \"$env:OLLAMA_HOST='http://127.0.0.1:59999'; $env:PATH=(($env:PATH -split ';') | Where-Object { $_ -notlike '*Ollama*' }) -join ';'; npm run desktop\"",
 		"desktop": "npm run desktop:build && electron desktop/dist/main.js",
 		"package": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder"
 	},

@@ -15,6 +15,8 @@ export interface LauncherConfig {
 	/** Left empty in the panel → a random secret is generated on save. */
 	sessionSecret: string;
 	port: string;
+	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
+	ollamaModel: string;
 }
 
 const ENV_KEYS_BY_CONFIG_FIELD: Record<keyof LauncherConfig, string> = {
@@ -23,6 +25,7 @@ const ENV_KEYS_BY_CONFIG_FIELD: Record<keyof LauncherConfig, string> = {
 	googleRedirectUri: 'GOOGLE_REDIRECT_URI',
 	sessionSecret: 'SESSION_SECRET',
 	port: 'PORT',
+	ollamaModel: 'OLLAMA_MODEL',
 };
 
 const CONFIG_FIELDS = Object.keys(ENV_KEYS_BY_CONFIG_FIELD) as (keyof LauncherConfig)[];
@@ -33,6 +36,7 @@ const DEFAULT_CONFIG_VALUES: Record<keyof LauncherConfig, string> = {
 	googleRedirectUri: `http://localhost:${DEFAULT_PORT}/api/auth/google/callback`,
 	sessionSecret: '',
 	port: DEFAULT_PORT,
+	ollamaModel: '',
 };
 
 export function readEnvFile(envPath: string): Map<string, string> {

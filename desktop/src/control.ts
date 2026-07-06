@@ -17,6 +17,7 @@ interface ControlPanelConfig {
 	googleRedirectUri: string;
 	sessionSecret: string;
 	port: string;
+	ollamaModel: string;
 }
 
 interface ControlPanelBridge {
@@ -25,6 +26,9 @@ interface ControlPanelBridge {
 	openApp(): void;
 	getConfig(): Promise<ControlPanelConfig>;
 	saveConfig(config: ControlPanelConfig): Promise<void>;
+	listInstalledModels(): Promise<string[]>;
+	pullModel(modelName: string): Promise<{ ok: boolean; error?: string }>;
+	openModelLibrary(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: ControlPanelStatus) => void): void;
 }
@@ -41,16 +45,24 @@ const configButton = document.getElementById('config-button') as HTMLButtonEleme
 const configPanel = document.getElementById('config-panel') as HTMLElement;
 const saveConfigButton = document.getElementById('save-config-button') as HTMLButtonElement;
 
-// Record<…> makes the compiler verify an input exists for EVERY config field — and the derived list
-// below keeps load and save in lockstep with the interface.
-const configInputs: Record<keyof ControlPanelConfig, HTMLInputElement> = {
+// Every config field is a plain text input EXCEPT the model, which is a dropdown of installed models.
+type TextConfigField = Exclude<keyof ControlPanelConfig, 'ollamaModel'>;
+
+// Record<…> makes the compiler verify an input exists for every text field — and the derived list below
+// keeps load and save in lockstep with the interface.
+const configInputs: Record<TextConfigField, HTMLInputElement> = {
 	googleClientId: document.getElementById('google-client-id') as HTMLInputElement,
 	googleClientSecret: document.getElementById('google-client-secret') as HTMLInputElement,
 	googleRedirectUri: document.getElementById('google-redirect-uri') as HTMLInputElement,
 	sessionSecret: document.getElementById('session-secret') as HTMLInputElement,
 	port: document.getElementById('server-port') as HTMLInputElement,
 };
-const configFields = Object.keys(configInputs) as (keyof ControlPanelConfig)[];
+const configFields = Object.keys(configInputs) as TextConfigField[];
+const modelSelect = document.getElementById('ollama-model') as HTMLSelectElement;
+const refreshModelsButton = document.getElementById('refresh-models-button') as HTMLButtonElement;
+const pullModelInput = document.getElementById('pull-model-input') as HTMLInputElement;
+const pullModelButton = document.getElementById('pull-model-button') as HTMLButtonElement;
+const browseModelsLink = document.getElementById('browse-models-link') as HTMLAnchorElement;
 
 const MAX_LOG_LINES = 2000;
 // Duplicates config.ts DEFAULT_PORT by necessity — see the no-import note above.
@@ -92,6 +104,22 @@ openAppButton.addEventListener('click', () => launcher.openApp());
 async function loadConfigIntoPanel(): Promise<void> {
 	const config = await launcher.getConfig();
 	for (const configField of configFields) configInputs[configField].value = config[configField];
+	await populateModelDropdown(config.ollamaModel);
+}
+
+/** Fill the model dropdown with Ollama's installed models, keeping the saved choice selectable/selected. */
+async function populateModelDropdown(savedModel: string): Promise<void> {
+	const installedModels = await launcher.listInstalledModels();
+	// Keep the saved model in the list even if Ollama is down or it's no longer installed.
+	const options = savedModel && !installedModels.includes(savedModel) ? [savedModel, ...installedModels] : installedModels;
+
+	modelSelect.replaceChildren();
+	if (options.length === 0) {
+		modelSelect.appendChild(new Option('(no models found — is Ollama running?)', ''));
+	} else {
+		for (const modelName of options) modelSelect.appendChild(new Option(modelName, modelName));
+	}
+	modelSelect.value = savedModel || options[0] || '';
 }
 
 configButton.addEventListener('click', () => {
@@ -99,9 +127,33 @@ configButton.addEventListener('click', () => {
 	if (panelIsNowOpen) void loadConfigIntoPanel();
 });
 
+// Refresh the dropdown, keeping the current pick selected if it's still installed.
+refreshModelsButton.addEventListener('click', () => void populateModelDropdown(modelSelect.value));
+
+browseModelsLink.addEventListener('click', (event) => {
+	event.preventDefault();
+	launcher.openModelLibrary();
+});
+
+// Download a model into Ollama; progress streams to the log pane. On success, select it in the dropdown.
+pullModelButton.addEventListener('click', async () => {
+	const modelName = pullModelInput.value.trim();
+	if (!modelName) return;
+	pullModelButton.disabled = true;
+	pullModelButton.textContent = 'Downloading…';
+	const result = await launcher.pullModel(modelName);
+	pullModelButton.disabled = false;
+	pullModelButton.textContent = 'Download';
+	if (result.ok) {
+		pullModelInput.value = '';
+		await populateModelDropdown(modelName);
+	}
+});
+
 saveConfigButton.addEventListener('click', async () => {
 	const config = {} as ControlPanelConfig;
 	for (const configField of configFields) config[configField] = configInputs[configField].value.trim();
+	config.ollamaModel = modelSelect.value;
 	if (!config.port) config.port = DEFAULT_PORT;   // an empty PORT= line would break the server
 	await launcher.saveConfig(config);
 	configPanel.classList.remove('open');

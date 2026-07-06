@@ -86,7 +86,9 @@ const responseSchema = {
 async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
 	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
 	const res = await ollama.chat({
-		model: 'qwen2.5:7b',
+		// The launcher lets the user pick from their installed models (written to .env as OLLAMA_MODEL);
+		// fall back to qwen2.5:7b when unset.
+		model: process.env.OLLAMA_MODEL || 'qwen2.5:7b',
 		messages: [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },

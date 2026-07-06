@@ -78,6 +78,8 @@ export class ServerManager {
 			env: {
 				...process.env,
 				ELECTRON_RUN_AS_NODE: '1',
+				// So the server can self-exit if this launcher is force-killed (its stop() never runs then).
+				LAUNCHER_PID: String(process.pid),
 				CLIENT_URL: this.serverUrl(),
 				ENV_FILE: this.paths.serverEnvPath,
 				DB_PATH: this.paths.serverDatabasePath,
@@ -93,7 +95,9 @@ export class ServerManager {
 		return spawn('npm run start', {
 			cwd: this.paths.serverDirectory,
 			shell: true,   // npm is npm.cmd on Windows
-			env: { ...process.env, CLIENT_URL: this.serverUrl() },
+			// LAUNCHER_PID: same force-kill backstop as the packaged path — the dev server (cmd → npm → node)
+			// is exactly what orphaned before, and the tree-kill in stop() only runs on a graceful quit.
+			env: { ...process.env, CLIENT_URL: this.serverUrl(), LAUNCHER_PID: String(process.pid) },
 		});
 	}
 }

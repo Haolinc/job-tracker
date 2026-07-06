@@ -67,7 +67,7 @@
 			max-width: 720px;
 		}
 		#config-panel label { font-size: 12.5px; color: var(--text-dim); }
-		#config-panel input {
+		#config-panel input, #config-panel select {
 			background: var(--background);
 			color: var(--text);
 			border: 1px solid var(--border);
@@ -76,7 +76,12 @@
 			font-size: 12.5px;
 			font-family: Consolas, monospace;
 		}
-		#config-panel input:focus { outline: none; border-color: var(--accent); }
+		#config-panel input:focus, #config-panel select:focus { outline: none; border-color: var(--accent); }
+		#config-panel .field-row { display: flex; gap: 8px; align-items: center; }
+		#config-panel .field-row > select, #config-panel .field-row > input { flex: 1; }
+		#config-panel button.mini { padding: 5px 11px; font-size: 12px; white-space: nowrap; }
+		#config-panel a.config-hint { text-decoration: none; }
+		#config-panel a.config-hint:hover { color: var(--accent); }
 		#config-panel .config-actions { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
 		#config-panel .config-hint { font-size: 12px; color: var(--text-dim); }
 
@@ -118,6 +123,26 @@
 			<input id="session-secret" type="password" spellcheck="false" placeholder="leave empty to auto-generate" />
 			<label for="server-port">Port</label>
 			<input id="server-port" spellcheck="false" placeholder="3001" />
+			<label for="ollama-model">Classification model</label>
+			<div class="field-row">
+				<select id="ollama-model"></select>
+				<button type="button" id="refresh-models-button" class="mini" title="Refresh model list">⟳</button>
+			</div>
+			<span></span>
+			<span class="config-hint">Not sure? <strong>qwen2.5:7b</strong> is the recommended default — select it above if installed, or download it below (~4.7 GB).</span>
+			<label for="pull-model-input">Download a model</label>
+			<div class="field-row">
+				<input id="pull-model-input" list="model-suggestions" spellcheck="false" placeholder="e.g. qwen2.5:7b" />
+				<datalist id="model-suggestions">
+					<option value="qwen2.5:7b"></option>
+					<option value="llama3.1:8b"></option>
+					<option value="phi3"></option>
+					<option value="gemma2:9b"></option>
+				</datalist>
+				<button type="button" id="pull-model-button" class="mini">Download</button>
+			</div>
+			<span></span>
+			<a id="browse-models-link" class="config-hint" href="#">Browse models on ollama.com ↗</a>
 		</div>
 		<div class="config-actions">
 			<button id="save-config-button" class="primary">Save</button>

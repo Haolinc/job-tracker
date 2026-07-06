@@ -55,3 +55,6 @@ desktop.ini
 
 # ─── Miscellaneous ───────────────────────────────────────────────────────────
 audit_ground_truth.txt
+
+# ─── Local Ollama ───────────────────────────────────────────────────────────
+server/ollama/
