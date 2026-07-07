@@ -11,6 +11,10 @@ export interface LauncherStatus {
 	serverUp: boolean;
 	/** Ollama answers on its port — the classifier can work. */
 	ollamaUp: boolean;
+	/** The classification model configured in .env (OLLAMA_MODEL), or null when none is set. */
+	activeModel: string | null;
+	/** The configured model is present in the running Ollama. False when unset or not installed. */
+	activeModelInstalled: boolean;
 }
 
 /** A single model-download progress update, streamed as a pull runs so the panel can show one live line. */

@@ -12,6 +12,7 @@
 			--text-dim: #8b98a5;
 			--green: #2ecc71;
 			--red: #e74c3c;
+			--amber: #f39c12;
 			--accent: #3498db;
 		}
 		* { box-sizing: border-box; margin: 0; }
@@ -39,6 +40,8 @@
 			transition: background 0.3s;
 		}
 		.status-dot.up { background: var(--green); }
+		.status-dot.warn { background: var(--amber); }
+		#active-model-label { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 		button {
 			background: transparent;
 			color: var(--text);
@@ -110,6 +113,7 @@
 		<h1>Job Tracker</h1>
 		<div class="status-item"><span id="server-dot" class="status-dot"></span>Server</div>
 		<div class="status-item"><span id="ollama-dot" class="status-dot"></span>Ollama</div>
+		<div class="status-item"><span id="model-dot" class="status-dot"></span><span id="active-model-label">Model</span></div>
 		<button id="config-button">Config</button>
 		<button id="start-button">Start</button>
 		<button id="stop-button" disabled>Stop</button>

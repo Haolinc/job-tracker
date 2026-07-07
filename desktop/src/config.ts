@@ -71,17 +71,30 @@ export function writeConfig(envPath: string, config: LauncherConfig): { generate
 
 	let updatedContent = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
 	for (const configField of CONFIG_FIELDS) {
-		const envKey = ENV_KEYS_BY_CONFIG_FIELD[configField];
-		const assignment = `${envKey}=${configToWrite[configField]}`;
-		const keyLinePattern = new RegExp(`^\\s*${envKey}\\s*=.*$`, 'm');
-		updatedContent = keyLinePattern.test(updatedContent)
-			// Replacer FUNCTION, not the string: a literal `$&`/`$'` in a pasted secret must not trigger
-			// String.replace's substitution patterns and corrupt the file.
-			? updatedContent.replace(keyLinePattern, () => assignment)
-			: appendAssignmentLine(updatedContent, assignment);
+		updatedContent = upsertAssignment(updatedContent, ENV_KEYS_BY_CONFIG_FIELD[configField], configToWrite[configField]);
 	}
 	writeFileSync(envPath, updatedContent);
 	return { generatedSessionSecret };
+}
+
+/**
+ * Persist a single managed key in place, leaving every other line (and the session secret) untouched. Used to
+ * adopt an auto-selected model without the full-save side effects (e.g. generating a session secret).
+ */
+export function updateConfigValue(envPath: string, field: keyof LauncherConfig, value: string): void {
+	const content = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+	writeFileSync(envPath, upsertAssignment(content, ENV_KEYS_BY_CONFIG_FIELD[field], value));
+}
+
+/** Set `ENVKEY=value` in `content`: replace the existing line in place, or append a new one if the key is absent. */
+function upsertAssignment(content: string, envKey: string, value: string): string {
+	const assignment = `${envKey}=${value}`;
+	const keyLinePattern = new RegExp(`^\\s*${envKey}\\s*=.*$`, 'm');
+	// Replacer FUNCTION, not the string: a literal `$&`/`$'` in a pasted secret must not trigger
+	// String.replace's substitution patterns and corrupt the file.
+	return keyLinePattern.test(content)
+		? content.replace(keyLinePattern, () => assignment)
+		: appendAssignmentLine(content, assignment);
 }
 
 /** Append on a fresh line; an empty/new file gets no leading blank line. */

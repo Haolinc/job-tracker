@@ -9,6 +9,8 @@ interface ControlPanelStatus {
 	serverRunning: boolean;
 	serverUp: boolean;
 	ollamaUp: boolean;
+	activeModel: string | null;
+	activeModelInstalled: boolean;
 }
 
 interface ControlPanelConfig {
@@ -51,6 +53,8 @@ declare const launcher: ControlPanelBridge;   // exposed by preload.ts via conte
 const logConsole = document.getElementById('log-console') as HTMLDivElement;
 const serverDot = document.getElementById('server-dot') as HTMLSpanElement;
 const ollamaDot = document.getElementById('ollama-dot') as HTMLSpanElement;
+const modelDot = document.getElementById('model-dot') as HTMLSpanElement;
+const modelLabel = document.getElementById('active-model-label') as HTMLSpanElement;
 const startButton = document.getElementById('start-button') as HTMLButtonElement;
 const stopButton = document.getElementById('stop-button') as HTMLButtonElement;
 const openAppButton = document.getElementById('open-app-button') as HTMLButtonElement;
@@ -187,10 +191,33 @@ launcher.onPullProgress((progress) => {
 launcher.onStatus((status) => {
 	serverDot.classList.toggle('up', status.serverUp);
 	ollamaDot.classList.toggle('up', status.ollamaUp);
+	renderModelStatus(status);
 	startButton.disabled = status.serverRunning;
 	stopButton.disabled = !status.serverRunning;
 	openAppButton.disabled = !status.serverUp;
 });
+
+/** Header model indicator: green when the configured model is installed, amber when it's unset or missing
+ *  (classification would fail), neutral while Ollama is unreachable (we can't tell). */
+function renderModelStatus(status: ControlPanelStatus): void {
+	modelDot.classList.remove('up', 'warn');
+	if (!status.ollamaUp) {
+		modelLabel.textContent = 'Model';
+		modelLabel.title = 'Ollama is not running — model status unknown.';
+	} else if (status.activeModel && status.activeModelInstalled) {
+		modelDot.classList.add('up');
+		modelLabel.textContent = status.activeModel;
+		modelLabel.title = `Classifying with ${status.activeModel}.`;
+	} else if (status.activeModel) {
+		modelDot.classList.add('warn');
+		modelLabel.textContent = `${status.activeModel} (missing)`;
+		modelLabel.title = `The configured model "${status.activeModel}" isn't installed — download it or pick another in Config.`;
+	} else {
+		modelDot.classList.add('warn');
+		modelLabel.textContent = 'No model';
+		modelLabel.title = 'No classification model is configured — download one in Config.';
+	}
+}
 
 startButton.addEventListener('click', () => launcher.startServer());
 stopButton.addEventListener('click', () => launcher.stopServer());

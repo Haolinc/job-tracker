@@ -10,7 +10,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { DEFAULT_PORT, readConfig, readEnvFile, writeConfig } from './config';
+import { DEFAULT_PORT, readConfig, readEnvFile, updateConfigValue, writeConfig } from './config';
 import type { LauncherConfig } from './config';
 import type { LauncherStatus, PullProgress } from './shared';
 import { resolveLauncherPaths } from './paths';
@@ -51,10 +51,18 @@ const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushS
 
 async function pushStatus(): Promise<void> {
 	if (!controlWindow) return;   // nobody to display it — skip the health probes
+	// listInstalledModels doubles as the Ollama health probe (null ⇔ unreachable), so we don't ping /api/tags twice.
+	const [serverUp, installedModels] = await Promise.all([
+		isReachable(`${serverUrl()}/api/health`),
+		listInstalledModels(),
+	]);
+	const configuredModel = readEnvFile(paths.serverEnvPath).get('OLLAMA_MODEL') || '';
 	const status: LauncherStatus = {
 		serverRunning: server.isRunning,
-		serverUp: await isReachable(`${serverUrl()}/api/health`),
-		ollamaUp: await isReachable(OLLAMA_HEALTH_URL),
+		serverUp,
+		ollamaUp: installedModels !== null,
+		activeModel: configuredModel || null,
+		activeModelInstalled: isModelInstalled(installedModels ?? [], configuredModel),
 	};
 	controlWindow.webContents.send('launcher:status', status);
 }
@@ -76,6 +84,11 @@ function withImplicitLatestTag(modelName: string): string {
 	return modelName.includes(':') ? modelName : `${modelName}:latest`;
 }
 
+/** True when `modelName` (its implicit `:latest` resolved) is among the installed models. */
+function isModelInstalled(installedModels: string[], modelName: string): boolean {
+	return !!modelName && installedModels.some((name) => withImplicitLatestTag(name) === withImplicitLatestTag(modelName));
+}
+
 /**
  * Names of the models installed in the running Ollama, or null when Ollama is unreachable. The panel needs
  * to tell "Ollama is down" (keep the saved choice) apart from "Ollama is up but has no models" (offer none) —
@@ -95,10 +108,8 @@ async function listInstalledModels(): Promise<string[] | null> {
 /** Pull a model via Ollama's streaming API, emitting byte-level progress so the panel shows one live line. */
 async function pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean; cancelled?: boolean }> {
 	// Already installed? Skip the pull — Ollama would just report "success" and we'd falsely say "downloaded".
-	// A bare name (no tag) resolves to :latest, which is how /api/tags reports it, so normalise before matching.
 	const installedModels = await listInstalledModels();
-	const requestedTag = withImplicitLatestTag(modelName);
-	if (installedModels?.includes(requestedTag)) {
+	if (isModelInstalled(installedModels ?? [], modelName)) {
 		log('launcher', `Model ${modelName} is already installed — skipping the download.`);
 		incompleteStore.remove(modelName);
 		return { ok: true, alreadyInstalled: true };
@@ -192,7 +203,7 @@ async function listIncompleteDownloads(): Promise<string[]> {
 	const installedTags = await listInstalledModels();
 	if (installedTags === null) return trackedNames;   // Ollama unreachable — can't reconcile, show what we have
 	for (const modelName of trackedNames) {
-		if (installedTags.includes(withImplicitLatestTag(modelName))) incompleteStore.remove(modelName);   // it finished
+		if (isModelInstalled(installedTags, modelName)) incompleteStore.remove(modelName);   // it finished
 	}
 	return incompleteStore.list();
 }
@@ -281,6 +292,11 @@ function saveConfig(config: LauncherConfig): void {
 	const { generatedSessionSecret } = writeConfig(paths.serverEnvPath, config);
 	if (generatedSessionSecret) log('launcher', 'No session secret provided — generated a random one.');
 	log('launcher', 'Config saved.');
+	applyConfigToServer();
+}
+
+/** Make the server pick up the current .env: restart a running one, or start it if first-run left none. */
+function applyConfigToServer(): void {
 	if (server.isRunning) {
 		log('launcher', 'Restarting server to apply the new config…');
 		server.stop();
@@ -290,6 +306,21 @@ function saveConfig(config: LauncherConfig): void {
 		log('launcher', 'Starting server with the new config…');
 		void server.start();
 	}
+}
+
+/**
+ * After a successful pull, adopt the model as the classifier's if no valid one is configured — so a user who
+ * downloads a model but never touches the model dropdown still gets classification working. Never overrides an
+ * existing, installed choice.
+ */
+async function adoptModelIfNoneConfigured(downloadedModel: string): Promise<void> {
+	const configuredModel = readEnvFile(paths.serverEnvPath).get('OLLAMA_MODEL') || '';
+	const installedModels = (await listInstalledModels()) ?? [];
+	if (isModelInstalled(installedModels, configuredModel)) return;   // a valid model is already set — keep the user's choice
+	updateConfigValue(paths.serverEnvPath, 'ollamaModel', downloadedModel);
+	log('launcher', `Set ${downloadedModel} as the classification model (none was configured).`);
+	if (server.isRunning) applyConfigToServer();   // restart so classification uses it right away
+	void pushStatus();   // refresh the header's model indicator immediately
 }
 
 // ── Ollama setup ────────────────────────────────────────────────────────────
@@ -357,7 +388,11 @@ ipcMain.on('launcher:open-app', () => void shell.openExternal(serverUrl()));   /
 ipcMain.handle('launcher:get-config', () => readConfig(paths.serverEnvPath));
 ipcMain.handle('launcher:save-config', (_event, config: LauncherConfig) => saveConfig(config));
 ipcMain.handle('launcher:list-models', () => listInstalledModels());
-ipcMain.handle('launcher:pull-model', (_event, modelName: string) => pullModel(modelName));
+ipcMain.handle('launcher:pull-model', async (_event, modelName: string) => {
+	const result = await pullModel(modelName);
+	if (result.ok) await adoptModelIfNoneConfigured(modelName);   // make a first/only model usable without a manual Save
+	return result;
+});
 ipcMain.on('launcher:cancel-pull', () => cancelActivePull());
 ipcMain.handle('launcher:delete-model', async (_event, modelName: string) => {
 	if (!(await confirmModelDeletion(modelName))) return { ok: false, cancelled: true };
