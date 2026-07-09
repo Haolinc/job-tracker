@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmail/messages';
-import { classifyEmail } from '../services/classifier';
+import { classifyEmail, warmUpModel } from '../services/classifier';
 import { parseEmail } from '../services/parser/templates';
 import { extractGeneralCompanyRole } from '../services/parser/companyRole';
 import { extractJobNumber } from '../services/parser/reqId';
@@ -196,6 +196,14 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		res.setHeader('X-Accel-Buffering', 'no');   // don't let a proxy buffer the progress stream
 		streaming = true;
 		send({ phase: 'start', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
+
+		// Load the model BEFORE the concurrent classification starts, so the first emails don't all stall on a
+		// cold load (and the launcher log / sync.log don't interleave warmup with classify). No-op when it's
+		// already warm from server boot; otherwise the client shows a "preparing model" step while it loads.
+		if (newIds.length > 0) {
+			send({ phase: 'warming', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
+			await warmUpModel();
+		}
 
 		let processed = 0;
 		// Emit progress reflecting the counts AFTER the current email is handled — called at each exit point

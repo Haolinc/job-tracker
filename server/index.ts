@@ -42,6 +42,7 @@ import { SqliteSessionStore } from './services/sessionStore';
 import applicationsRouter from './routes/applications';
 import authRouter from './routes/auth';
 import gmailRouter from './routes/gmail';
+import { warmUpModel } from './services/classifier';
 import './types';
 
 // The database must exist before anything asks for it — the session store below reads it in its constructor.
@@ -91,4 +92,9 @@ if (existsSync(clientDistPath)) {
 
 const PORT = process.env.PORT || 3001;
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+	console.log(`Server running on http://localhost:${PORT}`);
+	// Preload the classifier model so the first real email isn't slowed by a cold model load. Fire-and-forget:
+	// it retries while Ollama finishes starting and never blocks the server.
+	void warmUpModel();
+});

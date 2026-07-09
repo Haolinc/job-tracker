@@ -58,7 +58,10 @@ export class OllamaService {
 		if (!this.startedByLauncher) return;
 		this.log('launcher', 'Stopping Ollama (this launcher started it)…');
 		// Direct exe spawns (no shell) so windowsHide actually suppresses the console flash on Windows.
-		if (process.platform === 'win32') spawnSync('taskkill', ['/IM', 'ollama.exe', '/F'], { windowsHide: true });
+		// /T kills the whole tree: a loaded model runs in a llama-server.exe CHILD holding the model's multi-GB
+		// memory, and force-killing ollama.exe alone orphans it — it would sit there until its keep_alive... never
+		// fires, because its parent daemon is gone. Tree-kill takes both down together.
+		if (process.platform === 'win32') spawnSync('taskkill', ['/IM', 'ollama.exe', '/T', '/F'], { windowsHide: true });
 		else spawnSync('pkill', ['-f', 'ollama serve']);
 		this.startedByLauncher = false;
 	}

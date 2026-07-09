@@ -56,6 +56,8 @@ async function pushStatus(): Promise<void> {
 		isReachable(`${serverUrl()}/api/health`),
 		listInstalledModels(),
 	]);
+	// The window may have closed while the probes were in flight (quitting mid-poll) — re-check before sending.
+	if (!controlWindow || controlWindow.isDestroyed()) return;
 	const configuredModel = readEnvFile(paths.serverEnvPath).get('OLLAMA_MODEL') || '';
 	const status: LauncherStatus = {
 		serverRunning: server.isRunning,

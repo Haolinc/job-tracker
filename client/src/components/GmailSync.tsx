@@ -48,7 +48,9 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						className="text-xs text-gray-400 hover:text-red-500 underline"
 					>Disconnect</button>
 					{syncing && (
-						progress ? (
+						progress?.phase === 'warming' ? (
+							<span className="text-xs text-gray-500 whitespace-nowrap">Preparing model&hellip;</span>
+						) : progress ? (
 							<div className="flex items-center gap-2 text-xs text-gray-600 w-full sm:w-auto" title={`${progress.processed} of ${progress.total} emails processed`}>
 								<div className="flex-1 sm:w-28 sm:flex-none h-1.5 bg-gray-200 rounded-full overflow-hidden">
 									<div

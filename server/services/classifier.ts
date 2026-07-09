@@ -83,21 +83,80 @@ const responseSchema = {
 	required: ['category', 'company', 'role_source', 'role', 'req_id_source', 'req_id'],
 };
 
-async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
-	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
-	const res = await ollama.chat({
-		// The launcher lets the user pick from their installed models (written to .env as OLLAMA_MODEL);
-		// fall back to qwen2.5:7b when unset.
-		model: process.env.OLLAMA_MODEL || 'qwen2.5:7b',
+/** The model the classifier talks to — the user's pick from .env (OLLAMA_MODEL), or the recommended default. */
+const classifierModel = (): string => process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+
+/**
+ * The ONE chat request this module ever sends — warmup and real classification both go through here so they
+ * stay identical (same system prompt + grammar). That identity is what makes the warmup effective: Ollama's
+ * prompt-eval cache and compiled grammar carry over to the real emails only because the requests match.
+ */
+function requestClassification(emailContent: string, requestOptions: { maxOutputTokens: number; keepAlive?: string }) {
+	return ollama.chat({
+		model: classifierModel(),
 		messages: [
 			{ role: 'system', content: systemPrompt },
-			{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },
+			{ role: 'user',   content: emailContent },
 		],
 		format: responseSchema,   // grammar-constrain output to the schema — category can ONLY be the enum
 		options: {
-			num_predict: 150,  // JSON output is ~40-60 tokens — extra room for longer role names
-			temperature: 0,    // deterministic output, no randomness needed for classification
+			num_predict: requestOptions.maxOutputTokens,
+			temperature: 0,   // deterministic output, no randomness needed for classification
 		},
+		keep_alive: requestOptions.keepAlive,   // undefined → Ollama's default (5 minutes)
+	});
+}
+
+// Warmup keeps retrying while Ollama is still starting up — it may be unreachable the moment the server boots.
+const WARMUP_MAX_ATTEMPTS = 10;
+const WARMUP_RETRY_DELAY_MS = 3000;
+
+// Shared so warmup runs at most once at a time: the boot call and the first sync await the SAME load instead of
+// racing two cold loads (which is what made the GUI/sync.log interleave warmup with classify).
+let warmupInFlight: Promise<boolean> | null = null;
+
+/**
+ * Preload the classification model into Ollama so the concurrent classification doesn't start on a cold model
+ * (a multi-GB load can take many seconds). Sends a real classification request for a dummy email, so the model
+ * load, system-prompt eval, and grammar compilation ALL happen now instead of on the first real email.
+ * Idempotent: kicked off at server boot and AWAITED by the sync, so classification runs only once the model
+ * is ready. Best-effort; never throws.
+ */
+function warmUpModel(): Promise<boolean> {
+	if (!warmupInFlight) {
+		warmupInFlight = loadModelWithRetry();
+		// If it gave up (Ollama was down), forget it so a later sync can try again once Ollama is up.
+		void warmupInFlight.then((loaded) => { if (!loaded) warmupInFlight = null; });
+	}
+	return warmupInFlight;
+}
+
+async function loadModelWithRetry(): Promise<boolean> {
+	const model = classifierModel();
+	for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
+		try {
+			// maxOutputTokens:1 → do all the setup (load + prompt eval + grammar), then stop after one token.
+			await requestClassification('From: warmup\nSubject: warmup\n\nBody:\nwarmup', {
+				maxOutputTokens: 1,
+				keepAlive: '30m',   // keep the model resident well past Ollama's 5-minute default
+			});
+			console.log(`[warmup] model ${model} preloaded and ready`);
+			return true;
+		} catch (error) {
+			if (attempt === WARMUP_MAX_ATTEMPTS) {
+				console.log(`[warmup] gave up preloading ${model}: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+			await new Promise((resolve) => setTimeout(resolve, WARMUP_RETRY_DELAY_MS));   // Ollama likely still starting — retry
+		}
+	}
+	return false;
+}
+
+async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
+	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
+	const res = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
+		maxOutputTokens: 150,   // JSON output is ~40-60 tokens — extra room for longer role names
 	});
 	console.log(`[classify] tokens: prompt=${res.prompt_eval_count ?? 0}`);
 	const text = res.message.content.trim();
@@ -122,4 +181,4 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 	};
 }
 
-export { classifyEmail };
+export { classifyEmail, warmUpModel };
