@@ -3,7 +3,7 @@
 // the renderer can never reach Node or Electron internals directly.
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { LauncherBridge, LauncherConfig, LauncherStatus, PullProgress } from './shared';
+import type { LauncherBridge, LauncherConfig, LauncherStatus, PullProgress, SyncProgressEvent } from './shared';
 
 const launcherBridge: LauncherBridge = {
 	startServer: () => ipcRenderer.send('launcher:start'),
@@ -21,6 +21,7 @@ const launcherBridge: LauncherBridge = {
 	onLog: (handler) => ipcRenderer.on('launcher:log', (_event, line: string) => handler(line)),
 	onStatus: (handler) => ipcRenderer.on('launcher:status', (_event, status: LauncherStatus) => handler(status)),
 	onPullProgress: (handler) => ipcRenderer.on('launcher:pull-progress', (_event, progress: PullProgress) => handler(progress)),
+	onSyncProgress: (handler) => ipcRenderer.on('launcher:sync-progress', (_event, syncEvent: SyncProgressEvent) => handler(syncEvent)),
 };
 
 contextBridge.exposeInMainWorld('launcher', launcherBridge);

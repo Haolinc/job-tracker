@@ -4,8 +4,8 @@ import dotenv from 'dotenv';
 dotenv.config(process.env.ENV_FILE ? { path: process.env.ENV_FILE } : undefined);
 
 import { enable } from './logger';
-// LOG_FILE likewise redirects sync.log to a writable location when packaged; unset → next to the module.
-if (process.env.LOG_TO_FILE !== 'false') enable(process.env.LOG_FILE ? { filePath: process.env.LOG_FILE } : undefined);
+// LOG_DIR likewise redirects the logs/ folder to a writable location when packaged; unset → next to the module.
+if (process.env.LOG_TO_FILE !== 'false') enable(process.env.LOG_DIR ? { directory: process.env.LOG_DIR } : undefined);
 
 // Watchdog: when the desktop launcher spawns us it passes its own PID as LAUNCHER_PID. The launcher stops us
 // cleanly on a normal quit, but if it is force-killed or crashes, its exit handlers never run and we would

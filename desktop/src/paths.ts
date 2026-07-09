@@ -14,7 +14,8 @@ export interface LauncherPaths {
 	ensureOllamaScript: string;
 	serverEnvPath: string;
 	serverDatabasePath: string;
-	serverLogPath: string;
+	/** Folder the server writes its dated debug-/error- log files to. */
+	serverLogsDirectory: string;
 	/** Where a portable Ollama is downloaded/extracted when the machine has none — kept in app data. */
 	ollamaPortableDir: string;
 	/** Our record of model downloads that were interrupted, so we can offer to resume/reclaim them later. */
@@ -43,7 +44,7 @@ export function resolveLauncherPaths(): LauncherPaths {
 		ensureOllamaScript: path.join(resourcesRoot, 'scripts', 'ensure-ollama.mjs'),
 		serverEnvPath: path.join(writableDataDir, '.env'),
 		serverDatabasePath: path.join(writableDataDir, 'job-tracker.db'),
-		serverLogPath: path.join(writableDataDir, 'sync.log'),
+		serverLogsDirectory: path.join(writableDataDir, 'logs'),
 		ollamaPortableDir: path.join(writableDataDir, 'ollama'),
 		incompleteDownloadsPath: path.join(writableDataDir, 'incomplete-downloads.json'),
 	};

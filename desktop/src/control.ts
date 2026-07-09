@@ -30,6 +30,19 @@ interface ControlPanelPullProgress {
 	done: boolean;
 }
 
+interface ControlPanelSyncProgress {
+	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
+	days?: number;      // scan window (present on 'start')
+	processed?: number;
+	total?: number;
+	added?: number;
+	updated?: number;
+	skipped?: number;
+	failed?: number;
+	durationMs?: number;
+	error?: string;
+}
+
 interface ControlPanelBridge {
 	startServer(): void;
 	stopServer(): void;
@@ -46,6 +59,7 @@ interface ControlPanelBridge {
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: ControlPanelStatus) => void): void;
 	onPullProgress(handler: (progress: ControlPanelPullProgress) => void): void;
+	onSyncProgress(handler: (event: ControlPanelSyncProgress) => void): void;
 }
 
 declare const launcher: ControlPanelBridge;   // exposed by preload.ts via contextBridge
@@ -139,52 +153,96 @@ function formatBytes(byteCount: number): string {
 }
 
 /**
- * A self-contained live download line for the log console. It owns one <div> that updates IN PLACE (bytes +
- * percent) instead of appending a line per tick, and finalizes to ✓/✗ when the download ends. Returns the
- * update handler — feed it every progress event. Reusable for any download source (Ollama, model pulls, …);
- * each call makes an independent line, so call it once and reuse the returned handler for one stream at a time.
+ * A log-console line that rewrites itself IN PLACE — the shared mechanic behind every live status line
+ * (model downloads, sync progress). Returns an updater: call it with the new text each tick; pass
+ * `finalize: true` with the last text so it stays put and the next update starts a fresh line. Each call
+ * makes an independent line, so different streams (a download, a sync) never overwrite each other.
  */
-function createProgressLine(logContainer: HTMLDivElement): (progress: ControlPanelPullProgress) => void {
-	// Held across updates so the same line is rewritten; null between downloads so the next one starts fresh.
-	let line: HTMLDivElement | null = null;
-	return (progress) => {
+function createLiveLine(logContainer: HTMLDivElement): (text: string, options?: { finalize?: boolean; isError?: boolean }) => void {
+	// Held across updates so the same line is rewritten; null between streams so the next one starts fresh.
+	let liveLineElement: HTMLDivElement | null = null;
+	return (text, options = {}) => {
 		const pinnedToBottom = logContainer.scrollTop + logContainer.clientHeight >= logContainer.scrollHeight - 8;
 
 		// Reuse the line unless the log-line cap trimmed it away; then start a fresh one.
-		if (!line || !line.isConnected) {
-			line = document.createElement('div');
-			line.className = 'log-line launcher-line';
-			logContainer.appendChild(line);
+		if (!liveLineElement || !liveLineElement.isConnected) {
+			liveLineElement = document.createElement('div');
+			liveLineElement.className = 'log-line launcher-line';
+			logContainer.appendChild(liveLineElement);
 		}
 
-		if (progress.done) {
-			if (progress.status === 'cancelled') {
-				line.textContent = `⊘ ${progress.modelName} — cancelled`;
-			} else if (progress.status.startsWith('error')) {
-				line.textContent = `✗ ${progress.modelName} — ${progress.status}`;
-				line.classList.add('error-line');
-			} else {
-				line.textContent = `✓ ${progress.modelName} downloaded`;
-			}
-			line = null;   // finalize — the next download gets its own line
-		} else if (progress.total > 0) {
-			const percent = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
-			line.textContent = `⬇ ${progress.modelName}  ${formatBytes(progress.completed)} / ${formatBytes(progress.total)}  (${percent}%)`;
-		} else {
-			line.textContent = `⬇ ${progress.modelName}  ${progress.status || 'preparing'}…`;
-		}
+		liveLineElement.textContent = text;
+		liveLineElement.classList.toggle('error-line', !!options.isError);
+		if (options.finalize) liveLineElement = null;
 
 		if (pinnedToBottom) logContainer.scrollTop = logContainer.scrollHeight;
 	};
 }
 
-const renderProgressLine = createProgressLine(logConsole);
+const renderDownloadLine = createLiveLine(logConsole);
+function renderPullProgress(progress: ControlPanelPullProgress): void {
+	if (progress.done) {
+		if (progress.status === 'cancelled') {
+			renderDownloadLine(`⊘ ${progress.modelName} — cancelled`, { finalize: true });
+		} else if (progress.status.startsWith('error')) {
+			renderDownloadLine(`✗ ${progress.modelName} — ${progress.status}`, { finalize: true, isError: true });
+		} else {
+			renderDownloadLine(`✓ ${progress.modelName} downloaded`, { finalize: true });
+		}
+	} else if (progress.total > 0) {
+		const percent = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
+		renderDownloadLine(`⬇ ${progress.modelName}  ${formatBytes(progress.completed)} / ${formatBytes(progress.total)}  (${percent}%)`);
+	} else {
+		renderDownloadLine(`⬇ ${progress.modelName}  ${progress.status || 'preparing'}…`);
+	}
+}
+
 launcher.onPullProgress((progress) => {
 	downloadInProgress = !progress.done;
 	activeDownloadIsCancellable = !progress.done && progress.modelName !== OLLAMA_DOWNLOAD_LABEL;
 	syncDownloadControls();
-	renderProgressLine(progress);
+	renderPullProgress(progress);
 });
+
+// ── Sync progress ────────────────────────────────────────────────────────────
+
+/** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
+// Exact copy of formatDuration in server/utils.ts and client/src/utils/formatDuration.ts — the no-import
+// boundary again. Keep all copies identical.
+function formatDuration(ms: number): string {
+	const total = Math.round(ms / 1000);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	const parts: string[] = [];
+	if (h) parts.push(`${h}h`);
+	if (m) parts.push(`${m}m`);
+	if (s || !parts.length) parts.push(`${s}s`);
+	return parts.join(' ');
+}
+
+// The sync's story in the log pane, without the per-email flood: "found N" stays as its own line, one live
+// line tracks processed/added/updated counts in place, and it finalizes to a ✓ summary (or ✗ on error).
+const renderSyncLine = createLiveLine(logConsole);
+function renderSyncProgress(event: ControlPanelSyncProgress): void {
+	const countsText = `${event.added ?? 0} added, ${event.updated ?? 0} updated, ${event.skipped ?? 0} skipped`;
+	if (event.phase === 'start') {
+		const totalEmails = event.total ?? 0;
+		const scanWindowText = event.days ? `scanning the last ${event.days} days — ` : '';
+		renderSyncLine(`⟳ Sync started: ${scanWindowText}found ${totalEmails} new email${totalEmails === 1 ? '' : 's'} (${event.skipped ?? 0} already synced)`, { finalize: true });
+	} else if (event.phase === 'warming') {
+		renderSyncLine('⟳ Sync: preparing the model…');
+	} else if (event.phase === 'progress') {
+		renderSyncLine(`⟳ Sync: processed ${event.processed ?? 0}/${event.total ?? 0} emails · ${countsText}`);
+	} else if (event.phase === 'done') {
+		const failedNote = event.failed ? `, ${event.failed} failed (will retry)` : '';
+		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
+		renderSyncLine(`✓ Sync finished: ${countsText}${failedNote}${durationText}`, { finalize: true });
+	} else if (event.phase === 'error') {
+		renderSyncLine(`✗ Sync failed: ${event.error ?? 'unknown error'}`, { finalize: true, isError: true });
+	}
+}
+launcher.onSyncProgress(renderSyncProgress);
 
 // ── Status dots & buttons ───────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ import os from 'node:os';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { DEFAULT_PORT, readConfig, readEnvFile, updateConfigValue, writeConfig } from './config';
 import type { LauncherConfig } from './config';
-import type { LauncherStatus, PullProgress } from './shared';
+import type { LauncherStatus, PullProgress, SyncProgressEvent } from './shared';
 import { resolveLauncherPaths } from './paths';
 import { createLog } from './log';
 import { isReachable } from './health';
@@ -45,7 +45,7 @@ const ollama = new OllamaService(paths, log, () => {
 	ollamaPromptShown = true;
 	void promptOllamaInstall();
 }, sendPullProgress);
-const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushStatus());
+const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushStatus(), sendSyncProgress);
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -72,6 +72,11 @@ async function pushStatus(): Promise<void> {
 // Push a model-download progress update to the panel so it can render one live, in-place line.
 function sendPullProgress(progress: PullProgress): void {
 	controlWindow?.webContents.send('launcher:pull-progress', progress);
+}
+
+// Push a sync progress event to the panel — same live-line treatment as model downloads.
+function sendSyncProgress(syncEvent: SyncProgressEvent): void {
+	controlWindow?.webContents.send('launcher:sync-progress', syncEvent);
 }
 
 // ── Models ──────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import type { Classification } from '../types';
 import { canonicalReqId } from './parser/reqId';
+import { debug } from '../logger';
 import ollama from 'ollama';
 
 const systemPrompt = `You classify and extract data from job-application emails. Given From, Subject, and Body, return ONLY this JSON (no prose, no markdown):
@@ -112,7 +113,7 @@ const WARMUP_MAX_ATTEMPTS = 10;
 const WARMUP_RETRY_DELAY_MS = 3000;
 
 // Shared so warmup runs at most once at a time: the boot call and the first sync await the SAME load instead of
-// racing two cold loads (which is what made the GUI/sync.log interleave warmup with classify).
+// racing two cold loads (which is what made the GUI/debug log interleave warmup with classify).
 let warmupInFlight: Promise<boolean> | null = null;
 
 /**
@@ -144,7 +145,8 @@ async function loadModelWithRetry(): Promise<boolean> {
 			return true;
 		} catch (error) {
 			if (attempt === WARMUP_MAX_ATTEMPTS) {
-				console.log(`[warmup] gave up preloading ${model}: ${error instanceof Error ? error.message : String(error)}`);
+				// console.error, not debug: a model that can't preload means classification will fail too.
+				console.error(`[warmup] gave up preloading ${model}: ${error instanceof Error ? error.message : String(error)}`);
 				return false;
 			}
 			await new Promise((resolve) => setTimeout(resolve, WARMUP_RETRY_DELAY_MS));   // Ollama likely still starting — retry
@@ -154,21 +156,22 @@ async function loadModelWithRetry(): Promise<boolean> {
 }
 
 async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
-	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
-	const res = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
+	debug(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
+	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
 		maxOutputTokens: 150,   // JSON output is ~40-60 tokens — extra room for longer role names
 	});
-	console.log(`[classify] tokens: prompt=${res.prompt_eval_count ?? 0}`);
-	const text = res.message.content.trim();
-    console.log(`[classify] result:`, text);
+	debug(`[classify] tokens: prompt=${chatResponse.prompt_eval_count ?? 0}`);
+	const responseText = chatResponse.message.content.trim();
+	// Collapse the model's pretty-printed JSON to one line so the debug log stays one-line-per-event grep-able.
+	debug(`[classify] result:`, responseText.replace(/\s*\n\s*/g, ' '));
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
-	const jsonText = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+	const jsonText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
 	// The worked examples show "{json}  (note)", so the model sometimes appends a trailing parenthetical
 	// after its JSON. Take just the first object — first "{" to last "}" — and ignore any commentary tail.
 	const start = jsonText.indexOf('{'), end = jsonText.lastIndexOf('}');
 	const parsed = JSON.parse(start !== -1 && end !== -1 ? jsonText.slice(start, end + 1) : jsonText) as Record<string, unknown>;
 	if (!parsed || !VALID_CATEGORIES.has(parsed.category as string)) {
-		throw new Error(`Unexpected classifier response: ${text}`);
+		throw new Error(`Unexpected classifier response: ${responseText}`);
 	}
 	// canonicalReqId strips a leading "Req"/"Job Req" label the model sometimes prepends and validates the
 	// token (≥5 digits), matching what the parser extracts from the same text so a posting links across paths.

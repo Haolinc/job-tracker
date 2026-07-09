@@ -4,6 +4,7 @@
 // (./linkedin, ./indeed) — each owns one fast-apply platform's exact format.
 
 import type { Classification } from '../../types';
+import { debug } from '../../logger';
 import { extractGeneralCompanyRole } from './companyRole';
 import { parseLinkedIn } from './linkedin';
 import { parseIndeed } from './indeed';
@@ -80,7 +81,7 @@ export function parseEmail(subject: string, from: string, body: string): Classif
 	for (const parser of PARSERS) {
 		const result = parser(subject, from, body);
 		if (result) {
-			console.log(`[parser] hit subject="${subject}" → ${result.category} company="${result.company}" role="${result.role}" classifier_code="${result.classifier_code ? result.classifier_code : 'none'}"`);
+			debug(`[parser] hit subject="${subject}" → ${result.category} company="${result.company}" role="${result.role}" classifier_code="${result.classifier_code ? result.classifier_code : 'none'}"`);
 			return result;
 		}
 	}

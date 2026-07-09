@@ -31,6 +31,25 @@ export interface PullProgress {
 	done: boolean;
 }
 
+/** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live
+ *  sync line instead of the per-email log detail. Mirrors the events routes/gmail.ts sends to the browser. */
+export interface SyncProgressEvent {
+	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
+	/** The scan window in days (present on 'start') — how far back this sync searches Gmail. */
+	days?: number;
+	processed?: number;
+	total?: number;
+	added?: number;
+	updated?: number;
+	skipped?: number;
+	/** Emails that errored on fetch this run (present on 'done'); retried next sync. */
+	failed?: number;
+	/** Wall-clock sync duration (present on 'done'). */
+	durationMs?: number;
+	/** What went wrong (present on 'error'). */
+	error?: string;
+}
+
 /** The API the preload script exposes to the control panel as `window.launcher`. */
 export interface LauncherBridge {
 	startServer(): void;
@@ -56,4 +75,6 @@ export interface LauncherBridge {
 	onStatus(handler: (status: LauncherStatus) => void): void;
 	/** Live progress for an in-flight model pull, so the panel can show a single updating line. */
 	onPullProgress(handler: (progress: PullProgress) => void): void;
+	/** Live progress for a running Gmail sync, so the panel can show a single updating line. */
+	onSyncProgress(handler: (event: SyncProgressEvent) => void): void;
 }

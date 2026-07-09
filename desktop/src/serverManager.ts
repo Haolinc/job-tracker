@@ -8,9 +8,18 @@ import { isReachable } from './health';
 import type { LauncherPaths } from './paths';
 import type { LogFn } from './log';
 import type { OllamaService } from './ollamaService';
+import type { SyncProgressEvent } from './shared';
+
+// The server mirrors each sync progress event to stdout as "@sync-progress@ {json}" — keep in sync with the
+// same constant in server/routes/gmail.ts. Parsed into the panel's live sync line instead of logged as text.
+// (The server routes its output at the source: per-email debug detail goes to the debug log only and never
+// reaches stdout, so everything arriving here is either a marker or a line meant for the panel.)
+const SYNC_PROGRESS_MARKER = '@sync-progress@';
 
 export class ServerManager {
 	private childProcess: ChildProcess | null = null;
+	// Buffers server stdout so we act on whole lines — a marker line can be split across chunks.
+	private stdoutRemainder = '';
 
 	constructor(
 		private readonly paths: LauncherPaths,
@@ -18,6 +27,7 @@ export class ServerManager {
 		private readonly serverUrl: () => string,
 		private readonly ollama: OllamaService,
 		private readonly onStateChange: () => void,
+		private readonly onSyncProgress: (event: SyncProgressEvent) => void,
 	) {}
 
 	get isRunning(): boolean {
@@ -45,14 +55,39 @@ export class ServerManager {
 		await this.ollama.ensureRunning();
 		this.log('launcher', 'Starting server…');
 		this.childProcess = this.paths.runningPackaged ? this.spawnPackaged() : this.spawnDev();
-		this.childProcess.stdout?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
+		this.childProcess.stdout?.on('data', (chunk: Buffer) => this.handleStdoutChunk(chunk.toString()));
 		this.childProcess.stderr?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
 		this.childProcess.on('exit', (code) => {
+			if (this.stdoutRemainder) { this.handleServerLine(this.stdoutRemainder); this.stdoutRemainder = ''; }
 			this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
 			this.childProcess = null;
 			this.onStateChange();
 		});
 		this.onStateChange();
+	}
+
+	// Server stdout is parsed line by line (a chunk can split a line): sync-progress markers feed the panel's
+	// live sync line, everything else is logged as before.
+	private handleStdoutChunk(chunk: string): void {
+		this.stdoutRemainder += chunk;
+		let newlineIndex;
+		while ((newlineIndex = this.stdoutRemainder.indexOf('\n')) >= 0) {
+			const line = this.stdoutRemainder.slice(0, newlineIndex);
+			this.stdoutRemainder = this.stdoutRemainder.slice(newlineIndex + 1);
+			this.handleServerLine(line);
+		}
+	}
+
+	private handleServerLine(line: string): void {
+		if (line.startsWith(SYNC_PROGRESS_MARKER)) {
+			try {
+				this.onSyncProgress(JSON.parse(line.slice(SYNC_PROGRESS_MARKER.length)) as SyncProgressEvent);
+			} catch {
+				// A malformed marker line is dropped — the next event refreshes the panel anyway.
+			}
+			return;
+		}
+		this.log('server', line);
 	}
 
 	stop(): void {
@@ -85,7 +120,7 @@ export class ServerManager {
 				CLIENT_URL: this.serverUrl(),
 				ENV_FILE: this.paths.serverEnvPath,
 				DB_PATH: this.paths.serverDatabasePath,
-				LOG_FILE: this.paths.serverLogPath,
+				LOG_DIR: this.paths.serverLogsDirectory,
 				CLIENT_DIST: this.paths.clientDistDirectory,
 			},
 		});

@@ -16,9 +16,14 @@ import {
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
+import { debug, guiLine } from '../logger';
 import type { EmailResult, Status } from '../types';
 
 const router = Router();
+
+// Each sync progress event is mirrored to stdout as "@sync-progress@ {json}" so the desktop launcher can
+// render a live sync line in its panel. Keep in sync with the same constant in desktop/src/serverManager.ts.
+const SYNC_PROGRESS_MARKER = '@sync-progress@';
 
 /** The auto-detection note for an application, flagging when the role still needs manual entry. */
 function gmailNote(subject: string, hasRole: boolean): string {
@@ -51,7 +56,7 @@ async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 
 	// Hard-filter obvious non-job emails before calling the LLM.
 	if (isIgnorableEmail(subject, from, body)) {
-		console.log(`[sync] skip (auto-filtered) subject="${subject}"`);
+		debug(`[sync] skip (auto-filtered) subject="${subject}"`);
 		return { kind: 'skip', threadId, messageId, classifiedAs: 'ignored' };
 	}
 
@@ -85,7 +90,7 @@ async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 			const ai = await classifyEmail(subject, from, body);
 			if (ai.role) {
 				classification = { ...classification, role: ai.role };
-				console.log(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
+				debug(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
 			}
 			// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
 			if (ai.req_id) classification.req_id = ai.req_id;
@@ -108,12 +113,12 @@ async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// and sometimes names itself as the company. Drop "HackerRank" as a company ONLY when the email is from
 	// that product domain — a genuine application to HackerRank itself keeps its real name.
 	if (company && /^hacker\s?rank\b/i.test(company) && /hackerrankforwork\.(?:com|io)/i.test(from)) {
-		console.log(`[sync] drop assessment-platform name as company: "${company}" subject="${subject}"`);
+		debug(`[sync] drop assessment-platform name as company: "${company}" subject="${subject}"`);
 		company = null;
 	}
 
 	if (category === 'ignored' || !company) {
-		console.log(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
+		debug(`[sync] skip (category=${category} company=${company}) subject="${subject}"`);
 		return { kind: 'skip', threadId, messageId, classifiedAs: 'ignored', classifierCode };
 	}
 
@@ -165,7 +170,12 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	// 'progress' event per email, and a final 'done' event. Once streaming begins the HTTP status is
 	// already 200, so a later error is reported as an 'error' event instead of a 500.
 	let streaming = false;
-	const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + '\n');
+	// Every event goes to the HTTP progress stream AND to the GUI channel as a marker line the desktop
+	// launcher turns into its live sync line (stdout only — never the log files).
+	const send = (event: Record<string, unknown>) => {
+		res.write(JSON.stringify(event) + '\n');
+		guiLine(`${SYNC_PROGRESS_MARKER} ${JSON.stringify(event)}`);
+	};
 	try {
         const start = Date.now();
 		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
@@ -179,7 +189,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const ALLOWED_DAYS = [30, 60, 90, 180];
 		const requested    = Number(req.body?.days ?? req.query?.days);
 		const days         = ALLOWED_DAYS.includes(requested) ? requested : 30;
-		console.log(`[sync] scan window: ${days} days`);
+		debug(`[sync] scan window: ${days} days`);
 
 		const allIds   = await listJobMessageIds(req.session.tokens!, days);
 		// The mailbox being synced — stamped on each tracked email so its "open in Gmail" link targets the
@@ -189,16 +199,16 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const newIds   = allIds.filter(id => !syncedIds.has(id));
 		const failedIds: string[] = [];   // messages that errored on fetch — not synced, retried next run
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
-		console.log(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
+		debug(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
 		res.setHeader('Content-Type', 'application/x-ndjson');
 		res.setHeader('Cache-Control', 'no-cache');
 		res.setHeader('X-Accel-Buffering', 'no');   // don't let a proxy buffer the progress stream
 		streaming = true;
-		send({ phase: 'start', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
+		send({ phase: 'start', days, processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
 
 		// Load the model BEFORE the concurrent classification starts, so the first emails don't all stall on a
-		// cold load (and the launcher log / sync.log don't interleave warmup with classify). No-op when it's
+		// cold load (and the launcher log / debug log don't interleave warmup with classify). No-op when it's
 		// already warm from server boot; otherwise the client shows a "preparing model" step while it loads.
 		if (newIds.length > 0) {
 			send({ phase: 'warming', processed: 0, total: newIds.length, added: 0, updated: 0, skipped });
@@ -253,7 +263,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
 			if (existing && senderDomain && existing.company_domain === senderDomain && !companiesSameEntity(existing.company, company)) {
-				console.log(`[sync] domain-bridged merge: "${company}" → existing "${existing.company}" (domain ${senderDomain})`);
+				debug(`[sync] domain-bridged merge: "${company}" → existing "${existing.company}" (domain ${senderDomain})`);
 			}
 
 			if (existing) {
@@ -356,8 +366,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
         const durationMs = Date.now() - start;
         const failed = failedIds.length;
         if (failed) console.warn(`[sync] ${failed} message(s) could not be fetched — NOT marked synced, will be retried next sync: ${failedIds.join(', ')}`);
-        console.log(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
-        console.log(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
+        debug(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
+        debug(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
 		send({ phase: 'done', added, updated, skipped, failed, durationMs });
 		res.end();
