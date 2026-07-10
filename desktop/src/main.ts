@@ -14,7 +14,7 @@ import { DEFAULT_PORT, readConfig, readEnvFile, updateConfigValue, writeConfig }
 import type { LauncherConfig } from './config';
 import type { LauncherStatus, PullProgress, SyncProgressEvent } from './shared';
 import { resolveLauncherPaths } from './paths';
-import { createLog } from './log';
+import { createLog, logToTerminal } from './log';
 import { isReachable } from './health';
 import { OllamaService } from './ollamaService';
 import { ServerManager } from './serverManager';
@@ -50,7 +50,9 @@ const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushS
 // ── Status ────────────────────────────────────────────────────────────────────
 
 async function pushStatus(): Promise<void> {
-	if (!controlWindow) return;   // nobody to display it — skip the health probes
+	// Nobody can see the dots — skip the health probes. They fire every couple of seconds, forever, so a
+	// minimized launcher would keep polling the server and Ollama for nothing. 'restore'/'show' re-push.
+	if (!controlWindow || controlWindow.isMinimized() || !controlWindow.isVisible()) return;
 	// listInstalledModels doubles as the Ollama health probe (null ⇔ unreachable), so we don't ping /api/tags twice.
 	const [serverUp, installedModels] = await Promise.all([
 		isReachable(`${serverUrl()}/api/health`),
@@ -162,14 +164,15 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 		incompleteStore.remove(modelName);
 		return { ok: true };
 	} catch (error) {
+		// The panel renders both outcomes on its live download line — log to the terminal only, or they print twice.
 		if (activePullController?.signal.aborted) {
 			sendPullProgress({ modelName, status: 'cancelled', completed: 0, total: 0, done: true });
-			log('launcher', `Cancelled the download of ${modelName}.`);
+			logToTerminal('launcher', `Cancelled the download of ${modelName}.`);
 			return { ok: false, cancelled: true };
 		}
 		const message = error instanceof Error ? error.message : String(error);
 		sendPullProgress({ modelName, status: `error: ${message}`, completed: 0, total: 0, done: true });
-		log('launcher', `Failed to download ${modelName}: ${message}`);
+		logToTerminal('launcher', `Failed to download ${modelName}: ${message}`);
 		return { ok: false, error: message };
 	} finally {
 		activePullController = null;
@@ -385,6 +388,9 @@ function createControlWindow(): void {
 		if (details.level === 'error' || details.level === 'warning') console.log(`[panel] ${details.message}`);
 	});
 	void controlWindow.loadFile(path.join(__dirname, '../control.html'));
+	// Polling pauses while the window is hidden, so refresh the moment it comes back into view.
+	controlWindow.on('restore', () => void pushStatus());
+	controlWindow.on('show', () => void pushStatus());
 	controlWindow.on('closed', () => { controlWindow = null; });
 }
 

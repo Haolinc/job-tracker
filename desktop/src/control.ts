@@ -127,13 +127,17 @@ let activeDownloadIsCancellable = false;
 
 // ── Log console ─────────────────────────────────────────────────────────────
 
+// Log lines the pane paints red. The lookbehind spares counts — "3 failed (will retry)" reports a tally,
+// not a failure — while "Sync failed: …" still matches.
+const ERROR_LINE_PATTERN = /(?<!\d\s)\b(error|exception|failed|failure)/i;
+
 launcher.onLog((line) => {
 	// Only autoscroll when the user is already reading the tail — don't yank them back down mid-scroll.
 	const pinnedToBottom = logConsole.scrollTop + logConsole.clientHeight >= logConsole.scrollHeight - 8;
 
 	const logLine = document.createElement('div');
 	logLine.className = 'log-line';
-	if (/error|failed|exception/i.test(line)) logLine.classList.add('error-line');
+	if (ERROR_LINE_PATTERN.test(line)) logLine.classList.add('error-line');
 	if (line.startsWith('[launcher]')) logLine.classList.add('launcher-line');
 	logLine.textContent = line;
 	logConsole.appendChild(logLine);
@@ -153,13 +157,22 @@ function formatBytes(byteCount: number): string {
 	return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
+/** How a live line reads at a glance: running, finished, stopped early, or broken. */
+type LineTone = 'progress' | 'success' | 'warning' | 'error';
+const TONE_CLASS: Record<LineTone, string> = {
+	progress: 'progress-line',
+	success: 'success-line',
+	warning: 'warning-line',
+	error: 'error-line',
+};
+
 /**
  * A log-console line that rewrites itself IN PLACE — the shared mechanic behind every live status line
  * (model downloads, sync progress). Returns an updater: call it with the new text each tick; pass
  * `finalize: true` with the last text so it stays put and the next update starts a fresh line. Each call
  * makes an independent line, so different streams (a download, a sync) never overwrite each other.
  */
-function createLiveLine(logContainer: HTMLDivElement): (text: string, options?: { finalize?: boolean; isError?: boolean }) => void {
+function createLiveLine(logContainer: HTMLDivElement): (text: string, options?: { finalize?: boolean; tone?: LineTone }) => void {
 	// Held across updates so the same line is rewritten; null between streams so the next one starts fresh.
 	let liveLineElement: HTMLDivElement | null = null;
 	return (text, options = {}) => {
@@ -168,12 +181,12 @@ function createLiveLine(logContainer: HTMLDivElement): (text: string, options?: 
 		// Reuse the line unless the log-line cap trimmed it away; then start a fresh one.
 		if (!liveLineElement || !liveLineElement.isConnected) {
 			liveLineElement = document.createElement('div');
-			liveLineElement.className = 'log-line launcher-line';
 			logContainer.appendChild(liveLineElement);
 		}
 
 		liveLineElement.textContent = text;
-		liveLineElement.classList.toggle('error-line', !!options.isError);
+		// Set every update, not just on create: a line recolors as its stream ends.
+		liveLineElement.className = `log-line ${TONE_CLASS[options.tone ?? 'progress']}`;
 		if (options.finalize) liveLineElement = null;
 
 		if (pinnedToBottom) logContainer.scrollTop = logContainer.scrollHeight;
@@ -184,11 +197,11 @@ const renderDownloadLine = createLiveLine(logConsole);
 function renderPullProgress(progress: ControlPanelPullProgress): void {
 	if (progress.done) {
 		if (progress.status === 'cancelled') {
-			renderDownloadLine(`⊘ ${progress.modelName} — cancelled`, { finalize: true });
+			renderDownloadLine(`⊘ ${progress.modelName} — cancelled`, { finalize: true, tone: 'warning' });
 		} else if (progress.status.startsWith('error')) {
-			renderDownloadLine(`✗ ${progress.modelName} — ${progress.status}`, { finalize: true, isError: true });
+			renderDownloadLine(`✗ ${progress.modelName} — ${progress.status}`, { finalize: true, tone: 'error' });
 		} else {
-			renderDownloadLine(`✓ ${progress.modelName} downloaded`, { finalize: true });
+			renderDownloadLine(`✓ ${progress.modelName} downloaded`, { finalize: true, tone: 'success' });
 		}
 	} else if (progress.total > 0) {
 		const percent = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
@@ -225,7 +238,11 @@ function formatDuration(ms: number): string {
 // The sync's story in the log pane, without the per-email flood: "found N" stays as its own line, one live
 // line tracks processed/added/updated counts in place, and it finalizes to a ✓ summary (or ✗ on error).
 const renderSyncLine = createLiveLine(logConsole);
+// A sync only reports 'done'/'error' when it runs to completion. If the server dies first, no closing event
+// ever arrives — so track the sync ourselves and close the line out when the server goes away.
+let syncInProgress = false;
 function renderSyncProgress(event: ControlPanelSyncProgress): void {
+	syncInProgress = event.phase !== 'done' && event.phase !== 'error';
 	const countsText = `${event.added ?? 0} added, ${event.updated ?? 0} updated, ${event.skipped ?? 0} skipped`;
 	if (event.phase === 'start') {
 		const totalEmails = event.total ?? 0;
@@ -238,12 +255,18 @@ function renderSyncProgress(event: ControlPanelSyncProgress): void {
 	} else if (event.phase === 'done') {
 		const failedNote = event.failed ? `, ${event.failed} failed (will retry)` : '';
 		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
-		renderSyncLine(`✓ Sync finished: ${countsText}${failedNote}${durationText}`, { finalize: true });
+		renderSyncLine(`✓ Sync finished: ${countsText}${failedNote}${durationText}`, { finalize: true, tone: 'success' });
 	} else if (event.phase === 'error') {
-		renderSyncLine(`✗ Sync failed: ${event.error ?? 'unknown error'}`, { finalize: true, isError: true });
+		renderSyncLine(`✗ Sync failed: ${event.error ?? 'unknown error'}`, { finalize: true, tone: 'error' });
 	}
 }
 launcher.onSyncProgress(renderSyncProgress);
+
+/** Replace the stalled progress line, which would otherwise sit at its last count as if still working. */
+function markSyncInterrupted(): void {
+	syncInProgress = false;
+	renderSyncLine('⊘ Sync interrupted: the server stopped before it finished — results may not have been saved', { finalize: true, tone: 'warning' });
+}
 
 // ── Status dots & buttons ───────────────────────────────────────────────────
 
@@ -254,6 +277,7 @@ launcher.onStatus((status) => {
 	startButton.disabled = status.serverRunning || status.serverStarting;
 	stopButton.disabled = !status.serverRunning;
 	openAppButton.disabled = !status.serverUp;
+	if (syncInProgress && !status.serverRunning) markSyncInterrupted();
 });
 
 /** Header model indicator: green when the configured model is installed, amber when it's unset or missing
