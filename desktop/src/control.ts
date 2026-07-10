@@ -7,6 +7,7 @@
 // them: a classic script cannot import, and this file must stay import-free to compile as one.
 interface ControlPanelStatus {
 	serverRunning: boolean;
+	serverStarting: boolean;
 	serverUp: boolean;
 	ollamaUp: boolean;
 	activeModel: string | null;
@@ -250,7 +251,7 @@ launcher.onStatus((status) => {
 	serverDot.classList.toggle('up', status.serverUp);
 	ollamaDot.classList.toggle('up', status.ollamaUp);
 	renderModelStatus(status);
-	startButton.disabled = status.serverRunning;
+	startButton.disabled = status.serverRunning || status.serverStarting;
 	stopButton.disabled = !status.serverRunning;
 	openAppButton.disabled = !status.serverUp;
 });

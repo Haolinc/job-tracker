@@ -18,6 +18,9 @@ const SYNC_PROGRESS_MARKER = '@sync-progress@';
 
 export class ServerManager {
 	private childProcess: ChildProcess | null = null;
+	// True from the moment start() begins until the child is spawned (or start bails out). Spawning is async —
+	// a port probe plus Ollama warmup — so without this the panel can't tell "starting" from "stopped".
+	private starting = false;
 	// Buffers server stdout so we act on whole lines — a marker line can be split across chunks.
 	private stdoutRemainder = '';
 
@@ -34,36 +37,47 @@ export class ServerManager {
 		return this.childProcess !== null;
 	}
 
-	async start(): Promise<void> {
-		if (this.childProcess) {
-			this.log('launcher', 'Server is already running.');
-			return;
-		}
-		// Something ELSE already answers on the port (a dev server, or an earlier launcher's leftover) —
-		// spawning into it would just crash with EADDRINUSE. Reuse it: the dots go green and Open App works;
-		// Stop only affects servers this launcher started.
-		if (await isReachable(`${this.serverUrl()}/api/health`)) {
-			this.log('launcher', `A server is already running at ${this.serverUrl()} — reusing it instead of starting another.`);
-			this.onStateChange();
-			return;
-		}
-		if (this.paths.runningPackaged && !existsSync(this.paths.serverEntryPoint)) {
-			this.log('launcher', `Server build missing at ${this.paths.serverEntryPoint} — the package looks incomplete.`);
-			return;
-		}
+	get isStarting(): boolean {
+		return this.starting;
+	}
 
-		await this.ollama.ensureRunning();
-		this.log('launcher', 'Starting server…');
-		this.childProcess = this.paths.runningPackaged ? this.spawnPackaged() : this.spawnDev();
-		this.childProcess.stdout?.on('data', (chunk: Buffer) => this.handleStdoutChunk(chunk.toString()));
-		this.childProcess.stderr?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
-		this.childProcess.on('exit', (code) => {
-			if (this.stdoutRemainder) { this.handleServerLine(this.stdoutRemainder); this.stdoutRemainder = ''; }
-			this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
-			this.childProcess = null;
-			this.onStateChange();
-		});
+	async start(): Promise<void> {
+		if (this.childProcess || this.starting) {
+			this.log('launcher', 'Server is already starting or running.');
+			return;
+		}
+		// Flip to "starting" and tell the panel now, so Start disables immediately — everything below is async
+		// (port probe + Ollama warmup) and isRunning stays false until the child is actually spawned.
+		this.starting = true;
 		this.onStateChange();
+		try {
+			// Something ELSE already answers on the port (a dev server, or an earlier launcher's leftover) —
+			// spawning into it would just crash with EADDRINUSE. Reuse it: the dots go green and Open App works;
+			// Stop only affects servers this launcher started.
+			if (await isReachable(`${this.serverUrl()}/api/health`)) {
+				this.log('launcher', `A server is already running at ${this.serverUrl()} — reusing it instead of starting another.`);
+				return;
+			}
+			if (this.paths.runningPackaged && !existsSync(this.paths.serverEntryPoint)) {
+				this.log('launcher', `Server build missing at ${this.paths.serverEntryPoint} — the package looks incomplete.`);
+				return;
+			}
+
+			await this.ollama.ensureRunning();
+			this.log('launcher', 'Starting server…');
+			this.childProcess = this.paths.runningPackaged ? this.spawnPackaged() : this.spawnDev();
+			this.childProcess.stdout?.on('data', (chunk: Buffer) => this.handleStdoutChunk(chunk.toString()));
+			this.childProcess.stderr?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
+			this.childProcess.on('exit', (code) => {
+				if (this.stdoutRemainder) { this.handleServerLine(this.stdoutRemainder); this.stdoutRemainder = ''; }
+				this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
+				this.childProcess = null;
+				this.onStateChange();
+			});
+		} finally {
+			this.starting = false;
+			this.onStateChange();
+		}
 	}
 
 	// Server stdout is parsed line by line (a chunk can split a line): sync-progress markers feed the panel's

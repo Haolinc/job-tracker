@@ -61,6 +61,7 @@ async function pushStatus(): Promise<void> {
 	const configuredModel = readEnvFile(paths.serverEnvPath).get('OLLAMA_MODEL') || '';
 	const status: LauncherStatus = {
 		serverRunning: server.isRunning,
+		serverStarting: server.isStarting,
 		serverUp,
 		ollamaUp: installedModels !== null,
 		activeModel: configuredModel || null,

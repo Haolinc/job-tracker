@@ -7,6 +7,9 @@ export type { LauncherConfig } from './config';
 export interface LauncherStatus {
 	/** The server child process exists (we spawned it and it hasn't exited). */
 	serverRunning: boolean;
+	/** start() is mid-flight — spawning is async (port probe + Ollama warmup), so this fills the gap
+	 *  before serverRunning turns true, letting the panel disable Start the instant a start begins. */
+	serverStarting: boolean;
 	/** The server answers /api/health — running AND ready. */
 	serverUp: boolean;
 	/** Ollama answers on its port — the classifier can work. */
