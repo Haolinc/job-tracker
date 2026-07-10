@@ -15,12 +15,15 @@
 		"desktop:build": "npm run build:client && npm run build:desktop",
 		"desktop:local-ollama": "powershell -NoProfile -Command \"Get-Process 'ollama','ollama app','llama-server' -ErrorAction SilentlyContinue | Stop-Process -Force; $env:PATH=(($env:PATH -split ';') | Where-Object { $_ -notlike '*Ollama*' }) -join ';'; npm run desktop\"",
 		"desktop": "npm run desktop:build && electron desktop/dist/main.js",
+		"test": "vitest run --dir desktop",
+		"test:watch": "vitest --dir desktop",
 		"package": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder"
 	},
 	"devDependencies": {
 		"concurrently": "^9.1.0",
 		"electron": "^42.6.0",
 		"electron-builder": "^25.1.8",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
 	}
 }

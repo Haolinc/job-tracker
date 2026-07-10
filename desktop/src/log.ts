@@ -21,7 +21,10 @@ export function createLog(getWindow: () => BrowserWindow | null): LogFn {
 	return (source, chunk) => {
 		for (const taggedLine of taggedLines(source, chunk)) {
 			console.log(taggedLine);
-			getWindow()?.webContents.send('launcher:log', taggedLine);
+			// The window can be destroyed while a line is in flight (quitting) — sending to it then throws
+			// into whoever logged, e.g. the server's stdout handler. Same re-check main.ts does in pushStatus.
+			const panelWindow = getWindow();
+			if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('launcher:log', taggedLine);
 		}
 	};
 }

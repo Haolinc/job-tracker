@@ -95,7 +95,10 @@ export class ServerManager {
 	private handleServerLine(line: string): void {
 		if (line.startsWith(SYNC_PROGRESS_MARKER)) {
 			try {
-				this.onSyncProgress(JSON.parse(line.slice(SYNC_PROGRESS_MARKER.length)) as SyncProgressEvent);
+				const parsed = JSON.parse(line.slice(SYNC_PROGRESS_MARKER.length)) as Partial<SyncProgressEvent> | null;
+				// Only forward payloads shaped like an event — a phase-less one would read as "sync in
+				// progress" in the panel forever. Anything else is dropped like a malformed line.
+				if (typeof parsed?.phase === 'string') this.onSyncProgress(parsed as SyncProgressEvent);
 			} catch {
 				// A malformed marker line is dropped — the next event refreshes the panel anyway.
 			}
