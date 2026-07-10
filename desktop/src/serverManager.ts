@@ -21,6 +21,9 @@ export class ServerManager {
 	// True from the moment start() begins until the child is spawned (or start bails out). Spawning is async —
 	// a port probe plus Ollama warmup — so without this the panel can't tell "starting" from "stopped".
 	private starting = false;
+	// True from stop() until the next spawn — a taskkill /F reports a NONZERO exit code, which must read as
+	// "you pressed Stop", not as a crash.
+	private stopRequested = false;
 	// Buffers server stdout so we act on whole lines — a marker line can be split across chunks.
 	private stdoutRemainder = '';
 
@@ -51,11 +54,13 @@ export class ServerManager {
 		this.starting = true;
 		this.onStateChange();
 		try {
+			this.log('launcher', 'Starting: checking the port, then Ollama…');
 			// Something ELSE already answers on the port (a dev server, or an earlier launcher's leftover) —
-			// spawning into it would just crash with EADDRINUSE. Reuse it: the dots go green and Open App works;
-			// Stop only affects servers this launcher started.
+			// spawning into it would just crash with EADDRINUSE. Refuse and say why: the OAuth callback is pinned
+			// to this port, so moving is not an option, and killing a process we didn't start is not ours to do.
+			// ("failed" keeps the panel's ERROR_LINE_PATTERN matching so the line reads as an error.)
 			if (await isReachable(`${this.serverUrl()}/api/health`)) {
-				this.log('launcher', `A server is already running at ${this.serverUrl()} — reusing it instead of starting another.`);
+				this.log('launcher', `Start failed: another server is already running at ${this.serverUrl()} — stop it first, or change PORT in Config.`);
 				return;
 			}
 			if (this.paths.runningPackaged && !existsSync(this.paths.serverEntryPoint)) {
@@ -65,12 +70,18 @@ export class ServerManager {
 
 			await this.ollama.ensureRunning();
 			this.log('launcher', 'Starting server…');
+			this.stopRequested = false;
 			this.childProcess = this.paths.runningPackaged ? this.spawnPackaged() : this.spawnDev();
 			this.childProcess.stdout?.on('data', (chunk: Buffer) => this.handleStdoutChunk(chunk.toString()));
 			this.childProcess.stderr?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
 			this.childProcess.on('exit', (code) => {
 				if (this.stdoutRemainder) { this.handleServerLine(this.stdoutRemainder); this.stdoutRemainder = ''; }
-				this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
+				if (!this.stopRequested && code !== null && code !== 0) {
+					// A nonzero exit nobody asked for is a crash — word it with "error" so the panel paints it red.
+					this.log('launcher', `Server stopped unexpectedly (exit code ${code}) — check the error above, then press Start to relaunch.`);
+				} else {
+					this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
+				}
 				this.childProcess = null;
 				this.onStateChange();
 			});
@@ -109,6 +120,7 @@ export class ServerManager {
 
 	stop(): void {
 		if (!this.childProcess) return;
+		this.stopRequested = true;
 		this.log('launcher', 'Stopping server…');
 		if (process.platform === 'win32' && this.childProcess.pid) {
 			// The server is a process tree (cmd → npm → node); taskkill /T is the only reliable tree kill.

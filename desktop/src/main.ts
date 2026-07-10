@@ -45,7 +45,14 @@ const ollama = new OllamaService(paths, log, () => {
 	ollamaPromptShown = true;
 	void promptOllamaInstall();
 }, sendPullProgress);
-const server = new ServerManager(paths, log, serverUrl, ollama, () => void pushStatus(), sendSyncProgress);
+// A sync in flight in OUR server child (an external server's sync is invisible — its stdout isn't ours).
+// Gates Stop and closing the launcher behind a confirmation, since killing the server mid-sync loses the
+// sync's work: results are only written once it finishes.
+let syncRunning = false;
+const server = new ServerManager(paths, log, serverUrl, ollama, () => {
+	if (!server.isRunning && !server.isStarting) syncRunning = false;   // the server is gone — so is its sync
+	void pushStatus();
+}, sendSyncProgress);
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -79,6 +86,7 @@ function sendPullProgress(progress: PullProgress): void {
 
 // Push a sync progress event to the panel — same live-line treatment as model downloads.
 function sendSyncProgress(syncEvent: SyncProgressEvent): void {
+	syncRunning = syncEvent.phase !== 'done' && syncEvent.phase !== 'error';
 	controlWindow?.webContents.send('launcher:sync-progress', syncEvent);
 }
 
@@ -296,6 +304,22 @@ async function confirmModelDownload(modelName: string): Promise<boolean> {
 	return response === 0;
 }
 
+/** True when it's safe to kill the server: no sync is running, or the user chose to interrupt it anyway.
+ *  Synchronous on purpose — the window's 'close' event must decide preventDefault before returning. */
+function confirmInterruptingSync(actionText: string): boolean {
+	if (!syncRunning || !controlWindow) return true;
+	const choice = dialog.showMessageBoxSync(controlWindow, {
+		type: 'warning',
+		title: 'Sync in progress',
+		message: 'A Gmail sync is still running.',
+		detail: `${actionText} now interrupts it — results are only saved when a sync finishes, so this sync's work would be lost and you would have to sync again.`,
+		buttons: ['Continue anyway', 'Keep syncing'],
+		defaultId: 1,
+		cancelId: 1,
+	});
+	return choice === 0;
+}
+
 // ── Config panel ────────────────────────────────────────────────────────────
 
 /** Persist the panel's config and apply it: restart a running server, or start it if first-run left none. */
@@ -391,13 +415,19 @@ function createControlWindow(): void {
 	// Polling pauses while the window is hidden, so refresh the moment it comes back into view.
 	controlWindow.on('restore', () => void pushStatus());
 	controlWindow.on('show', () => void pushStatus());
+	// Closing the launcher kills the server — and any sync it's running. Same confirmation as Stop.
+	controlWindow.on('close', (event) => {
+		if (!confirmInterruptingSync('Quitting')) event.preventDefault();
+	});
 	controlWindow.on('closed', () => { controlWindow = null; });
 }
 
 // ── IPC wiring ────────────────────────────────────────────────────────────────
 
 ipcMain.on('launcher:start', () => void server.start());
-ipcMain.on('launcher:stop', () => server.stop());
+ipcMain.on('launcher:stop', () => {
+	if (confirmInterruptingSync('Stopping the server')) server.stop();
+});
 ipcMain.on('launcher:open-app', () => void shell.openExternal(serverUrl()));   // the app lives in the browser
 ipcMain.handle('launcher:get-config', () => readConfig(paths.serverEnvPath));
 ipcMain.handle('launcher:save-config', (_event, config: LauncherConfig) => saveConfig(config));

@@ -130,14 +130,15 @@ describe('ServerManager lifecycle', () => {
 		expect(spawnMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('should reuse a server already answering on the port instead of spawning', async () => {
+	it('should refuse to start when another server already answers on the port', async () => {
 		isReachableMock.mockResolvedValue(true);
 		const manager = createManager();
 
 		await manager.start();
 		expect(spawnMock).not.toHaveBeenCalled();
-		expect(manager.isRunning).toBe(false);   // we did not spawn it, so we cannot stop it
+		expect(manager.isRunning).toBe(false);
 		expect(manager.isStarting).toBe(false);
+		expect(log).toHaveBeenCalledWith('launcher', expect.stringContaining('already running at http://localhost:3001'));
 	});
 
 	it('should clear the starting state when the packaged server build is missing', async () => {
@@ -161,7 +162,7 @@ describe('ServerManager lifecycle', () => {
 		expect(onStateChange).toHaveBeenCalledTimes(2);   // once to disable Start, once to re-enable it
 	});
 
-	it('should spawn on a later start once a reused external server has gone away', async () => {
+	it('should start normally on a later attempt once the port is free', async () => {
 		isReachableMock.mockResolvedValueOnce(true);   // an external server answers during the first start only
 		const manager = createManager();
 
@@ -180,6 +181,30 @@ describe('ServerManager lifecycle', () => {
 		await expect(manager.start()).rejects.toThrow('spawn failed');
 		expect(manager.isStarting).toBe(false);
 		expect(manager.isRunning).toBe(false);
+	});
+
+	it('should report an unexpected stop when the child exits nonzero without a stop request', async () => {
+		await startRunningManager();
+
+		child.emit('exit', 1);
+		expect(log).toHaveBeenCalledWith('launcher', expect.stringContaining('Server stopped unexpectedly (exit code 1)'));
+	});
+
+	it('should report a plain exit when a nonzero code follows a requested stop', async () => {
+		const manager = await startRunningManager();
+
+		manager.stop();
+		child.emit('exit', 1);   // taskkill /F reports a nonzero code — still a user-initiated stop, not a crash
+		expect(log).not.toHaveBeenCalledWith('launcher', expect.stringContaining('unexpectedly'));
+		expect(log).toHaveBeenCalledWith('launcher', 'Server exited (code 1).');
+	});
+
+	it('should report a plain exit for a clean zero exit', async () => {
+		await startRunningManager();
+
+		child.emit('exit', 0);
+		expect(log).not.toHaveBeenCalledWith('launcher', expect.stringContaining('unexpectedly'));
+		expect(log).toHaveBeenCalledWith('launcher', 'Server exited (code 0).');
 	});
 
 	it('should report not running and notify the panel once when the child exits', async () => {
