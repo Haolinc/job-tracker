@@ -45,7 +45,9 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					<button
 						data-testid="gmail-disconnect-btn"
 						onClick={onDisconnect}
-						className="text-xs text-gray-400 hover:text-red-500 underline"
+						disabled={syncing}
+						title={syncing ? 'Wait for the sync to finish before disconnecting' : undefined}
+						className="text-xs text-gray-400 hover:text-red-500 underline disabled:opacity-60 disabled:hover:text-gray-400"
 					>Disconnect</button>
 					{syncing && (
 						progress?.phase === 'warming' ? (
