@@ -333,6 +333,12 @@ function saveConfig(config: LauncherConfig): void {
 /** Make the server pick up the current .env: restart a running one, or start it if first-run left none. */
 function applyConfigToServer(): void {
 	if (server.isRunning) {
+		// Restarting kills a running sync exactly like Stop does — same confirmation. Declining keeps the
+		// server (and its sync) on the old config; the saved .env applies whenever it next starts.
+		if (!confirmInterruptingSync('Restarting the server')) {
+			log('launcher', 'Restart postponed — the saved config applies the next time the server starts.');
+			return;
+		}
 		log('launcher', 'Restarting server to apply the new config…');
 		server.stop();
 		setTimeout(() => void server.start(), SERVER_RESTART_DELAY_MS);

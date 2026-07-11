@@ -80,7 +80,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 							{lastResult.failed > 0 && (
 								<span
 									className="text-amber-600 font-medium"
-									title="These emails couldn't be read this time (a temporary Gmail error). They were not saved and will be retried automatically on your next sync."
+									title="These emails couldn't be read or classified this time (a temporary Gmail or AI error). They were not saved and will be retried automatically on your next sync."
 								>
 									{' '}&middot; &#x26A0; {lastResult.failed} couldn&apos;t be read (will retry)
 								</span>

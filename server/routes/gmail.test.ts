@@ -1,9 +1,97 @@
-import { describe, it, expect } from 'vitest';
-import { mapAhead } from './gmail';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import express from 'express';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import gmailRouter, { mapAhead, classifyOne } from './gmail';
+import { classifyEmail } from '../services/classifier';
+import { setSyncRunning } from '../services/syncState';
+import type { EmailResult } from '../types';
+
+// classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
+// parser so the mocked classifier is the only variable.
+vi.mock('../services/classifier', () => ({
+	classifyEmail: vi.fn(),
+	warmUpModel: vi.fn(),
+}));
+vi.mock('../services/filters', () => ({
+	isIgnorableEmail: () => false,
+}));
+vi.mock('../services/parser/templates', () => ({
+	parseEmail: () => null,
+}));
+
+const classifyEmailMock = vi.mocked(classifyEmail);
 
 async function* range(n: number): AsyncGenerator<number> {
 	for (let i = 0; i < n; i++) yield i;
 }
+
+describe('classifyOne', () => {
+	const email: EmailResult = {
+		threadId: 'thread-1',
+		messageId: 'message-1',
+		subject: 'Your application to Acme',
+		from: 'careers@acme.com',
+		body: 'Thanks for applying to Acme as a Software Engineer.',
+		lastMessageDate: '2026-07-10',
+		internalDate: 1_780_000_000_000,
+	};
+
+	beforeEach(() => {
+		classifyEmailMock.mockReset();
+	});
+
+	it('should report a classifier failure as failed, never as an ignored skip', async () => {
+		classifyEmailMock.mockRejectedValue(new Error('Ollama is not running'));
+		const result = await classifyOne(email);
+		// A 'skip' here would mark the email synced-as-ignored PERMANENTLY — it would never be
+		// classified again even after Ollama recovers, while the sync still reports success.
+		expect(result.kind).toBe('failed');
+	});
+
+	it('should return a merge result when the classifier succeeds', async () => {
+		classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Acme', role: 'Software Engineer' });
+		const result = await classifyOne(email);
+		expect(result).toMatchObject({ kind: 'merge', company: 'Acme', category: 'applied', detectedBy: 'llm' });
+	});
+
+	it('should skip as ignored when the classifier deliberately ignores the email', async () => {
+		classifyEmailMock.mockResolvedValue({ category: 'ignored', company: null, role: null });
+		const result = await classifyOne(email);
+		expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+	});
+});
+
+describe('POST /sync concurrency guard', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	beforeAll(async () => {
+		const app = express();
+		// requireAuth wants a connected session; a fake with tokens is enough — the guard under test
+		// fires before any Gmail work could touch the fake tokens.
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+	});
+
+	it('should reject a second sync with 409 while one is already running', async () => {
+		setSyncRunning(true);
+		try {
+			const response = await fetch(`${baseUrl}/api/gmail/sync`, { method: 'POST' });
+			expect(response.status).toBe(409);
+			const body = await response.json() as { error: string };
+			expect(body.error).toContain('already running');
+		} finally {
+			setSyncRunning(false);
+		}
+	});
+});
 
 describe('mapAhead', () => {
 	it('yields every result exactly once, in completion (not input) order', async () => {

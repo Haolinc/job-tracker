@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getAuthUrl, exchangeCode, revokeTokens } from '../services/gmail/oauth';
+import { isSyncRunning } from '../services/syncState';
 
 const router = Router();
 
@@ -40,6 +41,13 @@ router.get('/status', (req: Request, res: Response) => {
 });
 
 router.post('/disconnect', async (req: Request, res: Response) => {
+	// Disconnecting revokes the very tokens a running sync is using. The web app disables its
+	// Disconnect button while syncing, but that only covers the tab that started the sync — this
+	// guards every other caller (a second tab, curl).
+	if (isSyncRunning()) {
+		res.status(409).json({ error: 'A sync is in progress — wait for it to finish before disconnecting.' });
+		return;
+	}
 	try {
 		if (req.session?.tokens) {
 			await revokeTokens(req.session.tokens).catch(() => {});
