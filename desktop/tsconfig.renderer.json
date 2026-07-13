@@ -10,5 +10,5 @@
 		"types": [],
 		"skipLibCheck": true
 	},
-	"files": ["src/control.ts"]
+	"files": ["src/control.ts", "src/launcher-globals.d.ts"]
 }

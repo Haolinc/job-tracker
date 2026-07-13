@@ -1,10 +1,25 @@
 // Types shared between the Electron main process, the preload bridge, and the control-panel renderer.
+//
+// Declared GLOBALLY on purpose (no top-level import/export keeps this file in ambient/script mode). The
+// control panel compiles to a classic script that control.html loads directly, so control.ts cannot import;
+// global ambient types are the one shape it can see. The main-process modules see these same globals, so
+// every mirror is now one definition and the compiler catches drift instead of a comment asking people to
+// keep two copies in sync. Listed in tsconfig.renderer.json (and picked up by tsconfig.json's `include`).
 
-import type { LauncherConfig } from './config';
-export type { LauncherConfig } from './config';
+/** The server/.env values the config panel can read and write. */
+interface LauncherConfig {
+	googleClientId: string;
+	googleClientSecret: string;
+	googleRedirectUri: string;
+	/** Left empty in the panel → a random secret is generated on save. */
+	sessionSecret: string;
+	port: string;
+	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
+	ollamaModel: string;
+}
 
 /** What the control panel needs to render the status dots and button states. */
-export interface LauncherStatus {
+interface LauncherStatus {
 	/** The server child process exists (we spawned it and it hasn't exited). */
 	serverRunning: boolean;
 	/** start() is mid-flight — spawning is async (port probe + Ollama warmup), so this fills the gap
@@ -21,7 +36,7 @@ export interface LauncherStatus {
 }
 
 /** A single model-download progress update, streamed as a pull runs so the panel can show one live line. */
-export interface PullProgress {
+interface PullProgress {
 	/** The model being pulled. */
 	modelName: string;
 	/** Ollama's phase text for this event, e.g. "pulling manifest", "verifying sha256 digest", "success". */
@@ -36,7 +51,7 @@ export interface PullProgress {
 
 /** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live
  *  sync line instead of the per-email log detail. Mirrors the events routes/gmail.ts sends to the browser. */
-export interface SyncProgressEvent {
+interface SyncProgressEvent {
 	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
 	/** The scan window in days (present on 'start') — how far back this sync searches Gmail. */
 	days?: number;
@@ -54,10 +69,12 @@ export interface SyncProgressEvent {
 }
 
 /** The API the preload script exposes to the control panel as `window.launcher`. */
-export interface LauncherBridge {
+interface LauncherBridge {
 	startServer(): void;
 	stopServer(): void;
 	openApp(): void;
+	/** Reveal the server log folder in the OS file manager, so users can find and share logs. */
+	openLogsFolder(): void;
 	getConfig(): Promise<LauncherConfig>;
 	saveConfig(config: LauncherConfig): Promise<void>;
 	/** Names of the models installed in the running Ollama, or null when Ollama is unreachable. */

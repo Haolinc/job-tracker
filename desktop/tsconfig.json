@@ -11,5 +11,6 @@
 		"skipLibCheck": true
 	},
 	"include": ["src"],
+	"files": ["src/launcher-globals.d.ts"],
 	"exclude": ["src/control.ts", "src/**/*.test.ts"]
 }

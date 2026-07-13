@@ -9,10 +9,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { DEFAULT_PORT, readConfig, readEnvFile, updateConfigValue, writeConfig } from './config';
-import type { LauncherConfig } from './config';
-import type { LauncherStatus, PullProgress, SyncProgressEvent } from './shared';
+// LauncherConfig/LauncherStatus/PullProgress/SyncProgressEvent are ambient globals (launcher-globals.d.ts).
 import { resolveLauncherPaths } from './paths';
 import { createLog, logToTerminal } from './log';
 import { isReachable } from './health';
@@ -428,6 +427,20 @@ function createControlWindow(): void {
 	controlWindow.on('closed', () => { controlWindow = null; });
 }
 
+/** Reveal the server's log folder in the OS file manager. Created first so it always opens — a fresh
+ *  install (or a session where the server never logged) may not have written the folder yet. */
+async function openLogsFolder(): Promise<void> {
+	const logsDirectory = paths.serverLogsDirectory;
+	try {
+		mkdirSync(logsDirectory, { recursive: true });
+		const openFailureReason = await shell.openPath(logsDirectory);   // '' on success, a message on failure
+		if (openFailureReason) log('launcher', `Could not open the logs folder (${logsDirectory}): ${openFailureReason}`);
+	} catch (caughtError) {
+		const failureReason = caughtError instanceof Error ? caughtError.message : String(caughtError);
+		log('launcher', `Could not open the logs folder (${logsDirectory}): ${failureReason}`);
+	}
+}
+
 // ── IPC wiring ────────────────────────────────────────────────────────────────
 
 ipcMain.on('launcher:start', () => void server.start());
@@ -435,6 +448,7 @@ ipcMain.on('launcher:stop', () => {
 	if (confirmInterruptingSync('Stopping the server')) server.stop();
 });
 ipcMain.on('launcher:open-app', () => void shell.openExternal(serverUrl()));   // the app lives in the browser
+ipcMain.on('launcher:open-logs', () => void openLogsFolder());
 ipcMain.handle('launcher:get-config', () => readConfig(paths.serverEnvPath));
 ipcMain.handle('launcher:save-config', (_event, config: LauncherConfig) => saveConfig(config));
 ipcMain.handle('launcher:list-models', () => listInstalledModels());

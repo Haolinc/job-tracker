@@ -8,7 +8,7 @@ import { isReachable } from './health';
 import type { LauncherPaths } from './paths';
 import type { LogFn } from './log';
 import type { OllamaService } from './ollamaService';
-import type { SyncProgressEvent } from './shared';
+// SyncProgressEvent is an ambient global (launcher-globals.d.ts).
 
 // The server mirrors each sync progress event to stdout as "@sync-progress@ {json}" — keep in sync with the
 // same constant in server/routes/gmail.ts. Parsed into the panel's live sync line instead of logged as text.

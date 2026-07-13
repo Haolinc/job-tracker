@@ -3,67 +3,11 @@
 // reads/writes server/.env through the bridge. No import/export on purpose — this compiles to a plain
 // classic script that control.html loads directly.
 
-// These interfaces MIRROR shared.ts (LauncherStatus/LauncherConfig/LauncherBridge) rather than import
-// them: a classic script cannot import, and this file must stay import-free to compile as one.
-interface ControlPanelStatus {
-	serverRunning: boolean;
-	serverStarting: boolean;
-	serverUp: boolean;
-	ollamaUp: boolean;
-	activeModel: string | null;
-	activeModelInstalled: boolean;
-}
-
-interface ControlPanelConfig {
-	googleClientId: string;
-	googleClientSecret: string;
-	googleRedirectUri: string;
-	sessionSecret: string;
-	port: string;
-	ollamaModel: string;
-}
-
-interface ControlPanelPullProgress {
-	modelName: string;
-	status: string;
-	completed: number;
-	total: number;
-	done: boolean;
-}
-
-interface ControlPanelSyncProgress {
-	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
-	days?: number;      // scan window (present on 'start')
-	processed?: number;
-	total?: number;
-	added?: number;
-	updated?: number;
-	skipped?: number;
-	failed?: number;
-	durationMs?: number;
-	error?: string;
-}
-
-interface ControlPanelBridge {
-	startServer(): void;
-	stopServer(): void;
-	openApp(): void;
-	getConfig(): Promise<ControlPanelConfig>;
-	saveConfig(config: ControlPanelConfig): Promise<void>;
-	listInstalledModels(): Promise<string[] | null>;
-	pullModel(modelName: string): Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean; cancelled?: boolean }>;
-	cancelPull(): void;
-	deleteModel(modelName: string): Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
-	listIncompleteDownloads(): Promise<string[]>;
-	reclaimIncompleteDownloads(): Promise<{ freedBytes: number }>;
-	openModelLibrary(): void;
-	onLog(handler: (line: string) => void): void;
-	onStatus(handler: (status: ControlPanelStatus) => void): void;
-	onPullProgress(handler: (progress: ControlPanelPullProgress) => void): void;
-	onSyncProgress(handler: (event: ControlPanelSyncProgress) => void): void;
-}
-
-declare const launcher: ControlPanelBridge;   // exposed by preload.ts via contextBridge
+// The bridge and the message shapes it carries (LauncherBridge, LauncherStatus, LauncherConfig,
+// PullProgress, SyncProgressEvent) are ambient globals declared in launcher-globals.d.ts, shared with the
+// main-process modules — one definition each, so the compiler catches any drift. A classic script can't
+// import, and this file stays import-free on purpose so it compiles to a plain classic script.
+declare const launcher: LauncherBridge;   // exposed by preload.ts via contextBridge
 
 const logConsole = document.getElementById('log-console') as HTMLDivElement;
 const serverDot = document.getElementById('server-dot') as HTMLSpanElement;
@@ -73,12 +17,13 @@ const modelLabel = document.getElementById('active-model-label') as HTMLSpanElem
 const startButton = document.getElementById('start-button') as HTMLButtonElement;
 const stopButton = document.getElementById('stop-button') as HTMLButtonElement;
 const openAppButton = document.getElementById('open-app-button') as HTMLButtonElement;
+const openLogsButton = document.getElementById('open-logs-button') as HTMLButtonElement;
 const configButton = document.getElementById('config-button') as HTMLButtonElement;
 const configPanel = document.getElementById('config-panel') as HTMLElement;
 const saveConfigButton = document.getElementById('save-config-button') as HTMLButtonElement;
 
 // Every config field is a plain text input EXCEPT the model, which is a dropdown of installed models.
-type TextConfigField = Exclude<keyof ControlPanelConfig, 'ollamaModel'>;
+type TextConfigField = Exclude<keyof LauncherConfig, 'ollamaModel'>;
 
 // Record<…> makes the compiler verify an input exists for every text field — and the derived list below
 // keeps load and save in lockstep with the interface.
@@ -194,7 +139,7 @@ function createLiveLine(logContainer: HTMLDivElement): (text: string, options?: 
 }
 
 const renderDownloadLine = createLiveLine(logConsole);
-function renderPullProgress(progress: ControlPanelPullProgress): void {
+function renderPullProgress(progress: PullProgress): void {
 	if (progress.done) {
 		if (progress.status === 'cancelled') {
 			renderDownloadLine(`⊘ ${progress.modelName} — cancelled`, { finalize: true, tone: 'warning' });
@@ -241,7 +186,7 @@ const renderSyncLine = createLiveLine(logConsole);
 // A sync only reports 'done'/'error' when it runs to completion. If the server dies first, no closing event
 // ever arrives — so track the sync ourselves and close the line out when the server goes away.
 let syncInProgress = false;
-function renderSyncProgress(event: ControlPanelSyncProgress): void {
+function renderSyncProgress(event: SyncProgressEvent): void {
 	syncInProgress = event.phase !== 'done' && event.phase !== 'error';
 	const countsText = `${event.added ?? 0} added, ${event.updated ?? 0} updated, ${event.skipped ?? 0} skipped`;
 	if (event.phase === 'start') {
@@ -282,7 +227,7 @@ launcher.onStatus((status) => {
 
 /** Header model indicator: green when the configured model is installed, amber when it's unset or missing
  *  (classification would fail), neutral while Ollama is unreachable (we can't tell). */
-function renderModelStatus(status: ControlPanelStatus): void {
+function renderModelStatus(status: LauncherStatus): void {
 	modelDot.classList.remove('up', 'warn');
 	if (!status.ollamaUp) {
 		modelLabel.textContent = 'Model';
@@ -305,6 +250,7 @@ function renderModelStatus(status: ControlPanelStatus): void {
 startButton.addEventListener('click', () => launcher.startServer());
 stopButton.addEventListener('click', () => launcher.stopServer());
 openAppButton.addEventListener('click', () => launcher.openApp());
+openLogsButton.addEventListener('click', () => launcher.openLogsFolder());
 
 // ── Config panel ────────────────────────────────────────────────────────────
 
@@ -466,7 +412,7 @@ reclaimIncompleteButton.addEventListener('click', async () => {
 });
 
 saveConfigButton.addEventListener('click', async () => {
-	const config = {} as ControlPanelConfig;
+	const config = {} as LauncherConfig;
 	for (const configField of configFields) config[configField] = configInputs[configField].value.trim();
 	// When the picker is disabled (Ollama down, or nothing installed) there's no real selection to save —
 	// keep the previously saved model rather than overwriting it with an empty value.

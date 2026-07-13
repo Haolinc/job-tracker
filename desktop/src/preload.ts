@@ -3,12 +3,14 @@
 // the renderer can never reach Node or Electron internals directly.
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { LauncherBridge, LauncherConfig, LauncherStatus, PullProgress, SyncProgressEvent } from './shared';
+// LauncherBridge/LauncherConfig/LauncherStatus/PullProgress/SyncProgressEvent are ambient globals
+// (launcher-globals.d.ts) — shared with the classic control-panel script, which cannot import.
 
 const launcherBridge: LauncherBridge = {
 	startServer: () => ipcRenderer.send('launcher:start'),
 	stopServer: () => ipcRenderer.send('launcher:stop'),
 	openApp: () => ipcRenderer.send('launcher:open-app'),
+	openLogsFolder: () => ipcRenderer.send('launcher:open-logs'),
 	getConfig: () => ipcRenderer.invoke('launcher:get-config') as Promise<LauncherConfig>,
 	saveConfig: (config: LauncherConfig) => ipcRenderer.invoke('launcher:save-config', config) as Promise<void>,
 	listInstalledModels: () => ipcRenderer.invoke('launcher:list-models') as Promise<string[] | null>,

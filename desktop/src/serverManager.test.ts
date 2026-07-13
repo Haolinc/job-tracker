@@ -8,7 +8,7 @@ import { ServerManager } from './serverManager';
 import type { LauncherPaths } from './paths';
 import type { LogFn } from './log';
 import type { OllamaService } from './ollamaService';
-import type { SyncProgressEvent } from './shared';
+// SyncProgressEvent is an ambient global (launcher-globals.d.ts).
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
 vi.mock('node:fs', () => ({ existsSync: vi.fn(() => true) }));

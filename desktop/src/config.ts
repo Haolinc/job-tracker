@@ -7,17 +7,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 export const DEFAULT_PORT = '3001';
 
-/** The server/.env values the config panel can read and write. */
-export interface LauncherConfig {
-	googleClientId: string;
-	googleClientSecret: string;
-	googleRedirectUri: string;
-	/** Left empty in the panel → a random secret is generated on save. */
-	sessionSecret: string;
-	port: string;
-	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
-	ollamaModel: string;
-}
+// LauncherConfig (the server/.env values the panel reads and writes) is an ambient global declared in
+// launcher-globals.d.ts, so the classic control-panel script sees the same shape this module reads/writes.
 
 const ENV_KEYS_BY_CONFIG_FIELD: Record<keyof LauncherConfig, string> = {
 	googleClientId: 'GOOGLE_CLIENT_ID',

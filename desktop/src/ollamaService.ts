@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isReachable } from './health';
 import type { LauncherPaths } from './paths';
 import type { LogFn } from './log';
-import type { PullProgress } from './shared';
+// PullProgress is an ambient global (launcher-globals.d.ts).
 
 // Same daemon the preflight targets — honour OLLAMA_HOST so a custom host/port is reached consistently.
 const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
