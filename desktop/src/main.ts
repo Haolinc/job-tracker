@@ -7,6 +7,7 @@
 // modules; the renderer is a pure display surface.
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -441,6 +442,30 @@ async function openLogsFolder(): Promise<void> {
 	}
 }
 
+// ── Auto-update ───────────────────────────────────────────────────────────────
+
+/**
+ * Check the GitHub Releases of this repo (the `publish` block in electron-builder.yml) for a newer version.
+ * A found update downloads in the background and installs itself when the launcher quits — no restart is
+ * forced on the user. Skipped in dev runs: only a packaged install has a version to compare and replace.
+ * Note for portable-zip users: an update still downloads the NSIS installer, which installs the app rather
+ * than replacing the zip folder — a zip has no registered install location to swap in place.
+ */
+function checkForUpdates(): void {
+	if (!app.isPackaged) return;
+	autoUpdater.on('update-available', (updateInfo) => {
+		log('launcher', `Update available: v${updateInfo.version} — downloading in the background…`);
+	});
+	autoUpdater.on('update-downloaded', (updateInfo) => {
+		log('launcher', `Update v${updateInfo.version} downloaded — it installs when you close the launcher.`);
+	});
+	// An unreachable GitHub (offline, rate-limited) is routine — log it and move on; the app runs regardless.
+	autoUpdater.on('error', (updateError) => {
+		log('launcher', `Update check failed: ${updateError.message}`);
+	});
+	void autoUpdater.checkForUpdatesAndNotify();
+}
+
 // ── IPC wiring ────────────────────────────────────────────────────────────────
 
 ipcMain.on('launcher:start', () => void server.start());
@@ -493,6 +518,7 @@ if (!app.requestSingleInstanceLock()) {
 		controlWindow?.webContents.once('did-finish-load', () => {
 			log('launcher', 'Launcher ready.');
 			void server.start();   // auto-start: the panel is for watching, not ceremony
+			checkForUpdates();     // after the panel loads, so its log lines land in the console
 		});
 		setInterval(() => void pushStatus(), STATUS_POLL_INTERVAL_MS);
 	});

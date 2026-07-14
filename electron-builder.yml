@@ -1,13 +1,21 @@
-# Packaging config for the portable launcher. Produces a self-contained Windows app (Electron + bundled
-# Node) as an unpacked folder and a zip — no Node install required on the target machine.
+# Packaging config for the launcher. Produces a self-contained Windows app (Electron + bundled Node) as an
+# NSIS installer (auto-updatable) plus an unpacked folder and a zip — no Node install required on the target.
 appId: com.haolin.jobtracker
 productName: Job Tracker
 directories:
   output: release
 
-# Only the launcher itself goes inside app.asar — main.ts has no runtime npm deps beyond Electron, so the
-# archive stays tiny. The server, client build, and scripts ride alongside as plain files (extraResources)
-# because a spawned Node process and a native .node module cannot run from inside an asar archive.
+# Where releases live: `electron-builder --publish always` uploads the artifacts (and the latest.yml manifest
+# electron-updater reads) to a GitHub Release, and installed apps check this same repo for newer versions.
+publish:
+  provider: github
+  owner: Haolinc
+  repo: job-tracker
+
+# Only the launcher itself goes inside app.asar — its sole runtime npm dep (electron-updater) is collected
+# automatically, so the archive stays tiny. The server, client build, and scripts ride alongside as plain
+# files (extraResources) because a spawned Node process and a native .node module cannot run from inside an
+# asar archive.
 files:
   - desktop/dist/**/*
   - desktop/control.html
@@ -29,5 +37,8 @@ win:
   # No code-signing certificate, so skip signtool entirely. This also avoids electron-builder unpacking its
   # winCodeSign helper, whose macOS symlinks can't be extracted on Windows without elevated privilege.
   signAndEditExecutable: false
+  # nsis is the auto-update lane (electron-updater swaps installed versions); zip stays for portable users,
+  # who update by downloading the new zip themselves — a zip has no install location to update in place.
   target:
+    - nsis
     - zip

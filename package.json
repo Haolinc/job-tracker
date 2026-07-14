@@ -17,7 +17,8 @@
 		"desktop": "npm run desktop:build && electron desktop/dist/main.js",
 		"test": "vitest run --dir desktop",
 		"test:watch": "vitest --dir desktop",
-		"package": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder"
+		"package": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder",
+		"release": "npm run package -- --publish always"
 	},
 	"devDependencies": {
 		"concurrently": "^9.1.0",
@@ -25,5 +26,8 @@
 		"electron-builder": "^25.1.8",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.10"
+	},
+	"dependencies": {
+		"electron-updater": "^6.8.9"
 	}
 }
