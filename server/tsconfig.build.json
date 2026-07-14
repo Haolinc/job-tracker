@@ -1,0 +1,13 @@
+{
+	// Emits compiled JS to dist/ for the packaged app to run under Electron's bundled Node — the base
+	// tsconfig.json stays --noEmit for typechecking. Tests and their helpers are excluded from the ship build.
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"rootDir": ".",
+		"sourceMap": true,
+		"declaration": false
+	},
+	"include": ["./**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

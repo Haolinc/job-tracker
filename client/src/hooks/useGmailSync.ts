@@ -12,8 +12,8 @@ export function useGmailSync() {
 	// useCallback required — used in a useEffect dep array in App.tsx
 	const checkStatus = useCallback(async () => {
 		try {
-			const { connected: c } = await getAuthStatus();
-			setConnected(c);
+			const { connected: connectedNow } = await getAuthStatus();
+			setConnected(connectedNow);
 		} catch { /* silently ignore */ }
 	}, []);
 
@@ -23,8 +23,10 @@ export function useGmailSync() {
 			setConnected(false);
 			setLastResult(null);
 			setError(null);
-		} catch {
-			setError('Failed to disconnect');
+		} catch (caughtError) {
+			// Surface the server's reason when it gives one — e.g. the 409 for "a sync is in progress".
+			const serverReason = (caughtError as { response?: { data?: { error?: string } } })?.response?.data?.error;
+			setError(serverReason ?? 'Failed to disconnect');
 		}
 	}, []);
 
@@ -36,11 +38,11 @@ export function useGmailSync() {
 			const result = await syncGmail(days, setProgress);
 			setLastResult(result);
 			return result;
-		} catch (e) {
-			const msg = (e as { response?: { data?: { error?: string } }; message?: string })
-				?.response?.data?.error ?? (e instanceof Error ? e.message : 'Sync failed');
-			setError(msg);
-			throw e;
+		} catch (caughtError) {
+			const errorMessage = (caughtError as { response?: { data?: { error?: string } } })
+				?.response?.data?.error ?? (caughtError instanceof Error ? caughtError.message : 'Sync failed');
+			setError(errorMessage);
+			throw caughtError;
 		} finally {
 			setSyncing(false);
 			setProgress(null);

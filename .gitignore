@@ -17,7 +17,12 @@ data/
 
 # ─── Build Output ────────────────────────────────────────────────────────────
 client/dist/
+desktop/dist/
 server/dist/
+
+# ─── Packaging (electron-builder) ────────────────────────────────────────────
+build-staging/
+release/
 
 # ─── TypeScript ──────────────────────────────────────────────────────────────
 *.tsbuildinfo
@@ -50,3 +55,7 @@ desktop.ini
 
 # ─── Miscellaneous ───────────────────────────────────────────────────────────
 audit_ground_truth.txt
+
+# ─── Local Ollama ───────────────────────────────────────────────────────────
+server/ollama/
+server/incomplete-downloads.json

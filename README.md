@@ -1,102 +1,196 @@
-# Job Application Tracker
+<a id="readme-top"></a>
 
-A Kanban board that tracks your job applications and **auto-syncs them from Gmail** — detecting the
-company, role, and status (applied / interview / offer / rejected) from your application emails. All
-email classification runs **locally** via Ollama, so your inbox content never leaves your machine.
+<br />
+<div align="center">
+  <h3 align="center">Job Application Tracker</h3>
 
-## Features
+  <p align="center">
+    A Kanban board that fills itself: your job applications, auto-synced from Gmail,
+    classified by a local AI so your inbox never leaves your machine.
+    <br />
+    <a href="https://github.com/Haolinc/job-tracker/issues">Report Bug</a>
+    &middot;
+    <a href="https://github.com/Haolinc/job-tracker/issues">Request Feature</a>
+  </p>
+</div>
 
-- **Gmail auto-sync** — scans the last 30 / 60 / 90 / 180 days for application-related emails and turns
-  them into tracked applications, with a live streaming progress bar.
-- **Hybrid classification** — a fast deterministic parser handles the common templates (LinkedIn,
-  Indeed, Workday, Greenhouse, …); a local LLM handles everything else.
-- **Smart dedup & matching** — the confirmation, interview, and rejection emails for the same job
-  collapse into **one** application, even when the company name is spelled differently across emails.
-  Different roles at the same company stay as separate applications.
-- **Sticky interview tracking** — an application that reached an interview keeps that status for the
-  "Interview Rate" stat even if it's later rejected.
-- **Two views** — **Kanban board** (collapsible columns) and a sortable **table**.
-- **Provenance badges** — each auto-detected card shows whether the **⚙️ parser** or **🤖 AI** classified
-  it (cleared once you edit it), and newly-synced cards are highlighted after a sync.
-- **Unknown-role warnings** — applications whose title couldn't be extracted are flagged for a quick
-  manual fix.
-- **Manual entry & editing** — add or edit applications by hand; manual edits are never overwritten by
-  a later sync.
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#built-with">Built With</a></li>
+    <li>
+      <a href="#getting-started">Getting Started</a>
+      <ul>
+        <li><a href="#step-1-google-cloud-project-required-for-both-options">Step 1: Google Cloud project</a></li>
+        <li><a href="#step-2-option-a-download-the-packaged-app-windows">Option A: Download the packaged app</a></li>
+        <li><a href="#step-2-option-b-run-from-source">Option B: Run from source</a></li>
+        <li><a href="#configuration">Configuration</a></li>
+      </ul>
+    </li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#privacy-notes">Privacy notes</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ol>
+</details>
 
-## Tech stack
+## About The Project
 
-| Layer | Stack |
-|---|---|
-| Client | React + Vite + Tailwind, axios |
-| Server | Node + Express (TypeScript) |
-| Database | Embedded SQLite (better-sqlite3) — no database server needed |
-| Auth / email | Google OAuth 2.0 + Gmail API (read-only) |
-| Classification | **Ollama** running `qwen2.5:7b` (local) |
+Tracking job applications by hand means copying every confirmation, interview invite, and rejection
+into a spreadsheet, and forgetting half of them. This tracker does it for you:
 
-## Prerequisites
+- **Syncs from Gmail**: scan the last 30 to 180 days and every application email becomes a card, with
+  live progress while it runs.
+- **Classifies locally**: a fast parser handles the common job boards; a local AI (Ollama) handles
+  the rest. No cloud API, no key, no inbox data leaving your machine.
+- **Keeps one card per job**: confirmations, interviews, and rejections for the same job merge into
+  a single application, even when company names are spelled differently across emails.
+- **Two views**: a Kanban board with collapsible columns, or a sortable table.
+- **Links back to the source**: every card links to the actual Gmail messages behind each status
+  change, and shows whether the parser or the AI classified it.
+- **Stays out of your way**: manual entries and edits are never overwritten by a sync, and CSV
+  import/export gets your data in or out anytime.
+- **Desktop launcher**: one window that starts and stops everything, manages Ollama and its models,
+  and holds your configuration. No terminal needed, and it packages into a **portable Windows app**
+  that runs on a machine with nothing preinstalled.
 
-- **Node.js** (18+) and **npm**
-- **[Ollama](https://ollama.com)** installed and running, with the model pulled:
-  ```bash
-  ollama pull qwen2.5:7b
-  ```
-- A **Google Cloud project** with the Gmail API enabled and OAuth credentials (see
-  [Gmail integration](#gmail-integration))
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-## Quick start
+## Built With
 
-### 1. Configure environment
-```bash
-cp .env.example server/.env
-# fill in the values (see the table below)
-```
+* [![React][React.js]][React-url]
+* [![Vite][Vite.js]][Vite-url]
+* [![TailwindCSS][Tailwind.css]][Tailwind-url]
+* [![TypeScript][TypeScript]][TypeScript-url]
+* [![Express][Express.js]][Express-url]
+* [![SQLite][SQLite]][SQLite-url]
+* [![Electron][Electron]][Electron-url]
+* [![Ollama][Ollama]][Ollama-url]
 
-### 2. Install dependencies
-```bash
-npm run install:all   # root + server + client
-```
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### 3. Run the app (one terminal)
-```bash
-npm run dev   # starts Ollama if needed, then the backend and frontend together
-```
-```bash
-ollama pull qwen2.5:7b  # one-time, before the first sync
-```
-(The two parts can still be run separately: `cd server && npm run dev` and `cd client && npm run dev`.)
+## Getting Started
 
-Open http://localhost:5173, click **Connect Gmail**, then **Sync**.
+There are two ways to get the app: download the ready-made Windows package, or run it from source.
+**Both** need a Google Cloud project first (that's how the app gets read-only access to *your* Gmail
+with *your own* credentials; nothing is shared with anyone else).
 
-## Gmail integration
+### Step 1: Google Cloud project (required for both options)
 
 1. Create a Google Cloud project and **enable the Gmail API**.
 2. Create **OAuth 2.0 credentials** (Web application).
 3. Add the redirect URI: `http://localhost:3001/api/auth/google/callback`.
 4. Add your Google account as a **test user** on the OAuth consent screen (the only scope used is
-   `gmail.readonly`).
-5. Put the Client ID + Secret in `server/.env` and click **Connect Gmail** in the app header.
+   `gmail.readonly`, so the app can never modify or send mail).
 
-## Environment variables
+Keep the **Client ID** and **Client Secret**, you'll enter them in the next step.
 
-Copy `.env.example` to `server/.env` and fill in:
+### Step 2, Option A: Download the packaged app (Windows)
+
+1. Download the latest zip from [**Releases**](https://github.com/Haolinc/job-tracker/releases).
+2. Unzip it anywhere and run `Job Tracker.exe`. It's fully self-contained, so the machine needs
+   **nothing preinstalled**: no Node.js, and the launcher will offer to install Ollama and download
+   the AI model for you.
+3. Open **Config**, paste your Client ID and Secret, press **Start**, then **Open App**.
+
+### Step 2, Option B: Run from source
+
+Prerequisites: **Node.js** 18+ with **npm**, and **[Ollama](https://ollama.com)** (or let the
+desktop launcher install it for you).
+
+```bash
+git clone https://github.com/Haolinc/job-tracker.git
+cd job-tracker
+npm run install:all
+```
+
+Then pick one:
+
+**Desktop launcher**
+```bash
+npm run desktop
+```
+Enter your Client ID and Secret in **Config**, press **Start**, then **Open App**.
+
+**Terminal**
+```bash
+cp .env.example server/.env   # fill in the values (see Configuration)
+ollama pull qwen2.5:7b        # one-time, before the first sync
+npm run dev                   # Ollama + backend + frontend, one terminal
+```
+Then open http://localhost:5173.
+
+(You can also build the portable Windows package yourself with `npm run package`)
+
+### Configuration
+
+The desktop launcher's **Config** panel manages all of these for you. For the terminal workflow,
+fill them into `server/.env`:
 
 | Variable | Description |
 |---|---|
-| `DB_PATH` | Optional — SQLite file location (default `data/job-tracker.db`) |
-| `PORT` | Backend port (default `3001`) |
-| `CLIENT_URL` | Frontend origin (default `http://localhost:5173`) |
 | `GOOGLE_CLIENT_ID` | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3001/api/auth/google/callback` |
 | `SESSION_SECRET` | Any long random string |
+| `PORT` | Optional: backend port (default `3001`) |
+| `CLIENT_URL` | Optional: frontend origin (default `http://localhost:5173`) |
+| `DB_PATH` | Optional: SQLite file location (default `data/job-tracker.db`) |
+| `OLLAMA_MODEL` | Optional: classifier model (default `qwen2.5:7b`) |
 
-> Classification is fully local via Ollama — **no API key is required**. (Earlier versions used a hosted
-> model; `ANTHROPIC_API_KEY` is no longer needed and can be removed from your `.env`.)
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-## Notes
+## Usage
 
-- The Gmail scope is **read-only** — the app never modifies or sends mail.
-- Re-syncing is cheap: already-processed messages are skipped before any body is downloaded, so widening
-  the scan window only backfills newly in-range emails.
-- All data lives in a local SQLite file (`data/job-tracker.db`, gitignored); there is no per-account separation — everything you sync (from any
-  connected Gmail account) accumulates in one board and dedups together.
+1. Click **Connect Gmail** in the app header and approve read-only access.
+2. Pick a scan window (last 30 / 60 / 90 / 180 days) and hit **Sync Gmail**; a progress bar streams
+   results as they come in.
+3. Newly synced cards land on the board highlighted; drag them between columns or switch to the
+   table view. Cards whose role couldn't be detected are flagged for a quick manual fix.
+4. Re-sync whenever you like: already-processed emails are skipped, so it's fast, and your manual
+   edits are never touched.
+5. Use the toolbar to add applications by hand or import/export CSV.
+
+If you use the desktop launcher: it warms up Ollama before starting the server, shows sync progress
+in its log console, and asks before letting you stop or quit while a sync is still running (an
+interrupted sync loses that run's work).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Privacy notes
+
+- Email classification runs **entirely on your machine** via Ollama; no API key, no cloud calls.
+- The Gmail scope is **read-only**; the app never modifies or sends mail.
+- All data lives in a local SQLite file (gitignored). The packaged desktop app keeps its
+  configuration, database, and logs in your per-user app-data folder.
+- There is no per-account separation: everything you sync from any connected Gmail account
+  accumulates in one board and dedups together.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Contact
+
+Haolin - haolin5175@gmail.com
+
+Project Link: [https://github.com/Haolinc/job-tracker](https://github.com/Haolinc/job-tracker)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[React.js]: https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB
+[React-url]: https://react.dev/
+[Vite.js]: https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white
+[Vite-url]: https://vite.dev/
+[Tailwind.css]: https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white
+[Tailwind-url]: https://tailwindcss.com/
+[TypeScript]: https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white
+[TypeScript-url]: https://www.typescriptlang.org/
+[Express.js]: https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white
+[Express-url]: https://expressjs.com/
+[SQLite]: https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white
+[SQLite-url]: https://www.sqlite.org/
+[Electron]: https://img.shields.io/badge/Electron-47848F?style=for-the-badge&logo=electron&logoColor=white
+[Electron-url]: https://www.electronjs.org/
+[Ollama]: https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white
+[Ollama-url]: https://ollama.com/

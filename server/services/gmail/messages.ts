@@ -7,6 +7,7 @@ import type { Credentials } from 'google-auth-library';
 import type { EmailResult } from '../../types';
 import { getOAuthClient } from './oauth';
 import { buildBody } from './body';
+import { debug } from '../../logger';
 
 const BATCH_SIZE = 10;
 // Minimum spacing between batch *starts* (not a flat post-batch sleep). messages.get costs 20
@@ -206,7 +207,7 @@ function buildJobQuery(days: number): string {
 export async function listJobMessageIds(tokens: Credentials, days: number): Promise<string[]> {
 	const gmail = getGmail(tokens);
 	const query = buildJobQuery(days);
-	console.log(`[sync] searching Gmail with query: ${query}`);
+	debug(`[sync] searching Gmail with query: ${query}`);
 
 	const ids: string[] = [];
 	let pageToken: string | undefined;
@@ -219,7 +220,7 @@ export async function listJobMessageIds(tokens: Credentials, days: number): Prom
 		pageToken = res.data.nextPageToken ?? undefined;
 	} while (pageToken);
 
-	console.log(`[sync] listed ${ids.length} message ids across ${Math.ceil(ids.length / 500) || 1} page(s)`);
+	debug(`[sync] listed ${ids.length} message ids across ${Math.ceil(ids.length / 500) || 1} page(s)`);
 	return ids;
 }
 
