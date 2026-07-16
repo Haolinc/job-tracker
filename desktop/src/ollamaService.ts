@@ -21,8 +21,7 @@ const MISSING_MARKER = '[ollama-missing]';
 // ensure-ollama.mjs prints this prefix (raw, untagged) for byte-level download progress; we parse it into the
 // panel's live line instead of logging it. Keep in sync with the same constant in ensure-ollama.mjs.
 const DOWNLOAD_PROGRESS_MARKER = '@download-progress@';
-// The modelName we tag the Ollama runtime download's progress with. The panel checks for this to tell the
-// (non-cancellable) runtime download apart from model pulls — keep in sync with OLLAMA_DOWNLOAD_LABEL there.
+// The modelName we tag the Ollama runtime download's progress with in the panel's live line.
 const OLLAMA_DOWNLOAD_LABEL = 'Ollama';
 
 export class OllamaService {
@@ -144,6 +143,7 @@ export class OllamaService {
 			return;
 		}
 		const [completed, total] = payload.split(' ').map(Number);
-		this.onDownloadProgress({ modelName: OLLAMA_DOWNLOAD_LABEL, status: '', completed: completed || 0, total: total || 0, done: false });
+		// cancellable: false — there's no abort path for the preflight's download, unlike a model pull.
+		this.onDownloadProgress({ modelName: OLLAMA_DOWNLOAD_LABEL, status: '', completed: completed || 0, total: total || 0, done: false, cancellable: false });
 	}
 }

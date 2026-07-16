@@ -3,11 +3,10 @@
 // config panel. The app always opens in the user's default BROWSER — the launcher never hosts it.
 //
 // This file is only the composition root: it wires the focused modules (paths, log, OllamaService,
-// ServerManager) to the window, the IPC channels, and the app lifecycle. The real work lives in those
-// modules; the renderer is a pure display surface.
+// ServerManager, Updater) to the window, the IPC channels, and the app lifecycle. The real work lives in
+// those modules; the renderer is a pure display surface.
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import { autoUpdater } from 'electron-updater';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -19,6 +18,11 @@ import { isReachable } from './health';
 import { OllamaService } from './ollamaService';
 import { ServerManager } from './serverManager';
 import { IncompleteDownloadStore } from './incompleteDownloads';
+import { runVelopackStartupHooks, Updater } from './updater';
+
+// Velopack must be the first thing to run: during install/update hooks (and when finishing a pending
+// update) it may restart or exit this process before any Electron startup work should happen.
+runVelopackStartupHooks();
 
 // Match the preflight (ensure-ollama.mjs): honour OLLAMA_HOST so a custom port/host reaches the same daemon.
 const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
@@ -35,6 +39,7 @@ const paths = resolveLauncherPaths();
 
 let controlWindow: BrowserWindow | null = null;
 const log = createLog(() => controlWindow);
+const updater = new Updater(() => controlWindow, log, sendPullProgress);
 const incompleteStore = new IncompleteDownloadStore(paths.incompleteDownloadsPath, log);
 const serverUrl = () => `http://localhost:${readEnvFile(paths.serverEnvPath).get('PORT') || DEFAULT_PORT}`;
 
@@ -442,30 +447,6 @@ async function openLogsFolder(): Promise<void> {
 	}
 }
 
-// ── Auto-update ───────────────────────────────────────────────────────────────
-
-/**
- * Check the GitHub Releases of this repo (the `publish` block in electron-builder.yml) for a newer version.
- * A found update downloads in the background and installs itself when the launcher quits — no restart is
- * forced on the user. Skipped in dev runs: only a packaged install has a version to compare and replace.
- * Note for portable-zip users: an update still downloads the NSIS installer, which installs the app rather
- * than replacing the zip folder — a zip has no registered install location to swap in place.
- */
-function checkForUpdates(): void {
-	if (!app.isPackaged) return;
-	autoUpdater.on('update-available', (updateInfo) => {
-		log('launcher', `Update available: v${updateInfo.version} — downloading in the background…`);
-	});
-	autoUpdater.on('update-downloaded', (updateInfo) => {
-		log('launcher', `Update v${updateInfo.version} downloaded — it installs when you close the launcher.`);
-	});
-	// An unreachable GitHub (offline, rate-limited) is routine — log it and move on; the app runs regardless.
-	autoUpdater.on('error', (updateError) => {
-		log('launcher', `Update check failed: ${updateError.message}`);
-	});
-	void autoUpdater.checkForUpdatesAndNotify();
-}
-
 // ── IPC wiring ────────────────────────────────────────────────────────────────
 
 ipcMain.on('launcher:start', () => void server.start());
@@ -516,13 +497,13 @@ if (!app.requestSingleInstanceLock()) {
 	app.whenReady().then(() => {
 		createControlWindow();
 		controlWindow?.webContents.once('did-finish-load', () => {
-			log('launcher', 'Launcher ready.');
-			void server.start();   // auto-start: the panel is for watching, not ceremony
-			checkForUpdates();     // after the panel loads, so its log lines land in the console
+			log('launcher', `Launcher ready (v${app.getVersion()}).`);
+			void server.start();          // auto-start: the panel is for watching, not ceremony
+			updater.checkForUpdates();    // after the panel loads, so its log lines land in the console
 		});
 		setInterval(() => void pushStatus(), STATUS_POLL_INTERVAL_MS);
 	});
 }
 
-app.on('window-all-closed', () => { shutDown(); app.quit(); });
-app.on('before-quit', () => shutDown());
+app.on('window-all-closed', () => { shutDown(); updater.applyPendingUpdateOnQuit(); app.quit(); });
+app.on('before-quit', () => { shutDown(); updater.applyPendingUpdateOnQuit(); });
