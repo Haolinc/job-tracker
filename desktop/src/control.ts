@@ -52,9 +52,6 @@ const DEFAULT_PORT = '3001';
 // The recommended default model — floated to the top of the picker and pre-selected on a fresh start.
 // Mirrors main.ts DEFAULT_MODEL (the no-import boundary again).
 const DEFAULT_MODEL = 'qwen2.5:7b';
-// The progress stream labels the one-time Ollama runtime download with this modelName (see ollamaService.ts);
-// model pulls carry the real model name. Used to tell them apart — only model pulls are cancellable.
-const OLLAMA_DOWNLOAD_LABEL = 'Ollama';
 
 // The model saved in .env, remembered so that saving while the picker is disabled (Ollama down, or no models
 // installed) preserves the user's choice instead of overwriting it with an empty selection.
@@ -158,7 +155,7 @@ function renderPullProgress(progress: PullProgress): void {
 
 launcher.onPullProgress((progress) => {
 	downloadInProgress = !progress.done;
-	activeDownloadIsCancellable = !progress.done && progress.modelName !== OLLAMA_DOWNLOAD_LABEL;
+	activeDownloadIsCancellable = !progress.done && progress.cancellable !== false;
 	syncDownloadControls();
 	renderPullProgress(progress);
 });

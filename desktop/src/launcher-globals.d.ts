@@ -47,6 +47,8 @@ interface PullProgress {
 	total: number;
 	/** The pull has finished — success unless `status` reports an error. The panel finalizes the line. */
 	done: boolean;
+	/** False for downloads Cancel can't stop (the Ollama runtime, app updates). Model pulls omit it. */
+	cancellable?: boolean;
 }
 
 /** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live

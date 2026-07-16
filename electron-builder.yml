@@ -1,25 +1,27 @@
-# Packaging config for the launcher. Produces a self-contained Windows app (Electron + bundled Node) as an
-# NSIS installer (auto-updatable) plus an unpacked folder and a zip — no Node install required on the target.
+# Packaging config for the launcher. electron-builder only produces the unpacked app folder
+# (release/win-unpacked) — Velopack (scripts/velopack-release.mjs) turns that folder into the installer,
+# the self-updating portable zip, delta packages, and the update feed, all hosted on GitHub Releases.
 appId: com.haolin.jobtracker
 productName: Job Tracker
 directories:
   output: release
 
-# Where releases live: `electron-builder --publish always` uploads the artifacts (and the latest.yml manifest
-# electron-updater reads) to a GitHub Release, and installed apps check this same repo for newer versions.
-publish:
-  provider: github
-  owner: Haolinc
-  repo: job-tracker
-
-# Only the launcher itself goes inside app.asar — its sole runtime npm dep (electron-updater) is collected
-# automatically, so the archive stays tiny. The server, client build, and scripts ride alongside as plain
-# files (extraResources) because a spawned Node process and a native .node module cannot run from inside an
-# asar archive.
+# Only the launcher itself goes inside app.asar — its sole runtime npm dep (velopack) is collected
+# automatically. The server, client build, and scripts ride alongside as plain files (extraResources)
+# because a spawned Node process and a native .node module cannot run from inside an asar archive.
 files:
   - desktop/dist/**/*
   - desktop/control.html
   - package.json
+  # velopack ships native binaries for every platform — only the Windows x64 one can ever load here.
+  - "!node_modules/velopack/lib/native/*linux*"
+  - "!node_modules/velopack/lib/native/*osx*"
+  - "!node_modules/velopack/lib/native/*arm64*"
+  - "!node_modules/velopack/lib/native/*x86_msvc*"
+
+# Native .node modules can't be loaded from inside an asar archive.
+asarUnpack:
+  - node_modules/velopack/**
 
 extraResources:
   # Production-only, Electron-ABI copy of the server produced by scripts/stage-server.mjs.
@@ -37,8 +39,6 @@ win:
   # No code-signing certificate, so skip signtool entirely. This also avoids electron-builder unpacking its
   # winCodeSign helper, whose macOS symlinks can't be extracted on Windows without elevated privilege.
   signAndEditExecutable: false
-  # nsis is the auto-update lane (electron-updater swaps installed versions); zip stays for portable users,
-  # who update by downloading the new zip themselves — a zip has no install location to update in place.
+  # Just the folder — Velopack does the rest.
   target:
-    - nsis
-    - zip
+    - dir
