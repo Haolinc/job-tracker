@@ -32,8 +32,9 @@ extraResources:
   - from: scripts
     to: scripts
     filter:
-      # Only the runtime preflight ships — stage-server.mjs is a build-time tool.
+      # Only runtime scripts ship — stage-server.mjs and velopack-release.mjs are build-time tools.
       - "ensure-ollama.mjs"
+      - "uninstall-prompt.ps1"
 
 win:
   # No code-signing certificate, so skip signtool entirely. This also avoids electron-builder unpacking its

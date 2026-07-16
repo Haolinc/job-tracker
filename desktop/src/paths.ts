@@ -37,14 +37,22 @@ export interface LauncherPaths {
  *    the root, and writable state goes to data/ INSIDE that root — beside current/ (which updates replace)
  *    and Velopack's own packages/ download dir. The whole app lives and dies with its folder.
  */
+/** Under Velopack the exe runs from <root>\current\; the root above it holds Update.exe and the markers. */
+export function velopackRootDirectory(): string {
+	return path.dirname(path.dirname(process.execPath));
+}
+
+/** True when this build ran from a portable extract: Velopack marks its root with a `.portable` file. */
+export function isPortableFlavour(): boolean {
+	return existsSync(path.join(velopackRootDirectory(), '.portable'));
+}
+
 export function resolveLauncherPaths(): LauncherPaths {
 	const runningPackaged = app.isPackaged;
-	// Under Velopack the exe runs from <root>\current\; the root above it holds Update.exe and the markers.
-	const velopackRootDir = path.dirname(path.dirname(process.execPath));
-	const runningPortable = runningPackaged && existsSync(path.join(velopackRootDir, '.portable'));
+	const runningPortable = runningPackaged && isPortableFlavour();
 	const resourcesRoot = runningPackaged ? process.resourcesPath : path.resolve(__dirname, '../..');
 	let writableDataDir: string;
-	if (runningPortable) writableDataDir = path.join(velopackRootDir, 'data');
+	if (runningPortable) writableDataDir = path.join(velopackRootDirectory(), 'data');
 	else if (runningPackaged) writableDataDir = app.getPath('userData');
 	else writableDataDir = path.join(resourcesRoot, 'server');
 	// Portable promise: deleting the folder deletes everything. Electron's own profile (cookies, GPU cache)

@@ -5,16 +5,58 @@
 
 import { app, dialog, type BrowserWindow } from 'electron';
 import { UpdateManager, VelopackApp, type UpdateInfo } from 'velopack';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import os from 'node:os';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
 import { logToTerminal, type LogFn } from './log';
+import { isPortableFlavour } from './paths';
 
 /**
  * Velopack's startup hooks: during install/update (and when finishing a pending update) it may restart
  * or exit this process, so the composition root must call this before any other Electron startup work.
  */
 export function runVelopackStartupHooks(): void {
-	VelopackApp.build().run();
+	VelopackApp.build()
+		.onBeforeUninstallFastCallback(() => offerToDeleteUserDataOnUninstall())
+		.run();
+}
+
+/**
+ * Uninstalling removes the app but never its data (%APPDATA%\Job Tracker: database, .env, logs) — so a
+ * reinstall keeps the user's history, but users who want a full cleanup are left with a hidden folder.
+ * This asks. The uninstall hook process is killed after 30s, and a user reading a dialog can take longer,
+ * so the question is handed to a separate PowerShell prompt that outlives this process and Update.exe.
+ */
+function offerToDeleteUserDataOnUninstall(): void {
+	// Only the installed flavour registers an uninstaller; a portable copy keeps its data inside its own
+	// folder, and %APPDATA% belongs to whatever installed copy may also exist — never touch it from here.
+	if (isPortableFlavour()) return;
+	// Installed but never used (or already cleaned up): no data folder, nothing to ask about.
+	const userDataDirectory = app.getPath('userData');
+	if (!existsSync(userDataDirectory)) return;
+	// Run the prompt from a %TEMP% copy: the shipped script sits in the install folder the uninstaller is
+	// about to delete. (This hook only fires in installed builds, so process.resourcesPath is always set.)
+	const shippedScriptPath = path.join(process.resourcesPath, 'scripts', 'uninstall-prompt.ps1');
+	const temporaryScriptPath = path.join(os.tmpdir(), 'jobtracker-uninstall-prompt.ps1');
+	copyFileSync(shippedScriptPath, temporaryScriptPath);
+	// Electron puts every child it spawns into a Windows job object that kills them all the moment this
+	// process exits — and Velopack exits us right after this hook returns, so even a detached spawn dies
+	// before the dialog can render. Brokering the launch through WMI escapes the job: the prompt process
+	// is created by the WMI provider service, not by us, so it outlives this process and Update.exe.
+	// spawnSync so the broker has finished creating it before Velopack's exit.
+	// -ExecutionPolicy Bypass: unlike -Command, -File is subject to the machine's execution policy.
+	const promptCommandLine = [
+		'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+		'-File', `"${temporaryScriptPath}"`, '-DataDirectory', `"${userDataDirectory}"`,
+	].join(' ');
+	spawnSync('powershell.exe', [
+		'-NoProfile', '-NonInteractive', '-Command',
+		'Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:JOBTRACKER_PROMPT_COMMAND } | Out-Null',
+	], {
+		windowsHide: true,
+		env: { ...process.env, JOBTRACKER_PROMPT_COMMAND: promptCommandLine },
+	});
 }
 
 /**
