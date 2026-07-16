@@ -1,5 +1,5 @@
 # Asks whether to also delete the app's user data (database, settings, logs) after an uninstall.
-# Spawned DETACHED by the uninstall hook (desktop/src/updater.ts) from a copy in %TEMP%: the hook
+# Launched through WMI by the uninstall hook (desktop/src/updater.ts) from a copy in %TEMP%: the hook
 # process is killed 30s after it fires, and the install folder (including this script's shipped copy)
 # is deleted by the uninstaller — a user reading the question must outlive both.
 param([Parameter(Mandatory = $true)][string]$DataDirectory)
