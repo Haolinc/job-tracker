@@ -92,6 +92,13 @@
 			align-items: center;
 			max-width: 720px;
 		}
+		/* Below this the value column can't fit a field-row's buttons even with the input shrunk to
+		   nothing, so the last few pixels overflow the panel — stack labels above fields instead. */
+		@media (max-width: 420px) {
+			#config-panel .config-grid { grid-template-columns: minmax(0, 1fr); }
+			/* The empty spacer cells that keep hints in the value column have no column to skip now. */
+			#config-panel .config-grid > span:empty { display: none; }
+		}
 		#config-panel label { font-size: 12.5px; color: var(--text-dim); }
 		#config-panel input, #config-panel select {
 			background: var(--background);

@@ -2,7 +2,7 @@
 	"name": "job-tracker",
 	"version": "1.0.0",
 	"private": true,
-	"description": "Dev launcher: ensures Ollama is up, then runs the server and client together in one terminal.",
+	"description": "Tracks your job applications by classifying Gmail messages with a local LLM.",
 	"repository": "https://github.com/Haolinc/job-tracker",
 	"author": "haolin <haolin5175@gmail.com>",
 	"main": "desktop/dist/main.js",
@@ -18,7 +18,7 @@
 		"desktop": "npm run desktop:build && electron desktop/dist/main.js",
 		"test": "vitest run --dir desktop",
 		"test:watch": "vitest --dir desktop",
-		"stage:app": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder",
+		"stage:app": "npm run build:client && npm run build:server && npm run build:desktop && node scripts/stage-server.mjs && electron-builder && node scripts/brand-exe.mjs",
 		"package": "npm run stage:app && node scripts/velopack-release.mjs",
 		"release": "npm run stage:app && node scripts/velopack-release.mjs --upload"
 	},
@@ -27,6 +27,7 @@
 		"electron": "^42.6.0",
 		"electron-builder": "^25.1.8",
 		"esbuild": "^0.28.1",
+		"rcedit": "^5.0.2",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.10"
 	},
