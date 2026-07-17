@@ -29,7 +29,6 @@
       </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#privacy-notes">Privacy notes</a></li>
     <li><a href="#contact">Contact</a></li>
   </ol>
@@ -52,8 +51,9 @@ into a spreadsheet, and forgetting half of them. This tracker does it for you:
 - **Stays out of your way**: manual entries and edits are never overwritten by a sync, and CSV
   import/export gets your data in or out anytime.
 - **Desktop launcher**: one window that starts and stops everything, manages Ollama and its models,
-  and holds your configuration. No terminal needed, and it packages into a **portable Windows app**
-  that runs on a machine with nothing preinstalled.
+  and holds your configuration. No terminal needed, and it packages into a **Windows app**
+  (installer or portable zip) that runs on a machine with nothing preinstalled and keeps itself
+  current with automatic updates.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -78,25 +78,27 @@ with *your own* credentials; nothing is shared with anyone else).
 
 ### Step 1: Google Cloud project (required for both options)
 
-1. Create a Google Cloud project and **enable the Gmail API**.
-2. Create **OAuth 2.0 credentials** (Web application).
-3. Add the redirect URI: `http://localhost:3001/api/auth/google/callback`.
-4. Add your Google account as a **test user** on the OAuth consent screen (the only scope used is
-   `gmail.readonly`, so the app can never modify or send mail).
+Follow the
+[**Google Cloud setup guide**](https://github.com/Haolinc/job-tracker-gmail-setup), it walks
+through this whole step in detail.
 
 Keep the **Client ID** and **Client Secret**, you'll enter them in the next step.
 
 ### Step 2, Option A: Download the packaged app (Windows)
 
-1. Download the latest zip from [**Releases**](https://github.com/Haolinc/job-tracker/releases).
-2. Unzip it anywhere and run `Job Tracker.exe`. It's fully self-contained, so the machine needs
-   **nothing preinstalled**: no Node.js, and the launcher will offer to install Ollama and download
-   the AI model for you.
-3. Open **Config**, paste your Client ID and Secret, press **Start**, then **Open App**.
+1. Grab the latest version from [**Releases**](https://github.com/Haolinc/job-tracker/releases):
+   `JobTracker-win-Setup.exe` installs the app with Start Menu and Desktop shortcuts, or take
+   `JobTracker-win-Portable.zip`, unzip it anywhere, and run `Job Tracker.exe`.
+2. Either way the app is fully self-contained, so the machine needs **nothing preinstalled**: no
+   Node.js, and the launcher will offer to install Ollama and download the AI model for you.
+3. Open **Config**, paste your Client ID and Secret, and press **Save**; the server starts on its
+   own. Then hit **Open App**.
+4. The app checks for updates on launch and asks before installing one, so you never have to come
+   back here for new versions.
 
 ### Step 2, Option B: Run from source
 
-Prerequisites: **Node.js** 18+ with **npm**, and **[Ollama](https://ollama.com)** (or let the
+Prerequisites: **Node.js** 22+ with **npm**, and **[Ollama](https://ollama.com)** (or let the
 desktop launcher install it for you).
 
 ```bash
@@ -111,7 +113,7 @@ Then pick one:
 ```bash
 npm run desktop
 ```
-Enter your Client ID and Secret in **Config**, press **Start**, then **Open App**.
+Enter your Client ID and Secret in **Config**, press **Save**, then **Open App**.
 
 **Terminal**
 ```bash
@@ -121,7 +123,7 @@ npm run dev                   # Ollama + backend + frontend, one terminal
 ```
 Then open http://localhost:5173.
 
-(You can also build the portable Windows package yourself with `npm run package`)
+(You can also build the Windows installer and portable zip yourself with `npm run package`)
 
 ### Configuration
 
@@ -163,7 +165,8 @@ interrupted sync loses that run's work).
 - Email classification runs **entirely on your machine** via Ollama; no API key, no cloud calls.
 - The Gmail scope is **read-only**; the app never modifies or sends mail.
 - All data lives in a local SQLite file (gitignored). The packaged desktop app keeps its
-  configuration, database, and logs in your per-user app-data folder.
+  configuration, database, and logs in your per-user app-data folder, and uninstalling asks
+  whether to delete that data too.
 - There is no per-account separation: everything you sync from any connected Gmail account
   accumulates in one board and dedups together.
 
