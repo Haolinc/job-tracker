@@ -1,5 +1,6 @@
 import type { Classification } from '../types';
 import { canonicalReqId } from './parser/reqId';
+import { debug } from '../logger';
 import ollama from 'ollama';
 
 const systemPrompt = `You classify and extract data from job-application emails. Given From, Subject, and Body, return ONLY this JSON (no prose, no markdown):
@@ -83,31 +84,94 @@ const responseSchema = {
 	required: ['category', 'company', 'role_source', 'role', 'req_id_source', 'req_id'],
 };
 
-async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
-	console.log(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
-	const res = await ollama.chat({
-		model: 'qwen2.5:7b',
+/** The model the classifier talks to — the user's pick from .env (OLLAMA_MODEL), or the recommended default. */
+const classifierModel = (): string => process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+
+/**
+ * The ONE chat request this module ever sends — warmup and real classification both go through here so they
+ * stay identical (same system prompt + grammar). That identity is what makes the warmup effective: Ollama's
+ * prompt-eval cache and compiled grammar carry over to the real emails only because the requests match.
+ */
+function requestClassification(emailContent: string, requestOptions: { maxOutputTokens: number; keepAlive?: string }) {
+	return ollama.chat({
+		model: classifierModel(),
 		messages: [
 			{ role: 'system', content: systemPrompt },
-			{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody:\n${body}` },
+			{ role: 'user',   content: emailContent },
 		],
 		format: responseSchema,   // grammar-constrain output to the schema — category can ONLY be the enum
 		options: {
-			num_predict: 150,  // JSON output is ~40-60 tokens — extra room for longer role names
-			temperature: 0,    // deterministic output, no randomness needed for classification
+			num_predict: requestOptions.maxOutputTokens,
+			temperature: 0,   // deterministic output, no randomness needed for classification
 		},
+		keep_alive: requestOptions.keepAlive,   // undefined → Ollama's default (5 minutes)
 	});
-	console.log(`[classify] tokens: prompt=${res.prompt_eval_count ?? 0}`);
-	const text = res.message.content.trim();
-    console.log(`[classify] result:`, text);
+}
+
+// Warmup keeps retrying while Ollama is still starting up — it may be unreachable the moment the server boots.
+const WARMUP_MAX_ATTEMPTS = 10;
+const WARMUP_RETRY_DELAY_MS = 3000;
+
+// Shared so warmup runs at most once at a time: the boot call and the first sync await the SAME load instead of
+// racing two cold loads (which is what made the GUI/debug log interleave warmup with classify).
+let warmupInFlight: Promise<boolean> | null = null;
+
+/**
+ * Preload the classification model into Ollama so the concurrent classification doesn't start on a cold model
+ * (a multi-GB load can take many seconds). Sends a real classification request for a dummy email, so the model
+ * load, system-prompt eval, and grammar compilation ALL happen now instead of on the first real email.
+ * Idempotent: kicked off at server boot and AWAITED by the sync, so classification runs only once the model
+ * is ready. Best-effort; never throws.
+ */
+function warmUpModel(): Promise<boolean> {
+	if (!warmupInFlight) {
+		warmupInFlight = loadModelWithRetry();
+		// If it gave up (Ollama was down), forget it so a later sync can try again once Ollama is up.
+		void warmupInFlight.then((loaded) => { if (!loaded) warmupInFlight = null; });
+	}
+	return warmupInFlight;
+}
+
+async function loadModelWithRetry(): Promise<boolean> {
+	const model = classifierModel();
+	for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
+		try {
+			// maxOutputTokens:1 → do all the setup (load + prompt eval + grammar), then stop after one token.
+			await requestClassification('From: warmup\nSubject: warmup\n\nBody:\nwarmup', {
+				maxOutputTokens: 1,
+				keepAlive: '30m',   // keep the model resident well past Ollama's 5-minute default
+			});
+			console.log(`[warmup] model ${model} preloaded and ready`);
+			return true;
+		} catch (error) {
+			if (attempt === WARMUP_MAX_ATTEMPTS) {
+				// console.error, not debug: a model that can't preload means classification will fail too.
+				console.error(`[warmup] gave up preloading ${model}: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+			await new Promise((resolve) => setTimeout(resolve, WARMUP_RETRY_DELAY_MS));   // Ollama likely still starting — retry
+		}
+	}
+	return false;
+}
+
+async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
+	debug(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
+	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
+		maxOutputTokens: 150,   // JSON output is ~40-60 tokens — extra room for longer role names
+	});
+	debug(`[classify] tokens: prompt=${chatResponse.prompt_eval_count ?? 0}`);
+	const responseText = chatResponse.message.content.trim();
+	// Collapse the model's pretty-printed JSON to one line so the debug log stays one-line-per-event grep-able.
+	debug(`[classify] result:`, responseText.replace(/\s*\n\s*/g, ' '));
 	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
-	const jsonText = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+	const jsonText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
 	// The worked examples show "{json}  (note)", so the model sometimes appends a trailing parenthetical
 	// after its JSON. Take just the first object — first "{" to last "}" — and ignore any commentary tail.
 	const start = jsonText.indexOf('{'), end = jsonText.lastIndexOf('}');
 	const parsed = JSON.parse(start !== -1 && end !== -1 ? jsonText.slice(start, end + 1) : jsonText) as Record<string, unknown>;
 	if (!parsed || !VALID_CATEGORIES.has(parsed.category as string)) {
-		throw new Error(`Unexpected classifier response: ${text}`);
+		throw new Error(`Unexpected classifier response: ${responseText}`);
 	}
 	// canonicalReqId strips a leading "Req"/"Job Req" label the model sometimes prepends and validates the
 	// token (≥5 digits), matching what the parser extracts from the same text so a posting links across paths.
@@ -120,4 +184,4 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 	};
 }
 
-export { classifyEmail };
+export { classifyEmail, warmUpModel };

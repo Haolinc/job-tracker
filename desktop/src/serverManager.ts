@@ -1,0 +1,172 @@
+// Owns the API server child process: start (reusing an already-running server if one answers), stop, and
+// the dev-vs-packaged spawn difference. Reports state changes back so the caller can refresh status.
+
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { isReachable } from './health';
+import type { LauncherPaths } from './paths';
+import type { LogFn } from './log';
+import type { OllamaService } from './ollamaService';
+// SyncProgressEvent is an ambient global (launcher-globals.d.ts).
+
+// The server mirrors each sync progress event to stdout as "@sync-progress@ {json}" — keep in sync with the
+// same constant in server/routes/gmail.ts. Parsed into the panel's live sync line instead of logged as text.
+// (The server routes its output at the source: per-email debug detail goes to the debug log only and never
+// reaches stdout, so everything arriving here is either a marker or a line meant for the panel.)
+const SYNC_PROGRESS_MARKER = '@sync-progress@';
+
+export class ServerManager {
+	private childProcess: ChildProcess | null = null;
+	// True from the moment start() begins until the child is spawned (or start bails out). Spawning is async —
+	// a port probe plus Ollama warmup — so without this the panel can't tell "starting" from "stopped".
+	private starting = false;
+	// True from stop() until the next spawn — a taskkill /F reports a NONZERO exit code, which must read as
+	// "you pressed Stop", not as a crash.
+	private stopRequested = false;
+	// Buffers server stdout so we act on whole lines — a marker line can be split across chunks.
+	private stdoutRemainder = '';
+
+	constructor(
+		private readonly paths: LauncherPaths,
+		private readonly log: LogFn,
+		private readonly serverUrl: () => string,
+		private readonly ollama: OllamaService,
+		private readonly onStateChange: () => void,
+		private readonly onSyncProgress: (event: SyncProgressEvent) => void,
+	) {}
+
+	get isRunning(): boolean {
+		return this.childProcess !== null;
+	}
+
+	get isStarting(): boolean {
+		return this.starting;
+	}
+
+	async start(): Promise<void> {
+		if (this.childProcess || this.starting) {
+			this.log('launcher', 'Server is already starting or running.');
+			return;
+		}
+		// Flip to "starting" and tell the panel now, so Start disables immediately — everything below is async
+		// (port probe + Ollama warmup) and isRunning stays false until the child is actually spawned.
+		this.starting = true;
+		this.onStateChange();
+		try {
+			this.log('launcher', 'Starting: checking the port, then Ollama…');
+			// Something ELSE already answers on the port (a dev server, or an earlier launcher's leftover) —
+			// spawning into it would just crash with EADDRINUSE. Refuse and say why: the OAuth callback is pinned
+			// to this port, so moving is not an option, and killing a process we didn't start is not ours to do.
+			// ("failed" keeps the panel's ERROR_LINE_PATTERN matching so the line reads as an error.)
+			if (await isReachable(`${this.serverUrl()}/api/health`)) {
+				this.log('launcher', `Start failed: another server is already running at ${this.serverUrl()} — stop it first, or change PORT in Config.`);
+				return;
+			}
+			if (this.paths.runningPackaged && !existsSync(this.paths.serverEntryPoint)) {
+				this.log('launcher', `Server build missing at ${this.paths.serverEntryPoint} — the package looks incomplete.`);
+				return;
+			}
+
+			await this.ollama.ensureRunning();
+			this.log('launcher', 'Starting server…');
+			this.stopRequested = false;
+			this.childProcess = this.paths.runningPackaged ? this.spawnPackaged() : this.spawnDev();
+			this.childProcess.stdout?.on('data', (chunk: Buffer) => this.handleStdoutChunk(chunk.toString()));
+			this.childProcess.stderr?.on('data', (chunk: Buffer) => this.log('server', chunk.toString()));
+			this.childProcess.on('exit', (code) => {
+				if (this.stdoutRemainder) { this.handleServerLine(this.stdoutRemainder); this.stdoutRemainder = ''; }
+				if (!this.stopRequested && code !== null && code !== 0) {
+					// A nonzero exit nobody asked for is a crash — word it with "error" so the panel paints it red.
+					this.log('launcher', `Server stopped unexpectedly (exit code ${code}) — check the error above, then press Start to relaunch.`);
+				} else {
+					this.log('launcher', `Server exited${code === null ? '' : ` (code ${code})`}.`);
+				}
+				this.childProcess = null;
+				this.onStateChange();
+			});
+		} finally {
+			this.starting = false;
+			this.onStateChange();
+		}
+	}
+
+	// Server stdout is parsed line by line (a chunk can split a line): sync-progress markers feed the panel's
+	// live sync line, everything else is logged as before.
+	private handleStdoutChunk(chunk: string): void {
+		this.stdoutRemainder += chunk;
+		let newlineIndex;
+		while ((newlineIndex = this.stdoutRemainder.indexOf('\n')) >= 0) {
+			const line = this.stdoutRemainder.slice(0, newlineIndex);
+			this.stdoutRemainder = this.stdoutRemainder.slice(newlineIndex + 1);
+			this.handleServerLine(line);
+		}
+	}
+
+	private handleServerLine(line: string): void {
+		if (line.startsWith(SYNC_PROGRESS_MARKER)) {
+			try {
+				const parsed = JSON.parse(line.slice(SYNC_PROGRESS_MARKER.length)) as Partial<SyncProgressEvent> | null;
+				// Only forward payloads shaped like an event — a phase-less one would read as "sync in
+				// progress" in the panel forever. Anything else is dropped like a malformed line.
+				if (typeof parsed?.phase === 'string') this.onSyncProgress(parsed as SyncProgressEvent);
+			} catch {
+				// A malformed marker line is dropped — the next event refreshes the panel anyway.
+			}
+			return;
+		}
+		this.log('server', line);
+	}
+
+	stop(): void {
+		if (!this.childProcess) return;
+		this.stopRequested = true;
+		this.log('launcher', 'Stopping server…');
+		if (process.platform === 'win32' && this.childProcess.pid) {
+			// The server is a process tree (cmd → npm → node); taskkill /T is the only reliable tree kill.
+			// SYNCHRONOUS on purpose: this also runs during quit, and an async kill loses the race with app
+			// exit — the launcher disappears while the server lives on. Direct exe spawn (no shell) so
+			// windowsHide actually suppresses taskkill's console flash.
+			spawnSync('taskkill', ['/PID', String(this.childProcess.pid), '/T', '/F'], { windowsHide: true });
+		} else {
+			this.childProcess.kill('SIGTERM');
+		}
+		this.childProcess = null;
+	}
+
+	// Packaged: no system Node — run the COMPILED server under Electron's bundled Node, pointed at the
+	// writable app-data locations for its .env, database, and logs, and at the shipped client build. CLIENT_URL
+	// keeps OAuth redirects and CORS on the server's own origin (single-process mode serves the built client).
+	private spawnPackaged(): ChildProcess {
+		return spawn(process.execPath, [this.paths.serverEntryPoint], {
+			cwd: this.paths.serverDirectory,
+			windowsHide: true,   // don't pop a console window for the server child (Electron is a GUI app)
+			env: {
+				...process.env,
+				ELECTRON_RUN_AS_NODE: '1',
+				// So the server can self-exit if this launcher is force-killed (its stop() never runs then).
+				LAUNCHER_PID: String(process.pid),
+				CLIENT_URL: this.serverUrl(),
+				ENV_FILE: this.paths.serverEnvPath,
+				DB_PATH: this.paths.serverDatabasePath,
+				LOG_DIR: this.paths.serverLogsDirectory,
+				CLIENT_DIST: this.paths.clientDistDirectory,
+			},
+		});
+	}
+
+	// Dev: system Node is present — keep the familiar tsx npm script (its better-sqlite3 is built for system
+	// Node's ABI, unlike the Electron-ABI copy that ships in the package).
+	// LAUNCHER_PID: same force-kill backstop as the packaged path — the dev server (cmd → npm → node) is
+	// exactly what orphaned before, and the tree-kill in stop() only runs on a graceful quit.
+	private spawnDev(): ChildProcess {
+		const env = { ...process.env, CLIENT_URL: this.serverUrl(), LAUNCHER_PID: String(process.pid) };
+		// npm is npm.cmd on Windows, which needs a shell — but `shell: true` makes Node IGNORE windowsHide,
+		// so the console pops anyway. Spawn cmd.exe ourselves instead: as a direct exe, windowsHide applies
+		// CREATE_NO_WINDOW, and npm → node → tsx inherit that one hidden console rather than each popping a window.
+		if (process.platform === 'win32') {
+			return spawn('cmd.exe', ['/d', '/s', '/c', 'npm run start'], { cwd: this.paths.serverDirectory, windowsHide: true, env });
+		}
+		return spawn('npm run start', { cwd: this.paths.serverDirectory, shell: true, env });
+	}
+}

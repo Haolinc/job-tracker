@@ -50,6 +50,7 @@ export interface SyncResult {
 }
 
 export interface SyncProgress {
+	phase?: string;      // 'start' | 'warming' | 'progress' — 'warming' means the model is preloading
 	processed: number;   // emails fetched + processed so far
 	total: number;       // emails to process this run
 	added: number;

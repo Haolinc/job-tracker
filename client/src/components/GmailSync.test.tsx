@@ -39,6 +39,15 @@ describe('GmailSync', () => {
 		expect(onSync).not.toHaveBeenCalled();
 	});
 
+	it('should NOT call onDisconnect when clicked while syncing', async () => {
+		const onDisconnect = vi.fn();
+		render(<GmailSync {...base} syncing onDisconnect={onDisconnect} />);
+		const disconnectButton = screen.getByTestId('gmail-disconnect-btn');
+		expect(disconnectButton).toBeDisabled();     // disconnecting mid-sync would revoke the tokens the sync is using
+		await user.click(disconnectButton);
+		expect(onDisconnect).not.toHaveBeenCalled();
+	});
+
 	it('should NOT render a sync button when disconnected', () => {
 		render(<GmailSync {...base} connected={false} />);
 		expect(screen.queryByTestId('gmail-sync-btn')).toBeNull();
@@ -49,7 +58,7 @@ describe('GmailSync', () => {
 		const { rerender } = render(<GmailSync {...base} syncing />);
 		expect(screen.getByTestId('gmail-sync-btn')).toHaveTextContent('Syncing...');
 		rerender(<GmailSync {...base} lastResult={{ added: 12, updated: 8, skipped: 30, failed: 0, durationMs: 341050 }} />);
-		const r = screen.getByTestId('gmail-sync-result');
-		expect(r).toHaveTextContent('+12 added · 8 updated · 30 skipped · 5m 41s');
+		const syncResult = screen.getByTestId('gmail-sync-result');
+		expect(syncResult).toHaveTextContent('+12 added · 8 updated · 30 skipped · 5m 41s');
 	});
 });

@@ -1,0 +1,72 @@
+# Builds a Job Tracker release when a release branch is merged into main (classic git flow):
+#
+#   1. on the release branch: bump "version" in package.json and rewrite release-notes.md
+#      (Velopack bakes the notes into the package at pack time, so commit them before merging)
+#   2. open a PR from release/** into main and merge it
+#   3. this workflow packs with Velopack and uploads a DRAFT GitHub release tagged v<version> with
+#      the installer, portable zip, nupkg packages, and update feed
+#   4. verify the built app, then publish the draft on GitHub - updaters only see PUBLISHED
+#      releases, so nothing ships until that click
+#
+# If a release attempt goes bad: revert the PR on main, DELETE the draft (vpk pack refuses when a
+# version equal or greater already exists on GitHub - drafts count), fix the release branch, and
+# merge it again.
+#
+# Windows runner on purpose: electron-builder produces the win-unpacked app, stage-server.mjs
+# downloads the win-x64 better-sqlite3 prebuilt for the HOST platform, and the packing scripts
+# shell out to powershell.exe - none of that works on a Linux runner.
+
+name: release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+# vpk needs to create the draft release and upload its assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Only when a release/** branch was actually MERGED into main - a closed (unmerged) PR or a
+    # merge from any other branch (feature/*, revert-*) releases nothing.
+    if: github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # Build the merge commit that actually landed on main (the default ref for pull_request
+          # events is the PR's own merge preview, which is gone after close).
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          npm ci
+          npm --prefix server ci
+          npm --prefix client ci
+
+      # Same version as the "velopack" npm dependency - Update.exe shipped in the package comes
+      # from this tool, so keep the two in lockstep when upgrading.
+      - name: Install Velopack CLI
+        run: dotnet tool install --global vpk --version 1.2.0
+
+      - name: Run Tests
+        run: npm test
+
+      # GH_TOKEN lets vpk download the previous release (for delta generation) and upload the draft.
+      - name: Pack and Upload Draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release

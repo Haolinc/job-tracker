@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"lib": ["ES2022", "DOM"],
+		"strict": true,
+		"outDir": "dist",
+		"rootDir": "src",
+		"types": ["node"],
+		"skipLibCheck": true
+	},
+	"include": ["src"],
+	"files": ["src/launcher-globals.d.ts"],
+	"exclude": ["src/control.ts", "src/**/*.test.ts"]
+}

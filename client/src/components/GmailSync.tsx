@@ -45,10 +45,14 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					<button
 						data-testid="gmail-disconnect-btn"
 						onClick={onDisconnect}
-						className="text-xs text-gray-400 hover:text-red-500 underline"
+						disabled={syncing}
+						title={syncing ? 'Wait for the sync to finish before disconnecting' : undefined}
+						className="text-xs text-gray-400 hover:text-red-500 underline disabled:opacity-60 disabled:hover:text-gray-400"
 					>Disconnect</button>
 					{syncing && (
-						progress ? (
+						progress?.phase === 'warming' ? (
+							<span className="text-xs text-gray-500 whitespace-nowrap">Preparing model&hellip;</span>
+						) : progress ? (
 							<div className="flex items-center gap-2 text-xs text-gray-600 w-full sm:w-auto" title={`${progress.processed} of ${progress.total} emails processed`}>
 								<div className="flex-1 sm:w-28 sm:flex-none h-1.5 bg-gray-200 rounded-full overflow-hidden">
 									<div
@@ -76,7 +80,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 							{lastResult.failed > 0 && (
 								<span
 									className="text-amber-600 font-medium"
-									title="These emails couldn't be read this time (a temporary Gmail error). They were not saved and will be retried automatically on your next sync."
+									title="These emails couldn't be read or classified this time (a temporary Gmail or AI error). They were not saved and will be retried automatically on your next sync."
 								>
 									{' '}&middot; &#x26A0; {lastResult.failed} couldn&apos;t be read (will retry)
 								</span>

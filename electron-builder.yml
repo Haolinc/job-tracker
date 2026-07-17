@@ -1,0 +1,49 @@
+# Packaging config for the launcher. electron-builder only produces the unpacked app folder
+# (release/win-unpacked) — Velopack (scripts/velopack-release.mjs) turns that folder into the installer,
+# the self-updating portable zip, delta packages, and the update feed, all hosted on GitHub Releases.
+appId: com.haolin.jobtracker
+productName: Job Tracker
+directories:
+  output: release
+
+# Only the launcher itself goes inside app.asar — its sole runtime npm dep (velopack) is collected
+# automatically. The server, client build, and scripts ride alongside as plain files (extraResources)
+# because a spawned Node process and a native .node module cannot run from inside an asar archive.
+files:
+  - desktop/dist/**/*
+  - desktop/control.html
+  - package.json
+  # velopack ships native binaries for every platform — only the Windows x64 one can ever load here.
+  - "!node_modules/velopack/lib/native/*linux*"
+  - "!node_modules/velopack/lib/native/*osx*"
+  - "!node_modules/velopack/lib/native/*arm64*"
+  - "!node_modules/velopack/lib/native/*x86_msvc*"
+
+# Native .node modules can't be loaded from inside an asar archive.
+asarUnpack:
+  - node_modules/velopack/**
+
+extraResources:
+  # The window/taskbar icon, loaded at runtime by BrowserWindow (desktop/src/main.ts) from
+  # process.resourcesPath. Velopack stamps this same icon onto Setup.exe and the shortcuts separately.
+  - from: build/icon.ico
+    to: icon.ico
+  # Production-only, Electron-ABI copy of the server produced by scripts/stage-server.mjs.
+  - from: build-staging/server
+    to: server
+  - from: client/dist
+    to: client/dist
+  - from: scripts
+    to: scripts
+    filter:
+      # Only runtime scripts ship — stage-server.mjs and velopack-release.mjs are build-time tools.
+      - "ensure-ollama.mjs"
+      - "uninstall-prompt.ps1"
+
+win:
+  # No code-signing certificate, so skip signtool entirely. This also avoids electron-builder unpacking its
+  # winCodeSign helper, whose macOS symlinks can't be extracted on Windows without elevated privilege.
+  signAndEditExecutable: false
+  # Just the folder — Velopack does the rest.
+  target:
+    - dir
