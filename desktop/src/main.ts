@@ -412,6 +412,12 @@ function createControlWindow(): void {
 		width: 1024,
 		height: 720,
 		title: 'Job Tracker Launcher',
+		// The window icon in dev, where the process is the stock electron.exe (packaged builds also carry the
+		// icon on Job Tracker.exe itself — scripts/brand-exe.mjs). Packaged: extraResources drops it beside
+		// app.asar; dev: it sits in the repo's build/ two levels up from desktop/dist.
+		icon: app.isPackaged
+			? path.join(process.resourcesPath, 'icon.ico')
+			: path.join(__dirname, '..', '..', 'build', 'icon.ico'),
 		webPreferences: { preload: path.join(__dirname, 'preload.js') },
 	});
 	// Surface renderer-side failures in the launcher's own stdout — a broken preload or a panel script error

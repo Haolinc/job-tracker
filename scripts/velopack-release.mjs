@@ -23,6 +23,7 @@ const repositoryUrl = rootManifest.repository;
 const unpackedAppDir = path.join(repoRoot, 'release', 'win-unpacked');
 const velopackOutputDir = path.join(repoRoot, 'release', 'velopack');
 const releaseNotesPath = path.join(repoRoot, 'release-notes.md');
+const appIconPath = path.join(repoRoot, 'build', 'icon.ico');
 const shouldUpload = process.argv.includes('--upload');
 
 if (!existsSync(path.join(unpackedAppDir, 'Job Tracker.exe'))) {
@@ -79,6 +80,13 @@ const packArguments = [
 	'--packAuthors', 'haolin',
 	'--outputDir', velopackOutputDir,
 ];
+// Icon for Setup.exe and the Add/Remove Programs entry. The shortcuts and taskbar show the icon stamped
+// onto Job Tracker.exe itself (scripts/brand-exe.mjs, run right after electron-builder).
+if (existsSync(appIconPath)) {
+	packArguments.push('--icon', appIconPath);
+} else {
+	console.warn(`No app icon at ${appIconPath} — packaging with Velopack's default icon.`);
+}
 if (existsSync(releaseNotesPath)) {
 	packArguments.push('--releaseNotes', releaseNotesPath);
 } else {

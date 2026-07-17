@@ -24,6 +24,10 @@ asarUnpack:
   - node_modules/velopack/**
 
 extraResources:
+  # The window/taskbar icon, loaded at runtime by BrowserWindow (desktop/src/main.ts) from
+  # process.resourcesPath. Velopack stamps this same icon onto Setup.exe and the shortcuts separately.
+  - from: build/icon.ico
+    to: icon.ico
   # Production-only, Electron-ABI copy of the server produced by scripts/stage-server.mjs.
   - from: build-staging/server
     to: server
