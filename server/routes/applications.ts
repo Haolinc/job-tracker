@@ -74,6 +74,7 @@ router.post('/', async (req: Request, res: Response) => {
 		// app is at least at the interview stage). Interview/offer already imply reached, below.
 		const reached = reached_interview === true || status === 'interview' || status === 'offer';
 		const finalStatus = (reached && (!status || status === 'applied')) ? 'interview' : (status || 'applied');
+		const incomingEmailRefs = sanitizeEmails(emails);
 		const app = await db.create({
 			company,
 			role,
@@ -93,8 +94,12 @@ router.post('/', async (req: Request, res: Response) => {
 			source: source && VALID_SOURCES.has(source) ? source as Source : 'manual',
 			gmail_thread_id: null,
 			account: account?.trim() || null,
-			emails: sanitizeEmails(emails),
+			emails: incomingEmailRefs,
 		});
+		// Emails the board now tracks need no re-processing — mark them synced so the next Gmail sync
+		// skips them up front instead of re-downloading and re-classifying (a CSV import re-creating a
+		// board would otherwise trigger a full sync).
+		await db.markEmailRefsSynced(incomingEmailRefs);
 		res.status(201).json(app);
 	} catch (err) {
 		res.status(500).json({ error: errMsg(err, 'Failed to create application') });
@@ -114,7 +119,12 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 		// `account` is a free-text email — normalize "" to null so clearing it stores null, not an empty string.
 		if ('account' in updates) updates.account = (updates.account as string)?.trim() || null;
 		// `emails` is a user-editable array — sanitize each ref rather than trusting the raw body.
-		if ((req.body as Record<string, unknown>).emails !== undefined) updates.emails = sanitizeEmails((req.body as Record<string, unknown>).emails);
+		// Kept aside so a successful update can mark the refs synced (same reasoning as in POST).
+		let incomingEmailRefs: EmailRef[] | null = null;
+		if ((req.body as Record<string, unknown>).emails !== undefined) {
+			incomingEmailRefs = sanitizeEmails((req.body as Record<string, unknown>).emails);
+			updates.emails = incomingEmailRefs;
+		}
 		if ('status' in updates && !VALID_STATUSES.has(updates.status as string)) {
 			res.status(400).json({ error: 'Invalid status value' });
 			return;
@@ -133,6 +143,8 @@ router.patch('/:id', async (req: Request<{ id: string }>, res: Response) => {
 		// Keep the precise ordering key in sync with a manually-edited last_activity date.
 		if ('last_activity' in updates) updates.last_activity_ts = updates.last_activity ? Date.parse(updates.last_activity as string) || 0 : 0;
 		const updated = await db.update(id, updates);
+		// Mark AFTER the update succeeds — a failed write must not leave its emails flagged as synced.
+		if (incomingEmailRefs) await db.markEmailRefsSynced(incomingEmailRefs);
 		res.json(updated);
 	} catch (err) {
 		const msg = errMsg(err, 'Failed to update application');

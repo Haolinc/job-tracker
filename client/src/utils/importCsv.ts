@@ -222,7 +222,9 @@ export interface CsvReconciliation {
  *      company+role — several "Unknown Role" postings at one employer, or the same generic role
  *      applied to twice — from being wrongly merged.
  *   3. Company+role, for rows with neither an id nor tracked emails (hand-made CSVs).
- * In-file duplicates collapse onto the first row seen.
+ * In-file duplicates collapse onto the first row seen — but only a row whose every match key is
+ * already claimed counts as a duplicate; sharing just one message id with an earlier row does not
+ * (two applications can track the same email, e.g. one rejection sent for both).
  *
  * `existing` should be the COMPLETE board (fetched fresh and unfiltered), since an active search filter
  * narrows the in-memory list and would let already-present applications slip back in as "new".
@@ -269,7 +271,10 @@ export function reconcileApplications(
 
 		// Not on the board — queue for ADD unless an earlier row in the file already claimed it.
 		if (rowFields.emails.length > 0) {
-			if (rowFields.emails.some(email => queuedMessageIds.has(email.messageId))) { skipped++; continue; }
+			// Duplicate only when EVERY tracked message is already claimed (an exact re-listing).
+			// Two distinct applications can legitimately share one message — e.g. a single rejection
+			// email tracked by both — and a partial overlap must not drop the second application.
+			if (rowFields.emails.every(email => queuedMessageIds.has(email.messageId))) { skipped++; continue; }
 			rowFields.emails.forEach(email => queuedMessageIds.add(email.messageId));
 		} else {
 			const rowKey = companyRoleKey(rowFields.company, rowFields.role);

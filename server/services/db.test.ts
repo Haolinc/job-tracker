@@ -122,6 +122,23 @@ describe('synced emails', () => {
 		expect(synced.has('m1')).toBe(true);
 		expect(synced.size).toBe(11);
 	});
+
+	it('should mark imported email refs as synced so the next sync skips them', async () => {
+		await db.markEmailRefsSynced([
+			{ messageId: 'imported-1', category: 'applied', date: '2026-06-01' },
+			{ messageId: 'imported-2', category: 'interview', date: '2026-06-05', fast_apply: true },
+		]);
+		const synced = await db.getSyncedMessageIds(['imported-1', 'imported-2', 'never-seen']);
+		expect(synced).toEqual(new Set(['imported-1', 'imported-2']));
+	});
+
+	it('should be a no-op for an empty ref list and leave a genuine sync record intact', async () => {
+		await db.markEmailRefsSynced([]);
+		await db.markEmailSynced({ thread_id: 'real-thread', message_id: 'm-real', classified_as: 'applied' });
+		// Re-marking via refs must not clobber the genuine record (OR IGNORE keeps the first write).
+		await db.markEmailRefsSynced([{ messageId: 'm-real', category: 'rejected', date: '2026-06-09' }]);
+		expect((await db.getSyncedMessageIds(['m-real'])).has('m-real')).toBe(true);
+	});
 });
 
 describe('clearAll', () => {

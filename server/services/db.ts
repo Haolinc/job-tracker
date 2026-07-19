@@ -305,6 +305,19 @@ export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
 		.run(data.message_id, data.thread_id, data.classified_as, new Date().toISOString());
 };
 
+/** Mark an application's imported/attached email refs as already synced, so the next Gmail sync skips
+ *  them instead of re-fetching and re-classifying messages the board already tracks (a CSV import would
+ *  otherwise cause a full re-sync). The refs carry no thread id, so the message id stands in — for a
+ *  thread's first message the two are the same value — and OR IGNORE keeps any genuine sync record intact. */
+export const markEmailRefsSynced = async (emailRefs: EmailRef[]): Promise<void> => {
+	if (emailRefs.length === 0) return;
+	const insertSyncedEmail = getDatabase().prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)');
+	const syncedAt = new Date().toISOString();
+	getDatabase().transaction(() => {
+		for (const emailRef of emailRefs) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
+	})();
+};
+
 /** Wipe all applications AND the synced-email log so the next sync re-processes everything. One
  *  transaction: a crash between the two deletes would otherwise leave emails marked synced with no
  *  application records — a state the sync skips over and can never repair. */

@@ -102,6 +102,19 @@ describe('CSV export → edit → re-import reconciliation', () => {
 		expect(toUpdate).toEqual([{ id: app.id, changes: { status: 'rejected' } }]);
 	});
 
+	it('should add both applications when two rows share one tracked message but are distinct apps', () => {
+		// Real-world case: one rejection email tracked by two applications ("Distyl" and "Distyl AI").
+		// The shared message id must not make the second row look like an in-file duplicate — dropping
+		// it loses the application, and the next sync recreates a diverged copy from the unmarked email.
+		const sharedRejection: EmailRef = { messageId: 'm-shared-rej', category: 'rejected', date: '2026-06-30' };
+		const distyl = makeApp({ company: 'Distyl', role: 'SWE', emails: [sharedRejection] });
+		const distylAi = makeApp({ company: 'Distyl AI', role: 'SWE', emails: [{ messageId: 'm-ai-applied', category: 'applied', date: '2026-06-28' }, sharedRejection] });
+		const { toAdd, toUpdate, skipped } = reconcileApplications(parseApplicationsCsv(applicationsToCsv([distyl, distylAi])), []);
+		expect(toAdd.map(app => app.company)).toEqual(['Distyl', 'Distyl AI']);
+		expect(toUpdate).toEqual([]);
+		expect(skipped).toBe(0);
+	});
+
 	it('should collapse an in-file duplicate row onto the first occurrence', () => {
 		const app = makeApp({ company: 'Acme Inc', role: 'SWE', emails });
 		const rows = applicationsToCsv([app, app]).replace('Acme Inc', 'Acme Corp');   // first row edited, second left as-is
