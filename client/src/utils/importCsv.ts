@@ -1,18 +1,20 @@
 import type { Application, NewApplication, Status, InterviewStep } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
-import { parseEmails } from './emailRefs';
+import { parseEmails, serializeEmails } from './emailRefs';
 
 /** Thrown when a CSV can't be imported as a whole (e.g. no Company column, or a row missing a company). */
 export class CsvImportError extends Error {}
 
-// The application fields a CSV column can fill. Everything else is server-assigned.
-type Field = 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes' | 'company_domain' | 'external_id' | 'account' | 'emails';
+// The application fields a CSV column can fill, plus 'id' (the exported application id — used only
+// to match a re-imported row back to its application, never written). Everything else is server-assigned.
+export type Field = 'id' | 'company' | 'role' | 'status' | 'interview_step' | 'reached_interview' | 'date_applied' | 'last_activity' | 'job_url' | 'notes' | 'company_domain' | 'external_id' | 'account' | 'emails';
 
 // Map a NORMALIZED header (see normalizeHeader: lower-cased, underscores/hyphens → spaces) to the
 // field it fills. Keys mirror exportCsv's column headers 1:1 (in normalized form) so a re-imported
 // export lines up; the normalizer already absorbs case/underscore/hyphen/spacing variants. The
 // "Source" column is intentionally absent — imports are always tagged source 'csv'.
 const HEADER_TO_FIELD: Record<string, Field> = {
+	'id': 'id',
 	'company': 'company',
 	'role': 'role',
 	'status': 'status',
@@ -100,6 +102,17 @@ function parseCsv(text: string): string[][] {
 	return rows.filter(r => r.some(c => c.trim() !== ''));
 }
 
+/** A parsed CSV row: the importable fields plus the exported application id, if the file carried one. */
+export type ParsedApplication = NewApplication & { id: string | null };
+
+/** A parsed CSV: the applications plus which fields actually had a column in the file. */
+export interface ParsedCsv {
+	apps: ParsedApplication[];
+	// Fields backed by a real column. Re-import only compares/updates these, so a partial
+	// (hand-made) CSV can't blank out fields its columns don't cover.
+	fields: Set<Field>;
+}
+
 /**
  * Parse a CSV (as produced by the Export button, or hand-edited in a spreadsheet) into importable
  * applications. Columns are matched by normalized header name, so reordered, re-cased, or
@@ -109,29 +122,29 @@ function parseCsv(text: string): string[][] {
  * is thrown and nothing is imported). Every other field falls back to empty, and a missing/unknown
  * status defaults to "applied".
  */
-export function parseApplicationsCsv(text: string): NewApplication[] {
+export function parseApplicationsCsv(text: string): ParsedCsv {
 	const rows = parseCsv(stripBom(text));
-	if (rows.length < 2) return [];
+	if (rows.length < 2) return { apps: [], fields: new Set() };
 
 	// Map each known field to its column index via the normalized header.
-	const colOf = {} as Partial<Record<Field, number>>;
-	rows[0].forEach((header, i) => {
+	const columnIndexByField = {} as Partial<Record<Field, number>>;
+	rows[0].forEach((header, columnIndex) => {
 		const field = HEADER_TO_FIELD[normalizeHeader(header)];
-		if (field && colOf[field] === undefined) colOf[field] = i;   // first matching column wins
+		if (field && columnIndexByField[field] === undefined) columnIndexByField[field] = columnIndex;   // first matching column wins
 	});
 
-	if (colOf.company === undefined) {
+	if (columnIndexByField.company === undefined) {
 		throw new CsvImportError('The CSV needs a "Company" column.');
 	}
 	const cell = (row: string[], field: Field) => {
-		const i = colOf[field];
-		return i === undefined ? '' : (row[i] ?? '').trim();
+		const columnIndex = columnIndexByField[field];
+		return columnIndex === undefined ? '' : (row[columnIndex] ?? '').trim();
 	};
 
-	return rows.slice(1).map((row, n) => {
+	const apps: ParsedApplication[] = rows.slice(1).map((row, rowIndex) => {
 		const company = cell(row, 'company');
 		if (!company) {
-			throw new CsvImportError(`Row ${n + 2} is missing a company — nothing was imported.`);
+			throw new CsvImportError(`Row ${rowIndex + 2} is missing a company — nothing was imported.`);
 		}
 		let status = STATUS_BY_LABEL.get(cell(row, 'status').toLowerCase()) ?? 'applied';
 		// Interview/offer always imply the app reached an interview; an explicit "Yes" covers the
@@ -141,6 +154,8 @@ export function parseApplicationsCsv(text: string): NewApplication[] {
 		// at interview/offer/rejected by then), so promote that contradiction to "interview".
 		if (reached && status === 'applied') status = 'interview';
 		return {
+			// The exported application id, if present — a match key only, never imported as data.
+			id: cell(row, 'id') || null,
 			company,
 			role: cell(row, 'role') || 'Unknown Role',
 			status,
@@ -161,35 +176,108 @@ export function parseApplicationsCsv(text: string): NewApplication[] {
 			emails: parseEmails(cell(row, 'emails')),
 		};
 	});
+	return { apps, fields: new Set(Object.keys(columnIndexByField) as Field[]) };
+}
+
+// Fields a re-import may write back to a matched application — the intersection of what the CSV
+// carries and what PATCH /applications/:id accepts. `company_domain` and `source` are create-only:
+// the server ignores them on PATCH (and an existing gmail-sourced app should stay 'gmail').
+const PATCHABLE_FIELDS: Exclude<Field, 'id'>[] = ['company', 'role', 'status', 'interview_step', 'reached_interview', 'date_applied', 'last_activity', 'job_url', 'notes', 'external_id', 'account', 'emails'];
+
+// The CSV-editable fields of `existing` that `parsed` would change, limited to columns actually
+// present in the file. Empty object → the row is identical to what's on the board.
+function diffApplication(existing: Application, parsed: NewApplication, fields: Set<Field>): Partial<Application> {
+	const changes: Partial<Application> = {};
+	for (const field of PATCHABLE_FIELDS) {
+		if (!fields.has(field)) continue;
+		if (field === 'emails') {
+			if (serializeEmails(parsed.emails) !== serializeEmails(existing.emails)) changes.emails = parsed.emails;
+		} else if (parsed[field] !== (existing[field] ?? null)) {   // optional server fields may be undefined — treat as null
+			(changes as Record<string, unknown>)[field] = parsed[field];
+		}
+	}
+	return changes;
+}
+
+/** How a parsed CSV reconciles against the board: brand-new rows, edits to existing rows, and no-ops. */
+export interface CsvReconciliation {
+	toAdd: NewApplication[];
+	toUpdate: { id: string; changes: Partial<Application> }[];
+	skipped: number;   // rows already on the board and identical, plus in-file duplicates
 }
 
 /**
- * Pick the parsed rows that are NOT already on the board, and collapse in-file duplicates. Identity is
- * the set of tracked Gmail message ids (globally unique): two rows are the same application iff they
- * share a message id. This keeps genuinely-distinct applications that merely share a company+role —
- * several "Unknown Role" postings at one employer, or the same generic role applied to twice — from
- * being wrongly merged. Rows with no tracked emails (manual entries) fall back to a company+role key.
+ * Split the parsed rows into rows to ADD (not on the board yet) and rows to UPDATE (on the board,
+ * but with edited cells — so an exported CSV can be corrected in a spreadsheet and re-imported).
+ *
+ * Identity, strongest first:
+ *   1. The exported application id — survives any cell edit, including company, role, and emails.
+ *      An id match always wins: differing cells are the user's edits, and the UI shows a
+ *      confirmation dialog (with what would be overwritten) before any update is applied — that's
+ *      also the guard for the machine-local-id case, where a foreign export can collide with an
+ *      unrelated local id. An id unknown to this machine matches nothing and the row is simply
+ *      added (a later Gmail sync re-merges it email by email).
+ *   2. The tracked Gmail message ids (globally unique): two rows are the same application iff they
+ *      share a message id. This keeps genuinely-distinct applications that merely share a
+ *      company+role — several "Unknown Role" postings at one employer, or the same generic role
+ *      applied to twice — from being wrongly merged.
+ *   3. Company+role, for rows with neither an id nor tracked emails (hand-made CSVs).
+ * In-file duplicates collapse onto the first row seen.
  *
  * `existing` should be the COMPLETE board (fetched fresh and unfiltered), since an active search filter
  * narrows the in-memory list and would let already-present applications slip back in as "new".
  */
-export function selectNewApplications(
-	parsed: NewApplication[],
+export function reconcileApplications(
+	parsed: ParsedCsv,
 	existing: Application[],
-): { toAdd: NewApplication[]; duplicates: number } {
-	const key = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
-	const seenMsgIds = new Set(existing.flatMap(a => a.emails.map(e => e.messageId)));
-	const seenKeys = new Set(existing.map(a => key(a.company, a.role)));
-	const toAdd = parsed.filter(a => {
-		if (a.emails.length > 0) {
-			if (a.emails.some(e => seenMsgIds.has(e.messageId))) return false;   // shares an email → already here
-			a.emails.forEach(e => seenMsgIds.add(e.messageId));
-			return true;
-		}
-		const k = key(a.company, a.role);   // no emails to identify it → fall back to company+role
-		if (seenKeys.has(k)) return false;
-		seenKeys.add(k);
-		return true;
+): CsvReconciliation {
+	const companyRoleKey = (company: string, role: string) => `${company.trim().toLowerCase()}|||${role.trim().toLowerCase()}`;
+	const existingById = new Map(existing.map(app => [app.id, app]));
+	const existingByMessageId = new Map(existing.flatMap(app => app.emails.map(email => [email.messageId, app] as const)));
+	const existingByCompanyRole = new Map<string, Application>();
+	existing.forEach(app => {
+		const appKey = companyRoleKey(app.company, app.role);
+		if (!existingByCompanyRole.has(appKey)) existingByCompanyRole.set(appKey, app);   // first per key wins
 	});
-	return { toAdd, duplicates: parsed.length - toAdd.length };
+
+	const claimedExistingIds = new Set<string>();     // board apps already matched by an earlier row in this file
+	const queuedMessageIds = new Set<string>();       // email ids claimed by rows queued for ADD
+	const queuedCompanyRoleKeys = new Set<string>();  // company+role keys claimed by email-less rows queued for ADD
+	const toAdd: NewApplication[] = [];
+	const toUpdate: { id: string; changes: Partial<Application> }[] = [];
+	let skipped = 0;
+
+	for (const parsedRow of parsed.apps) {
+		// Split the match key off the importable fields — a row queued for ADD must not carry a
+		// (possibly foreign) id to the server.
+		const { id: exportedId, ...rowFields } = parsedRow;
+
+		// 1. Exported id; 2. shared Gmail message id; 3. company+role for rows with no emails.
+		let matchedApp = exportedId ? existingById.get(exportedId) : undefined;
+		matchedApp ??= rowFields.emails.length > 0
+			? rowFields.emails.map(email => existingByMessageId.get(email.messageId)).find(app => app !== undefined)
+			: existingByCompanyRole.get(companyRoleKey(rowFields.company, rowFields.role));
+
+		if (matchedApp) {
+			if (claimedExistingIds.has(matchedApp.id)) { skipped++; continue; }   // in-file duplicate of a handled row
+			claimedExistingIds.add(matchedApp.id);
+			const changes = diffApplication(matchedApp, rowFields, parsed.fields);
+			if (Object.keys(changes).length > 0) toUpdate.push({ id: matchedApp.id, changes });
+			else skipped++;
+			continue;
+		}
+
+		// Not on the board — queue for ADD unless an earlier row in the file already claimed it.
+		if (rowFields.emails.length > 0) {
+			if (rowFields.emails.some(email => queuedMessageIds.has(email.messageId))) { skipped++; continue; }
+			rowFields.emails.forEach(email => queuedMessageIds.add(email.messageId));
+		} else {
+			const rowKey = companyRoleKey(rowFields.company, rowFields.role);
+			if (queuedCompanyRoleKeys.has(rowKey)) { skipped++; continue; }
+			queuedCompanyRoleKeys.add(rowKey);
+		}
+		toAdd.push(rowFields);
+	}
+
+	return { toAdd, toUpdate, skipped };
 }
