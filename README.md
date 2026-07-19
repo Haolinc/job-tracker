@@ -8,6 +8,8 @@
     A Kanban board that fills itself: your job applications, auto-synced from Gmail,
     classified by a local AI so your inbox never leaves your machine.
     <br />
+    <a href="https://haolin-portfolio.vercel.app/job-tracker">See the UI walkthrough</a>
+    <br />
     <a href="https://github.com/Haolinc/job-tracker/issues">Report Bug</a>
     &middot;
     <a href="https://github.com/Haolinc/job-tracker/issues">Request Feature</a>
