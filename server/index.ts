@@ -61,7 +61,9 @@ app.use(cors({
 	credentials: true,
 }));
 
-app.use(express.json());
+// 10mb: a CSV import ships its whole mutation plan in ONE request (hundreds of applications with
+// notes and email refs) — the express default of 100kb 413s a full-board import.
+app.use(express.json({ limit: '10mb' }));
 
 app.use(session({
 	secret: process.env.SESSION_SECRET!,

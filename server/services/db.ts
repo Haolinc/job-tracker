@@ -188,12 +188,12 @@ const INSERT_APPLICATION_SQL = `
 	VALUES (${APPLICATION_COLUMNS.map(() => '?').join(', ')})
 `;
 
-export const create = async (data: CreateApplicationData): Promise<Application> => {
+// The full column→value record for a new row: CreateApplicationData's optionals get their defaults
+// here. Typing it by ApplicationColumn makes tsc demand a value for every column — a new field can't
+// be forgotten silently. Shared by create() and applyImportPlan()'s creates.
+function buildCreateColumnValues(data: CreateApplicationData): Record<ApplicationColumn, unknown> {
 	const now = new Date().toISOString();
-	// The full column→value record for the new row: CreateApplicationData's optionals get their defaults
-	// here. Typing it by ApplicationColumn makes tsc demand a value for every column — a new field can't
-	// be forgotten silently.
-	const columnValues: Record<ApplicationColumn, unknown> = {
+	return {
 		company:              data.company,
 		role:                 data.role,
 		status:               data.status,
@@ -219,6 +219,10 @@ export const create = async (data: CreateApplicationData): Promise<Application> 
 		created_at:           now,
 		updated_at:           now,
 	};
+}
+
+export const create = async (data: CreateApplicationData): Promise<Application> => {
+	const columnValues = buildCreateColumnValues(data);
 	const result = getDatabase().prepare(INSERT_APPLICATION_SQL)
 		.run(...APPLICATION_COLUMNS.map(column => toStored(columnValues[column])));
 	return toApplication(getRow(String(result.lastInsertRowid))!);
@@ -315,6 +319,112 @@ export const markEmailRefsSynced = async (emailRefs: EmailRef[]): Promise<void> 
 	const syncedAt = new Date().toISOString();
 	getDatabase().transaction(() => {
 		for (const emailRef of emailRefs) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
+	})();
+};
+
+// ── CSV import plan ─────────────────────────────────────────────────────────
+// The client reconciles a parsed CSV against the board into a mutation plan (docs/csv-reimport-spec.md);
+// this applies the whole plan in ONE transaction so a partial failure rolls everything back.
+
+export interface ImportPlanPayload {
+	// Brand-new applications; preservedId keeps the file's id when it's free so a re-import of the
+	// same file matches by id instead of duplicating.
+	creates: { preservedId: string | null; data: CreateApplicationData }[];
+	// In-place edits; adoptId moves the application onto the file's (free) id for the same reason.
+	updates: { id: string; changes: Record<string, unknown>; adoptId: string | null }[];
+	// Email-uniqueness strips: remove these message ids from applications no CSV row matched.
+	strips: { id: string; messageIds: string[] }[];
+	// Applications whose every email was stripped away — merged into the row that claimed them.
+	deletes: string[];
+	// Every email ref present in the file — marked synced so the next Gmail sync skips them all.
+	syncEmails: EmailRef[];
+}
+
+export interface ImportPlanResult {
+	added: number;
+	updated: number;
+	deleted: number;
+	// Plan entries whose target no longer matches the board (deleted or changed since the plan was
+	// built) — skipped rather than failing the whole import.
+	staleSkipped: number;
+	createdIds: string[];
+	updatedIds: string[];
+}
+
+// INSERT with an explicit id (a preserved file id). SQLite accepts explicit values for an
+// AUTOINCREMENT column and later inserts still pick max(seq, max rowid)+1, so no collision follows.
+const INSERT_APPLICATION_WITH_ID_SQL = `
+	INSERT INTO applications (id, ${APPLICATION_COLUMNS.join(', ')})
+	VALUES (?, ${APPLICATION_COLUMNS.map(() => '?').join(', ')})
+`;
+
+export const applyImportPlan = async (plan: ImportPlanPayload): Promise<ImportPlanResult> => {
+	const database = getDatabase();
+	return database.transaction((): ImportPlanResult => {
+		let deleted = 0, staleSkipped = 0;
+		const createdIds: string[] = [];
+		const updatedIds: string[] = [];
+		const idIsTaken = (id: number) => database.prepare('SELECT 1 FROM applications WHERE id = ?').get(id) !== undefined;
+
+		// 1. Strips — email uniqueness: remove claimed emails from applications no row matched.
+		//    (Matched applications shed theirs through their own row's email-list replacement.)
+		for (const plannedStrip of plan.strips) {
+			const row = getRow(plannedStrip.id);
+			if (!row) { staleSkipped++; continue; }
+			const strippedMessageIds = new Set(plannedStrip.messageIds);
+			const remainingEmails = (JSON.parse(row.emails) as EmailRef[]).filter(emailRef => !strippedMessageIds.has(emailRef.messageId));
+			const { clause, params } = buildSet({ emails: remainingEmails });
+			database.prepare(`UPDATE applications SET ${clause} WHERE id = ?`).run(...params, row.id);
+		}
+
+		// 2. Deletes — re-verified: only an application that really ended up email-less goes (a stale
+		//    plan, or one drifted since confirm, must never delete an application still holding data).
+		for (const deleteId of plan.deletes) {
+			const row = getRow(deleteId);
+			if (!row) continue;   // already gone — the intended outcome
+			if ((JSON.parse(row.emails) as EmailRef[]).length > 0) { staleSkipped++; continue; }
+			database.prepare('DELETE FROM applications WHERE id = ?').run(row.id);
+			deleted++;
+		}
+
+		// 3. Updates, each optionally adopting the file's id so the row converges to an id match.
+		for (const plannedUpdate of plan.updates) {
+			const row = getRow(plannedUpdate.id);
+			if (!row) { staleSkipped++; continue; }
+			if (Object.keys(plannedUpdate.changes).length > 0) {
+				const { clause, params } = buildSet(plannedUpdate.changes);
+				database.prepare(`UPDATE applications SET ${clause} WHERE id = ?`).run(...params, row.id);
+			}
+			let finalId = row.id;
+			if (plannedUpdate.adoptId) {
+				const adoptTargetId = Number(plannedUpdate.adoptId);
+				// Re-checked inside the transaction — the id must still be free at apply time.
+				if (!idIsTaken(adoptTargetId)) {
+					database.prepare('UPDATE applications SET id = ? WHERE id = ?').run(adoptTargetId, row.id);
+					finalId = adoptTargetId;
+				}
+			}
+			updatedIds.push(String(finalId));
+		}
+
+		// 4. Creates, keeping the file's id when it's (still) free.
+		for (const plannedCreate of plan.creates) {
+			const columnValues = buildCreateColumnValues(plannedCreate.data);
+			const columnParams = APPLICATION_COLUMNS.map(column => toStored(columnValues[column]));
+			const preservedId = plannedCreate.preservedId !== null && !idIsTaken(Number(plannedCreate.preservedId))
+				? Number(plannedCreate.preservedId) : null;
+			const insertResult = preservedId !== null
+				? database.prepare(INSERT_APPLICATION_WITH_ID_SQL).run(preservedId, ...columnParams)
+				: database.prepare(INSERT_APPLICATION_SQL).run(...columnParams);
+			createdIds.push(String(insertResult.lastInsertRowid));
+		}
+
+		// 5. Every email id in the file is now board-tracked → synced. OR IGNORE keeps genuine sync records.
+		const insertSyncedEmail = database.prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)');
+		const syncedAt = new Date().toISOString();
+		for (const emailRef of plan.syncEmails) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
+
+		return { added: createdIds.length, updated: updatedIds.length, deleted, staleSkipped, createdIds, updatedIds };
 	})();
 };
 

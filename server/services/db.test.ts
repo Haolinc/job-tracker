@@ -149,3 +149,97 @@ describe('clearAll', () => {
 		expect((await db.getAll()).length).toBe(0);
 	});
 });
+
+describe('applyImportPlan', () => {
+	const emptyPlan: db.ImportPlanPayload = { creates: [], updates: [], strips: [], deletes: [], syncEmails: [] };
+	const ref = (messageId: string): { messageId: string; category: 'applied'; date: string } =>
+		({ messageId, category: 'applied', date: '2026-06-01' });
+	const getById = async (id: string) => (await db.getAll()).find(application => application.id === id);
+
+	it('should create with a preserved file id, and later inserts autoincrement past it', async () => {
+		const result = await db.applyImportPlan({ ...emptyPlan, creates: [{ preservedId: '4210', data: baseData }] });
+		expect(result.added).toBe(1);
+		expect(result.createdIds).toEqual(['4210']);
+		expect(await getById('4210')).toBeTruthy();
+		// AUTOINCREMENT picks max(sequence, max rowid)+1 — the next ordinary create can't collide.
+		const next = await db.create({ ...baseData, company: 'After' });
+		expect(Number(next.id)).toBeGreaterThan(4210);
+	});
+
+	it('should fall back to an autoincrement id when the preserved id is already taken', async () => {
+		const occupant = await db.create({ ...baseData, company: 'Occupant' });
+		const result = await db.applyImportPlan({ ...emptyPlan, creates: [{ preservedId: occupant.id, data: { ...baseData, company: 'Newcomer' } }] });
+		expect(result.createdIds[0]).not.toBe(occupant.id);
+		expect((await getById(occupant.id))?.company).toBe('Occupant');   // never clobbered
+	});
+
+	it('should update fields and adopt a free file id in the same pass', async () => {
+		const holder = await db.create(baseData);
+		const result = await db.applyImportPlan({ ...emptyPlan, updates: [{ id: holder.id, changes: { company: 'Acme Corp' }, adoptId: '9000' }] });
+		expect(result.updated).toBe(1);
+		expect(result.updatedIds).toEqual(['9000']);
+		expect(await getById(holder.id)).toBeUndefined();       // moved off its old id
+		expect((await getById('9000'))?.company).toBe('Acme Corp');
+	});
+
+	it('should keep its own id when the adoption target id is taken', async () => {
+		const holder = await db.create(baseData);
+		const occupant = await db.create({ ...baseData, company: 'Occupant' });
+		const result = await db.applyImportPlan({ ...emptyPlan, updates: [{ id: holder.id, changes: {}, adoptId: occupant.id }] });
+		expect(result.updatedIds).toEqual([holder.id]);
+		expect((await getById(occupant.id))?.company).toBe('Occupant');
+	});
+
+	it('should strip only the listed message ids from a holder', async () => {
+		const holder = await db.create({ ...baseData, emails: [ref('m-goes'), ref('m-stays')] });
+		await db.applyImportPlan({ ...emptyPlan, strips: [{ id: holder.id, messageIds: ['m-goes'] }] });
+		expect((await getById(holder.id))?.emails.map(email => email.messageId)).toEqual(['m-stays']);
+	});
+
+	it('should delete a planned application only when it really ended up email-less', async () => {
+		const emptied = await db.create({ ...baseData, company: 'Emptied', emails: [ref('m-a')] });
+		const stillHolding = await db.create({ ...baseData, company: 'Still Holding', emails: [ref('m-b'), ref('m-c')] });
+		const result = await db.applyImportPlan({
+			...emptyPlan,
+			strips: [{ id: emptied.id, messageIds: ['m-a'] }, { id: stillHolding.id, messageIds: ['m-b'] }],
+			// The plan (staleley) wants both gone — only the truly emptied one may go.
+			deletes: [emptied.id, stillHolding.id],
+		});
+		expect(result.deleted).toBe(1);
+		expect(result.staleSkipped).toBe(1);
+		expect(await getById(emptied.id)).toBeUndefined();
+		expect((await getById(stillHolding.id))?.emails.map(email => email.messageId)).toEqual(['m-c']);
+	});
+
+	it('should skip a stale update target (deleted since planning) and still apply the rest', async () => {
+		const survivor = await db.create(baseData);
+		const result = await db.applyImportPlan({
+			...emptyPlan,
+			updates: [
+				{ id: '99999', changes: { company: 'Ghost' }, adoptId: null },
+				{ id: survivor.id, changes: { company: 'Updated' }, adoptId: null },
+			],
+		});
+		expect(result.staleSkipped).toBe(1);
+		expect(result.updated).toBe(1);
+		expect((await getById(survivor.id))?.company).toBe('Updated');
+	});
+
+	it('should mark every syncEmails ref synced', async () => {
+		await db.applyImportPlan({ ...emptyPlan, syncEmails: [ref('m-1'), ref('m-2')] });
+		expect(await db.getSyncedMessageIds(['m-1', 'm-2', 'm-3'])).toEqual(new Set(['m-1', 'm-2']));
+	});
+
+	it('should roll the WHOLE plan back when any piece fails (one transaction)', async () => {
+		const target = await db.create(baseData);
+		await expect(db.applyImportPlan({
+			...emptyPlan,
+			updates: [
+				{ id: target.id, changes: { company: 'Halfway Applied' }, adoptId: null },
+				{ id: target.id, changes: { evil_column: 1 }, adoptId: null },   // buildSet throws on unknown columns
+			],
+		})).rejects.toThrow('Unknown column');
+		// The first update DID run inside the transaction — the failure must undo it.
+		expect((await getById(target.id))?.company).toBe(baseData.company);
+	});
+});

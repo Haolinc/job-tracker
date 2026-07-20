@@ -8,13 +8,13 @@ import Filters from './components/Filters';
 import Toolbar, { type View } from './components/Toolbar';
 import ResetConfirmModal from './components/ResetConfirmModal';
 import ImportResultModal, { type ImportOutcome } from './components/ImportResultModal';
-import ImportConfirmModal, { type PendingUpdate } from './components/ImportConfirmModal';
-import { getApplications, resetDatabase } from './api';
+import ImportConfirmModal from './components/ImportConfirmModal';
+import { getApplications, importApplications, resetDatabase, type ImportApplyPayload, type ImportApplyResult } from './api';
 import { useApplications } from './hooks/useApplications';
 import { useGmailSync } from './hooks/useGmailSync';
 import { downloadApplicationsCsv } from './utils/exportCsv';
-import { parseApplicationsCsv, CsvImportError, reconcileApplications, type ParsedCsv, type CsvReconciliation } from './utils/importCsv';
-import type { Application, ApplicationFormData, Filters as FiltersType, NewApplication } from './types';
+import { parseApplicationsCsv, CsvImportError, buildImportPlan, type ParsedCsv, type ImportPlan } from './utils/importCsv';
+import type { Application, ApplicationFormData, Filters as FiltersType } from './types';
 
 export default function App() {
 	const { applications, loading, fetchAll, add, update, remove } = useApplications();
@@ -29,8 +29,8 @@ export default function App() {
 	const [newlyAdded, setNewlyAdded] = useState<Set<string>>(new Set());
 
 	const [importResult, setImportResult] = useState<ImportOutcome | null>(null);
-	// A reconciled CSV waiting on the user's overwrite/add-only decision (set only when it would update rows).
-	const [pendingImport, setPendingImport] = useState<{ reconciliation: CsvReconciliation; updates: PendingUpdate[] } | null>(null);
+	// An import plan waiting on the user's overwrite/add-only decision (set only when it would change the board).
+	const [pendingImport, setPendingImport] = useState<ImportPlan | null>(null);
 	const [showResetConfirm, setShowResetConfirm] = useState(false);
 	const [resetting, setResetting] = useState(false);
 
@@ -94,46 +94,57 @@ export default function App() {
 			setImportResult({ tone: 'warning', title: 'Nothing to import', message: 'No applications were found in that CSV.' });
 			return;
 		}
-		// Reconcile against the COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications`
+		// Plan against the COMPLETE board — fetched fresh and unfiltered, since the in-memory `applications`
 		// list is narrowed by an active search filter and can be momentarily stale.
 		const existing = await getApplications();
-		const reconciliation = reconcileApplications(parsed, existing);
+		const plan = buildImportPlan(parsed, existing);
 
-		if (reconciliation.toUpdate.length === 0) {
-			await applyImport(reconciliation.toAdd, [], reconciliation.skipped);
+		// Anything that changes existing applications — updates, emails moving off them, merges — needs
+		// the user's go-ahead; a plan of pure creates (or nothing at all) applies straight away.
+		if (plan.updates.length === 0 && plan.moves.length === 0 && plan.deletes.length === 0) {
+			await applyPlan(plan, 'all');
 			return;
 		}
-		// The file would overwrite rows already on the board — pause for the user's go-ahead.
-		const existingById = new Map(existing.map(app => [app.id, app]));
-		setPendingImport({
-			reconciliation,
-			updates: reconciliation.toUpdate.map(pendingUpdate => {
-				const matchedApp = existingById.get(pendingUpdate.id)!;
-				return { company: matchedApp.company, role: matchedApp.role, fields: Object.keys(pendingUpdate.changes) };
-			}),
-		});
+		setPendingImport(plan);
 	};
 
-	// Second half of an import: write the chosen rows and report. `declinedCount` counts matched rows
-	// the user chose NOT to overwrite (the "add only" path).
-	const applyImport = async (
-		toAdd: NewApplication[],
-		toUpdate: { id: string; changes: Partial<Application> }[],
-		skipped: number,
-		declinedCount = 0,
-	) => {
-		const addResults = await Promise.allSettled(toAdd.map(newApp => add(newApp)));
-		const createdApps = addResults.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
-		const updateResults = await Promise.allSettled(toUpdate.map(pendingUpdate => update(pendingUpdate.id, pendingUpdate.changes)));
-		const updatedApps = updateResults.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
-		const failedCount = (addResults.length - createdApps.length) + (updateResults.length - updatedApps.length);
-		const touchedCount = createdApps.length + updatedApps.length;
+	// Second half of an import: ship the plan (or just its safe creates) to the one-transaction import
+	// endpoint and report. 'add-only' performs ZERO mutations of existing applications.
+	const applyPlan = async (plan: ImportPlan, mode: 'all' | 'add-only') => {
+		const creates = mode === 'all' ? plan.creates : plan.creates.filter(plannedCreate => !plannedCreate.conflictFallback);
+		// Matched rows the user declined, plus conflict-fallback creates that only make sense alongside them.
+		const declinedCount = mode === 'all' ? 0 : plan.updates.length + (plan.creates.length - creates.length);
+		const stripsByHolderId = new Map<string, string[]>();
+		if (mode === 'all') {
+			for (const plannedMove of plan.moves) {
+				stripsByHolderId.set(plannedMove.fromId, [...(stripsByHolderId.get(plannedMove.fromId) ?? []), plannedMove.messageId]);
+			}
+		}
+		const payload: ImportApplyPayload = {
+			creates: creates.map(plannedCreate => ({ preservedId: plannedCreate.preservedId, data: plannedCreate.fields })),
+			updates: mode === 'all' ? plan.updates.map(plannedUpdate => ({ id: plannedUpdate.id, changes: plannedUpdate.changes, adoptId: plannedUpdate.adoptId })) : [],
+			strips: [...stripsByHolderId].map(([holderId, messageIds]) => ({ id: holderId, messageIds })),
+			deletes: mode === 'all' ? plan.deletes.map(plannedDelete => plannedDelete.id) : [],
+			// Add-only must not suppress emails it didn't import — only the created rows' refs are safe
+			// to mark synced (declined rows' emails stay eligible for the next sync).
+			syncEmails: mode === 'all' ? plan.syncEmails : creates.flatMap(plannedCreate => plannedCreate.fields.emails),
+		};
+
+		let result: ImportApplyResult;
+		try {
+			result = await importApplications(payload);
+		} catch (error) {
+			const serverMessage = (error as { response?: { data?: { error?: string } } }).response?.data?.error;
+			setImportResult({ tone: 'error', title: 'Import failed', message: serverMessage ?? 'The server rejected the import — nothing was changed.' });
+			return;
+		}
 
 		await fetchAll(filters);
-		setNewlyAdded(new Set([...createdApps, ...updatedApps].map(app => app.id)));
+		setNewlyAdded(new Set([...result.createdIds, ...result.updatedIds]));
 
+		const touchedCount = result.added + result.updated + result.deleted;
 		setImportResult({
-			tone: failedCount > 0 || touchedCount === 0 ? 'warning' : 'success',
+			tone: result.staleSkipped > 0 || touchedCount === 0 ? 'warning' : 'success',
 			title: touchedCount > 0 ? 'Import complete' : 'Nothing to import',
 			message: touchedCount === 0
 				? (declinedCount > 0
@@ -141,21 +152,20 @@ export default function App() {
 					: 'Every row was already on your board and up to date.')
 				: undefined,
 			stats: [
-				{ label: 'Added', value: createdApps.length, cls: 'text-emerald-600' },
-				...(updatedApps.length ? [{ label: 'Updated', value: updatedApps.length, cls: 'text-blue-600' }] : []),
-				...(skipped ? [{ label: 'Unchanged', value: skipped, cls: 'text-gray-500' }] : []),
+				{ label: 'Added', value: result.added, cls: 'text-emerald-600' },
+				...(result.updated ? [{ label: 'Updated', value: result.updated, cls: 'text-blue-600' }] : []),
+				...(result.deleted ? [{ label: 'Merged (deleted)', value: result.deleted, cls: 'text-purple-600' }] : []),
+				...(plan.skipped ? [{ label: 'Unchanged', value: plan.skipped, cls: 'text-gray-500' }] : []),
 				...(declinedCount ? [{ label: 'Not updated', value: declinedCount, cls: 'text-gray-500' }] : []),
-				...(failedCount ? [{ label: 'Failed', value: failedCount, cls: 'text-red-600' }] : []),
+				...(result.staleSkipped ? [{ label: 'Skipped (board changed)', value: result.staleSkipped, cls: 'text-red-600' }] : []),
 			],
 		});
 	};
 
 	const handleImportDecision = async (mode: 'all' | 'add-only') => {
 		if (!pendingImport) return;
-		const { toAdd, toUpdate, skipped } = pendingImport.reconciliation;
 		setPendingImport(null);
-		if (mode === 'all') await applyImport(toAdd, toUpdate, skipped);
-		else await applyImport(toAdd, [], skipped, toUpdate.length);
+		await applyPlan(pendingImport, mode);
 	};
 
 	const handleReset = async () => {
@@ -245,8 +255,20 @@ export default function App() {
 
 			{pendingImport && (
 				<ImportConfirmModal
-					addCount={pendingImport.reconciliation.toAdd.length}
-					updates={pendingImport.updates}
+					addCount={pendingImport.creates.length}
+					addOnlyCount={pendingImport.creates.filter(plannedCreate => !plannedCreate.conflictFallback).length}
+					updates={pendingImport.updates.map(plannedUpdate => ({
+						company: plannedUpdate.company,
+						role: plannedUpdate.role,
+						fields: Object.keys(plannedUpdate.changes),
+						suspicious: plannedUpdate.suspicious,
+					}))}
+					moves={pendingImport.moves.map(plannedMove => ({
+						messageId: plannedMove.messageId,
+						fromCompany: plannedMove.fromCompany,
+						toCompany: plannedMove.toCompany,
+					}))}
+					deletes={pendingImport.deletes.map(plannedDelete => ({ company: plannedDelete.company, role: plannedDelete.role }))}
 					onConfirm={handleImportDecision}
 					onCancel={() => setPendingImport(null)}
 				/>

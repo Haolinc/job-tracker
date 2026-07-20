@@ -16,7 +16,7 @@ import {
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
-import { isSyncRunning, setSyncRunning } from '../services/syncState';
+import { isSyncRunning, setSyncRunning, isImportRunning } from '../services/syncState';
 import { debug, guiLine } from '../logger';
 import type { EmailResult, Status } from '../types';
 
@@ -176,6 +176,11 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	// (which /auth/disconnect consults before revoking tokens) assumes a single owner.
 	if (isSyncRunning()) {
 		res.status(409).json({ error: 'A sync is already running — wait for it to finish.' });
+		return;
+	}
+	// A CSV import plan mid-apply and a sync are mutually exclusive (see /applications/import).
+	if (isImportRunning()) {
+		res.status(409).json({ error: 'A CSV import is being applied — try again in a moment.' });
 		return;
 	}
 	setSyncRunning(true);

@@ -50,7 +50,8 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 				</div>
 
 				<h2 className="text-lg font-semibold text-gray-800">{outcome.title}</h2>
-				{outcome.message && <p className="mt-2 text-sm text-gray-500">{outcome.message}</p>}
+				{/* pre-line: a file-rejection message lists one problem per line (duplicate ids, etc.) */}
+				{outcome.message && <p className="mt-2 text-sm text-gray-500 whitespace-pre-line">{outcome.message}</p>}
 
 				{outcome.stats && outcome.stats.length > 0 && (
 					<div data-testid="import-result-stats" className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">

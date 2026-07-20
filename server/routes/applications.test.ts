@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import applicationsRouter from './applications';
 import * as db from '../services/db';
+import { setSyncRunning } from '../services/syncState';
 
 // Real in-memory database — the routes' db side effects (like marking imported emails synced) are the
 // behavior under test, so nothing is mocked.
@@ -61,5 +62,87 @@ describe('PATCH /applications/:id', () => {
 		});
 		expect(response.status).toBe(200);
 		expect((await db.getSyncedMessageIds(['patched-msg-1'])).has('patched-msg-1')).toBe(true);
+	});
+});
+
+const postImport = (body: Record<string, unknown>) =>
+	fetch(`${baseUrl}/api/applications/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+describe('POST /applications/import', () => {
+	it('should apply a whole plan — create, update, strip, delete, and sync-marking — in one call', async () => {
+		const target = await db.create({
+			company: 'Acme', role: 'SWE', status: 'applied', interview_step: null,
+			date_applied: '2026-06-01', last_activity: null, job_url: null, notes: null,
+			source: 'csv', gmail_thread_id: null,
+		});
+		const absorbed = await db.create({
+			company: 'Acme Dup', role: 'SWE', status: 'applied', interview_step: null,
+			date_applied: '2026-06-01', last_activity: null, job_url: null, notes: null,
+			source: 'gmail', gmail_thread_id: null,
+			emails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }],
+		});
+		const response = await postImport({
+			creates: [{ preservedId: '4210', data: { company: 'NewCo', role: 'DS', source: 'csv', emails: [{ messageId: 'm-new', category: 'applied', date: '2026-06-15' }] } }],
+			updates: [{ id: target.id, changes: { status: 'rejected', emails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }] }, adoptId: null }],
+			strips: [{ id: absorbed.id, messageIds: ['m-moved'] }],
+			deletes: [absorbed.id],
+			syncEmails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }, { messageId: 'm-new', category: 'applied', date: '2026-06-15' }],
+		});
+		expect(response.status).toBe(200);
+		const result = await response.json() as { added: number; updated: number; deleted: number; createdIds: string[] };
+		expect(result).toMatchObject({ added: 1, updated: 1, deleted: 1 });
+		expect(result.createdIds).toEqual(['4210']);
+
+		const board = await db.getAll();
+		expect(board.find(application => application.id === absorbed.id)).toBeUndefined();
+		expect(board.find(application => application.id === target.id)?.emails.map(email => email.messageId)).toEqual(['m-moved']);
+		expect(await db.getSyncedMessageIds(['m-moved', 'm-new'])).toEqual(new Set(['m-moved', 'm-new']));
+	});
+
+	it('should refuse to run while a Gmail sync is running (mutual exclusion)', async () => {
+		setSyncRunning(true);
+		try {
+			const response = await postImport({ creates: [], updates: [], strips: [], deletes: [], syncEmails: [] });
+			expect(response.status).toBe(409);
+		} finally {
+			setSyncRunning(false);
+		}
+	});
+
+	it('should reject the whole plan (400, nothing written) when a create is invalid', async () => {
+		const response = await postImport({
+			creates: [
+				{ preservedId: null, data: { company: 'Valid Co', role: 'SWE' } },
+				{ preservedId: null, data: { role: 'missing company' } },
+			],
+			updates: [], strips: [], deletes: [], syncEmails: [],
+		});
+		expect(response.status).toBe(400);
+		expect((await db.getAll()).length).toBe(0);   // all-or-nothing: the valid create must not slip through
+	});
+
+	it('should treat a malformed preservedId as no id instead of failing', async () => {
+		const response = await postImport({
+			creates: [{ preservedId: 'DROP TABLE', data: { company: 'Safe Co', role: 'SWE' } }],
+			updates: [], strips: [], deletes: [], syncEmails: [],
+		});
+		expect(response.status).toBe(200);
+		const [created] = await db.getAll();
+		expect(created.company).toBe('Safe Co');
+		expect(/^[1-9]\d*$/.test(created.id)).toBe(true);   // ordinary autoincrement id
+	});
+
+	it('should reject an update whose changes fail validation, leaving the board untouched', async () => {
+		const target = await db.create({
+			company: 'Acme', role: 'SWE', status: 'applied', interview_step: null,
+			date_applied: null, last_activity: null, job_url: null, notes: null,
+			source: 'csv', gmail_thread_id: null,
+		});
+		const response = await postImport({
+			creates: [], strips: [], deletes: [], syncEmails: [],
+			updates: [{ id: target.id, changes: { status: 'not-a-status' }, adoptId: null }],
+		});
+		expect(response.status).toBe(400);
+		expect((await db.getAll())[0].status).toBe('applied');
 	});
 });
