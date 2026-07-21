@@ -40,6 +40,12 @@ function cleanGeneralRole(s: string | null | undefined): string | null {
 	s = s.replace(/^[A-Z][\w&.]*'s\s+/, '').trim();          // drop a company possessive: "Vestwell's QA Engineer" → "QA Engineer"
 	if (!/^(?:\([^)]*\)\s*)?[A-Z0-9]/.test(s)) return null;  // kills gerund leaks ("exploring the…"); a leading "(Entry level)" qualifier is allowed
 	s = tidyRole(s);
+	// A bare work-mode word is a location/mode tag, never a title on its own — reject "Remote" / "Hybrid" /
+	// "Onsite" (and slash/comma/dash combos like "Remote / Hybrid", plus the dangling "Remote /" that tidyRole
+	// leaves after stripping the second mode). Guards the "[Role] - Remote - [req]" subject shape ("Software
+	// Engineer II IS - Remote - 443085"), where a company/role split leaves just the work mode. Only the WHOLE
+	// string is matched, so a real title that merely starts with one ("Remote Support Engineer") stays.
+	if (/^(?:remote|hybrid|on[\s-]?site)\b(?:\s*[/,-]\s*(?:remote|hybrid|on[\s-]?site)\b)*[\s/,-]*$/i.test(s)) return null;
 	if (s.length < 2 || s.length > 80) return null;          // 80 (not 60) so long real titles survive ("(Entry level) Full Stack Software Engineer (LLM application Development)")
 	if (/\bposition\b/i.test(s)) return null;                // "Software Engineer II, Off position here" → overran
 	// Reject sentence fragments where a recovery pattern over-captured prose — verbs/auxiliaries/pronouns
@@ -84,11 +90,17 @@ export function recoverRoleFromBody(body: string, subject = ''): string | null {
 	const applicationForClause = body.match(/\b(?:application|applied|apply(?:ing)?)\s+for\s+(?:the\s+|our\s+|an?\s+)?([A-Z][^.!?\n,]*?)(?=,|\s+(?:and|position|role|opening|opportunity|job|at|with|here)\b|[.!?\n]|$)/);
 	// Subject "application for [Role]" — may carry a trailing "- <req>" (tidyRole strips it).
 	const subjApplicationFor = subject.match(/\bapplication for\s+(?:the\s+)?(.+)$/i);
+	// Subject "[Company] - … applying to [Role]" — the ATS gratitude line Workday/others use ("Leidos -
+	// Thank You For Applying to Mid-Level Software Engineer"), where the LLM often returns a null role. The
+	// leading "[Company] -/:" prefix is the signal that the phrase after "applying to" is the ROLE, not the
+	// company — without that guard this would grab a company from a bare "Thank you for applying to Amazon".
+	const subjCompanyDashApplyingTo = subject.match(/^.+?\s[-–:]\s*.*?\bapplying to\s+(?:the\s+)?(.+)$/i);
 	// "the [Role] role|position has|since|is" — anchorless rejection/confirmation prose; LOWEST priority
 	// (broadest). Paren-aware so a parenthetical req with an inner period ("(46_2026.1)") doesn't truncate.
 	const theRolePhrase = body.match(/\bthe\s+([A-Z](?:[^.!?\n()]|\([^)]*\))*?)\s+(?:role|position|opening|opportunity)\b/);
 	return cleanGeneralRole(subjJobApplication?.[1]) ?? cleanGeneralRole(positionOfRole?.[1]) ?? cleanGeneralRole(forTheRole?.[1])
 		?? cleanGeneralRole(inTheRole?.[1]) ?? cleanGeneralRole(ourRole?.[1]) ?? cleanGeneralRole(applicationForTheJob?.[1])
 		?? cleanGeneralRole(followingJob?.[1]) ?? cleanGeneralRole(joiningAs?.[1]) ?? cleanGeneralRole(applicationForColon?.[1])
-		?? cleanGeneralRole(applicationForClause?.[1]) ?? cleanGeneralRole(subjApplicationFor?.[1]) ?? cleanGeneralRole(theRolePhrase?.[1]);
+		?? cleanGeneralRole(applicationForClause?.[1]) ?? cleanGeneralRole(subjApplicationFor?.[1])
+		?? cleanGeneralRole(subjCompanyDashApplyingTo?.[1]) ?? cleanGeneralRole(theRolePhrase?.[1]);
 }

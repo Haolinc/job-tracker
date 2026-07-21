@@ -51,7 +51,9 @@ export const AUTOMATED_FROM = /calendly\./i;
 // Staffing-agency COLD OUTREACH (a recruiter pitching a contract role), not an application event. Matched
 // on the BODY because the subject is usually just the role title. Each phrase is mass-mail-specific and
 // ~never appears in an employer's own confirmation/rejection, so a single hit is enough to skip the email.
-export const RECRUITER_OUTREACH = /\bplanning to make a change\b|\bknow of a friend\b|\breferral bonus\b|\bour records (?:show|indicate)\b|\bmy current opening|\beven if we have spoken recently\b|\b(?:c2c|corp[\s-]?to[\s-]?corp|w-?2|1099|contract to hire)\b/i;
+// The agency self-identifiers ("recruitment firm", "partnering with our client") catch third-party sourcing
+// where the pitched company is only a "client" — e.g. a Crossing Hurdles email sourcing for its client RWS.
+export const RECRUITER_OUTREACH = /\bplanning to make a change\b|\bknow of a friend\b|\breferral bonus\b|\bour records (?:show|indicate)\b|\bmy current opening|\beven if we have spoken recently\b|\b(?:c2c|corp[\s-]?to[\s-]?corp|w-?2|1099|contract to hire)\b|\b(?:recruit(?:ing|ment)|staffing)\s+(?:firm|agency)\b|\bpartnering with (?:our|their|the)\s+clients?\b/i;
 
 /** True when an email is automated/non-application noise and should be skipped before parsing/LLM. */
 export function isIgnorableEmail(subject: string, from: string, body: string): boolean {

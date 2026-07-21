@@ -49,6 +49,14 @@ describe('RECRUITER_OUTREACH', () => {
 	});
 
 	it.each([
+		'We are a recruitment firm partnering with our client RWS on this role.',   // third-party sourcing (RWS)
+		'Our staffing agency has an immediate opening for a Speech AI Evaluation Specialist.',
+		'I am partnering with the client to fill this contract position.',
+	])('flags third-party staffing-agency sourcing: %j', (body) => {
+		expect(RECRUITER_OUTREACH.test(body)).toBe(true);
+	});
+
+	it.each([
 		'Thank you for applying. We will review your application and keep an eye on our current openings.',
 		'After careful consideration we have decided to move forward with other candidates.',
 		'A recruiter will review your information to determine if you best meet the qualifications.',
