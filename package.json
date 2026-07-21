@@ -1,6 +1,6 @@
 {
 	"name": "job-tracker",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"private": true,
 	"description": "Tracks your job applications by classifying Gmail messages with a local LLM.",
 	"repository": "https://github.com/Haolinc/job-tracker",
