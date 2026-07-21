@@ -9,6 +9,10 @@ function csvCell(value: unknown): string {
 }
 
 const COLUMNS: { header: string; value: (a: Application) => string }[] = [
+	// The application's own id — lets a re-import on the same machine find the exact row even when
+	// company, role, and emails were all edited. Machine-local: on another install it can name an
+	// unrelated application, so re-import confirms before overwriting anything it matched.
+	{ header: 'ID',                value: a => a.id },
 	{ header: 'Company',           value: a => a.company },
 	{ header: 'Role',              value: a => a.role },
 	{ header: 'Status',            value: a => STATUS_LABELS[a.status] ?? a.status },

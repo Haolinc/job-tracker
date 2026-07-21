@@ -1,11 +1,13 @@
 import type { Application } from './types';
 
 // Factory for a valid Application in tests — override only the fields a test cares about.
+// Ids default to numeric strings, matching what SQLite actually hands out (the CSV import treats a
+// non-numeric id as "no id", so realistic ids matter for round-trip tests).
 let seq = 0;
 export function makeApp(overrides: Partial<Application> = {}): Application {
 	seq += 1;
 	return {
-		id: `app-${seq}`,
+		id: String(seq),
 		company: 'Acme',
 		role: 'Software Engineer',
 		status: 'applied',

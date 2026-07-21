@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Application, NewApplication, Filters, SyncResult, SyncProgress } from './types';
+import type { Application, NewApplication, EmailRef, Filters, SyncResult, SyncProgress } from './types';
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
 
@@ -17,6 +17,27 @@ export const deleteApplication = (id: string): Promise<void> =>
 
 export const resetDatabase = (): Promise<{ applications: number; syncedEmails: number }> =>
 	api.delete('/applications/all').then(r => r.data as { applications: number; syncedEmails: number });
+
+// A reconciled CSV import plan (see utils/importCsv buildImportPlan) — applied server-side in one transaction.
+export interface ImportApplyPayload {
+	creates: { preservedId: string | null; data: NewApplication }[];
+	updates: { id: string; changes: Partial<Application>; adoptId: string | null }[];
+	strips: { id: string; messageIds: string[] }[];   // email-uniqueness strips off unmatched applications
+	deletes: string[];                                // applications merged away (every email moved off them)
+	syncEmails: EmailRef[];                           // every email ref in the file → synced-email skip list
+}
+
+export interface ImportApplyResult {
+	added: number;
+	updated: number;
+	deleted: number;
+	staleSkipped: number;   // plan entries whose target no longer matched the board
+	createdIds: string[];
+	updatedIds: string[];
+}
+
+export const importApplications = (payload: ImportApplyPayload): Promise<ImportApplyResult> =>
+	api.post('/applications/import', payload).then(r => r.data as ImportApplyResult);
 
 export const getAuthStatus = (): Promise<{ connected: boolean }> =>
 	api.get('/auth/status').then(r => r.data as { connected: boolean });
