@@ -14,6 +14,10 @@ export function extractJobNumber(subject: string, body: string): string | null {
 	const text = `${subject}\n${body}`;
 	// Any candidate must carry ≥5 digits so a bare year ("2026"), level ("L3"), or short count isn't taken.
 	const enoughDigits = (s: string) => (s.match(/[0-9]/g)?.length ?? 0) >= 5;
+	// An EXPLICIT req/job-number label ("Job Req ID:", "Requisition:") removes the year/level ambiguity the
+	// ≥5-digit floor guards against, so a shorter labelled number is trustworthy ("Job Req ID: 2441" → "2441",
+	// a real McDonald's confirmation). Still require ≥3 digits so a stray "Req 5" / level isn't taken.
+	const enoughDigitsWhenLabeled = (s: string) => (s.match(/[0-9]/g)?.length ?? 0) >= 3;
 	// A requisition is kept AS WRITTEN — its short letter prefix/suffix and internal hyphens are the
 	// company's own format ("2026-0013799", "722493BR", "R0859802"), so the confirmation and the later
 	// status/rejection email for one posting carry the identical string and still match exactly.
@@ -26,7 +30,7 @@ export function extractJobNumber(subject: string, body: string): string | null {
 	const labeled = text.match(
 		new RegExp(`\\b(?:job\\s*(?:number|id|no\\.?|#)|req(?:uisition)?(?:\\s*(?:id|number|no\\.?|#))?|requisition)[\\s:#]+(${TOKEN})`, 'i'),
 	);
-	if (labeled && enoughDigits(labeled[1])) return labeled[1];
+	if (labeled && enoughDigitsWhenLabeled(labeled[1])) return labeled[1];
 	// 1b. A bare "ID: 3092179" — the colon makes it an explicit label (not a stray "id" in prose). Amazon
 	// posts the job id this way: "...your interest in Software Engineer (ID: 3092179)".
 	const idLabel = text.match(new RegExp(`\\bID\\s*[:#]\\s*(${TOKEN})`, 'i'));

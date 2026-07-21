@@ -57,6 +57,8 @@ describe('extractJobNumber', () => {
 		['We Received Your Application for Software Engineer I – 31143106', 'b', '31143106'],
 		["Got it! Application received for: REQ352476 Associate Engineer", 'b', 'REQ352476'],  // T-Mobile glued
 		['subject', 'Job ID: 12345 ... and a later 67890 elsewhere', '12345'],   // first labelled match wins
+		['subject', 'our open Software Engineer I C# role (Job Req ID: 2441)', '2441'],   // 4-digit labelled req (McDonald's) — below the ≥5 floor, kept because explicitly labelled
+		['subject', 'graduated in 2026 and applied', null],                       // bare year, NOT labelled → still rejected
 		['subject', 'no requisition here, call us at 1-888-596-2365', null],      // phone, not a req
 		['Software Engineer - Remote', 'Great River, NY. Level 3 role.', null],
 	];
