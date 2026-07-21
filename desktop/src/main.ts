@@ -317,8 +317,8 @@ function confirmInterruptingSync(actionText: string): boolean {
 		type: 'warning',
 		title: 'Sync in progress',
 		message: 'A Gmail sync is still running.',
-		detail: `${actionText} now interrupts it — results are only saved when a sync finishes, so this sync's work would be lost and you would have to sync again.`,
-		buttons: ['Continue anyway', 'Keep syncing'],
+		detail: `Sync results are only saved once a sync finishes. If you continue, this sync's progress will be lost and you'll need to sync again.`,
+		buttons: [`${actionText}`, 'Keep syncing'],
 		defaultId: 1,
 		cancelId: 1,
 	});
