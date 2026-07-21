@@ -15,8 +15,10 @@ import { cleanGeneralRole, recoverRoleFromBody } from './roles';
 //   "Sherpa 6. We really…"                → "Sherpa 6"                  (keeps a numeric token)
 // Continuation tokens may start with a DIGIT so number-bearing names survive ("Sherpa 6", "Section 8");
 // otherwise "Sherpa 6" truncated to "Sherpa" and failed to merge with the un-truncated form.
+// Connectors may repeat between capitalized tokens (`*`, not `?`) so multi-connector names survive —
+// "Office of the New York State Comptroller" has TWO in a row ("of the") and used to die at "Office".
 // The trim is case-SENSITIVE on purpose, so it must not run under a /i regex.
-const PROPER_NOUN_RUN = /^[A-Z][\w.&'()/-]*(?:\s+(?:(?:and|of|the|&)\s+)?[A-Z0-9][\w.&'()/-]*)*/;
+const PROPER_NOUN_RUN = /^[A-Z][\w.&'()/-]*(?:\s+(?:(?:and|of|the|&)\s+)*[A-Z0-9][\w.&'()/-]*)*/;
 
 const GEN_CO  = '([^.,!?\\n]+?)';                            // capture stays within one sentence
 const GEN_END = '(?=[.,!?\\n]|$)';

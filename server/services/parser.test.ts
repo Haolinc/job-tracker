@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { gmail_v1 } from 'googleapis';
 import { canonicalReqId, extractJobNumber } from './parser/reqId';
-import { tidyRole, recoverRoleFromBody } from './parser/roles';
+import { tidyRole, recoverRoleFromBody, cleanGeneralRole } from './parser/roles';
 import { parseEmail } from './parser/templates';
 import { extractGeneralCompanyRole } from './parser/companyRole';
 import { buildBody } from './gmail/body';
@@ -223,6 +223,17 @@ describe('parseEmail', () => {
 			if (c.code) expect(res!.classifier_code).toBe(c.code);
 		});
 	}
+
+	// Workday emails are per-company customised; the general template mis-reads them (here it would grab the
+	// role "Mid-Level Software Engineer" as the company), so a @myworkday.com sender must defer to the LLM.
+	it('defers a Workday (@myworkday.com) email to the LLM instead of mis-parsing (Leidos)', () => {
+		const res = parseEmail(
+			'Leidos -Thank You For Applying to Mid-Level Software Engineer',
+			'leidos@myworkday.com',
+			'Thank you for your interest in working at Leidos! We have received your application. You can monitor the status through your Workday Leidos Account.',
+		);
+		expect(res).toBeNull();
+	});
 });
 
 // ── buildBody → parseEmail (LinkedIn, end-to-end) ─────────────────────────────
@@ -273,6 +284,10 @@ describe('extractGeneralCompanyRole', () => {
 		const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
 		expect(r?.company).toContain('Lockheed');
 	});
+	it('keeps a multi-connector company name (Comptroller)', () => {
+		const r = extractGeneralCompanyRole('x', 'Thank you for applying to Office of the New York State Comptroller. Your application has been received.');
+		expect(r?.company).toBe('Office of the New York State Comptroller');
+	});
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
 	});
@@ -292,9 +307,32 @@ describe('recoverRoleFromBody', () => {
 		['We received your application for: R0859802 Software Development Engineer (Open).', 'None', 'Software Development Engineer (Open)'],
 		['Your application has been submitted for the following position(s):\nSoftware Engineer Opportunities in NJ 722493BR\nNext steps below.', 'None', 'Software Engineer Opportunities in NJ'],
 		['Your application has been received.', 'Job Application: Hao Lin Chen - 70363 Junior Java Developer on 04/03/2026', 'Junior Java Developer'],
+		// "[Company] - … Applying to [Role]" subject (Leidos Workday) — LLM returns null role, recovered here.
+		['Thank you for your interest in working at Leidos! We have received your application.', 'Leidos -Thank You For Applying to Mid-Level Software Engineer', 'Mid-Level Software Engineer'],
+		// False-positive guard: a bare "applying to [Company]" (no "[Company] -" prefix) must NOT become a role.
+		['Thank you for applying. Your application has been received.', 'Thank you for applying to Amazon', null],
 		['Just a plain confirmation with no recognizable title anywhere.', 'None', null],
 	];
 	it.each(cases)('body=%j subject=%j -> %j', (body, subject, expected) => {
 		expect(recoverRoleFromBody(body, subject)).toBe(expected);
+	});
+});
+
+// ── cleanGeneralRole ──────────────────────────────────────────────────────────
+// A bare work-mode word is a location/mode tag, not a title — the "[Role] - Remote - [req]" subject
+// shape (Providence: "Software Engineer II IS - Remote - 443085") must not leave "Remote" as the role.
+describe('cleanGeneralRole', () => {
+	it.each([
+		'Remote',
+		'Remote - 443085',   // tidyRole strips the req tail first, leaving a bare "Remote"
+		'Remote / Hybrid',
+		'Hybrid',
+		'On-site',
+		'Onsite',
+	])('rejects a bare work-mode role: %j', (role) => {
+		expect(cleanGeneralRole(role)).toBeNull();
+	});
+	it('keeps a real title that starts with a work-mode word', () => {
+		expect(cleanGeneralRole('Remote Support Engineer')).toBe('Remote Support Engineer');
 	});
 });

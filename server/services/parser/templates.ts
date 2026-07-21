@@ -37,6 +37,12 @@ function generalStatus(body: string): 'applied' | 'rejected' | null {
  * equal-to-or-more-accurate than the LLM on every fired case.
  */
 function parseGeneralApplicationPattern(subject: string, from: string, body: string): Classification | null {
+	// Workday (*@myworkday.com) is per-company customised, so the general extraction mis-reads it — e.g.
+	// "Leidos - Thank You For Applying to Mid-Level Software Engineer" makes "applying to [Company]" grab the
+	// ROLE as the company. The dispatcher already declares Workday the AI classifier's job (the prompt knows
+	// "leidos@myworkday.com" → "Leidos"), so defer these instead of emitting a wrong deterministic result.
+	if (/@myworkday\.com/i.test(from)) return null;
+
 	const extracted = extractGeneralCompanyRole(subject, body);
 	if (!extracted) return null;
 
