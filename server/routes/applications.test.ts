@@ -68,19 +68,18 @@ describe('PATCH /applications/:id', () => {
 const postImport = (body: Record<string, unknown>) =>
 	fetch(`${baseUrl}/api/applications/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+// A saved application with sensible defaults — override only what a test cares about.
+const seed = (overrides: Partial<Parameters<typeof db.create>[0]> = {}) =>
+	db.create({
+		company: 'Acme', role: 'SWE', status: 'applied', interview_step: null,
+		date_applied: '2026-06-01', last_activity: null, job_url: null, notes: null,
+		source: 'csv', gmail_thread_id: null, ...overrides,
+	});
+
 describe('POST /applications/import', () => {
 	it('should apply a whole plan — create, update, strip, delete, and sync-marking — in one call', async () => {
-		const target = await db.create({
-			company: 'Acme', role: 'SWE', status: 'applied', interview_step: null,
-			date_applied: '2026-06-01', last_activity: null, job_url: null, notes: null,
-			source: 'csv', gmail_thread_id: null,
-		});
-		const absorbed = await db.create({
-			company: 'Acme Dup', role: 'SWE', status: 'applied', interview_step: null,
-			date_applied: '2026-06-01', last_activity: null, job_url: null, notes: null,
-			source: 'gmail', gmail_thread_id: null,
-			emails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }],
-		});
+		const target = await seed();
+		const absorbed = await seed({ company: 'Acme Dup', source: 'gmail', emails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }] });
 		const response = await postImport({
 			creates: [{ preservedId: '4210', data: { company: 'NewCo', role: 'DS', source: 'csv', emails: [{ messageId: 'm-new', category: 'applied', date: '2026-06-15' }] } }],
 			updates: [{ id: target.id, changes: { status: 'rejected', emails: [{ messageId: 'm-moved', category: 'rejected', date: '2026-06-10' }] }, adoptId: null }],
@@ -133,11 +132,7 @@ describe('POST /applications/import', () => {
 	});
 
 	it('should reject an update whose changes fail validation, leaving the board untouched', async () => {
-		const target = await db.create({
-			company: 'Acme', role: 'SWE', status: 'applied', interview_step: null,
-			date_applied: null, last_activity: null, job_url: null, notes: null,
-			source: 'csv', gmail_thread_id: null,
-		});
+		const target = await seed({ date_applied: null });
 		const response = await postImport({
 			creates: [], strips: [], deletes: [], syncEmails: [],
 			updates: [{ id: target.id, changes: { status: 'not-a-status' }, adoptId: null }],

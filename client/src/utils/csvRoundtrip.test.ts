@@ -13,6 +13,12 @@ const emails: EmailRef[] = [
 const planFor = (csvApps: Application[], board: Application[]) =>
 	buildImportPlan(parseApplicationsCsv(applicationsToCsv(csvApps)), board);
 
+// A release-1.0.0 export had no ID column. Drop the first cell of every line to turn a current export
+// into a 1.0.0-shaped file. The id is always first and is a bare integer (never quoted, no comma), so
+// slicing past the first comma is safe even when later cells (Notes) are quoted and contain commas.
+const dropIdColumn = (csv: string) =>
+	csv.split(/\r?\n/).map(line => line.slice(line.indexOf(',') + 1)).join('\n');
+
 describe('CSV export → import round-trip', () => {
 	it('should preserve the Gmail account and tracked emails across an export/import', () => {
 		const app = makeApp({ company: 'CVS Health', role: 'SWE', account: 'me@work.com', emails });
@@ -26,6 +32,19 @@ describe('CSV export → import round-trip', () => {
 		const [imported] = parseApplicationsCsv(applicationsToCsv([app])).apps;
 		expect(imported.account).toBeNull();
 		expect(imported.emails).toEqual([]);
+	});
+
+	it('should round-trip a valid ID column so a re-import matches purely by id (rule 1, no-op)', () => {
+		const board = [
+			makeApp({ id: '4374', company: 'Distyl', role: 'SWE', emails }),
+			makeApp({ id: '4210', company: 'Beta Corp', role: 'PM', emails: [] }),
+		];
+		const parsed = parseApplicationsCsv(applicationsToCsv(board));
+		expect(parsed.apps.map(app => app.id)).toEqual(['4374', '4210']);   // the ID survives export → parse verbatim
+		const plan = buildImportPlan(parsed, board);
+		expect(plan.creates).toEqual([]);
+		expect(plan.updates).toEqual([]);   // every field round-trips → no diff
+		expect(plan.skipped).toBe(2);
 	});
 
 	it('should treat a malformed id cell (text, zero, negative, decimal) as no id', () => {
@@ -59,6 +78,19 @@ describe('CSV pre-validation (file rejection)', () => {
 		const distylAi = makeApp({ company: 'Distyl AI', role: 'SWE', emails: [{ messageId: 'm-ai-applied', category: 'applied', date: '2026-06-28' }, sharedRejection] });
 		expect(() => parseApplicationsCsv(applicationsToCsv([distyl, distylAi])))
 			.toThrow(/Email m-shared-rej appears in rows 2, 3 \(Distyl, Distyl AI\)/);
+	});
+
+	it('should name every row when an application id repeats across three rows', () => {
+		const app = makeApp({ id: '5', company: 'Acme', role: 'SWE' });
+		const csv = applicationsToCsv([app, { ...app, company: 'Acme Two' }, { ...app, company: 'Acme Three' }]);
+		expect(() => parseApplicationsCsv(csv))
+			.toThrow(/Application id 5 appears in rows 2, 3, 4 \(Acme, Acme Two, Acme Three\)/);
+	});
+
+	it('should NOT reject a file whose rows have blank ids and unique emails', () => {
+		// Blank ids are exempt (they just mean "no id"); a clean file must pass pre-validation untouched.
+		const csv = 'Company,Role,Emails\r\nAcme,SWE,applied|m-1|2026-01-01\r\nBeta,PM,applied|m-2|2026-01-02';
+		expect(() => parseApplicationsCsv(csv)).not.toThrow();
 	});
 
 	it('should list every duplicate problem in one rejection, not just the first', () => {
@@ -201,6 +233,36 @@ describe('import plan — matching rules', () => {
 		const plan = buildImportPlan(parseApplicationsCsv('Company,Role,Status\r\nAcme,SWE,Rejected'), [app]);
 		expect(plan.updates).toHaveLength(1);
 		expect(plan.updates[0].changes).toEqual({ status: 'rejected' });
+	});
+});
+
+describe('import plan — 1.0.0 fallback (no ID column)', () => {
+	it('should re-import a whole ID-less export of the board as a no-op (never duplicates the board)', () => {
+		const board = [
+			makeApp({ company: 'Acme', role: 'SWE', emails }),                    // has emails → matches by rule 2
+			makeApp({ company: 'Beta Corp', role: 'Backend Dev', emails: [] }),   // email-less → matches by rule 3
+		];
+		const legacyCsv = dropIdColumn(applicationsToCsv(board));
+		const plan = buildImportPlan(parseApplicationsCsv(legacyCsv), board);
+		expect(plan.creates).toEqual([]);   // the upgrade path must not re-add applications already on the board
+		expect(plan.updates).toEqual([]);
+		expect(plan.moves).toEqual([]);
+		expect(plan.deletes).toEqual([]);
+		expect(plan.skipped).toBe(2);
+	});
+
+	it('should add only the genuinely new manual row from a 1.0.0 file, matching the rest', () => {
+		const board = [
+			makeApp({ company: 'Acme', role: 'SWE', emails }),
+			makeApp({ company: 'Beta Corp', role: 'Backend Dev', emails: [] }),
+		];
+		// The legacy file also carries a brand-new manual application — no id, no emails, new company+role.
+		const legacyCsv = `${dropIdColumn(applicationsToCsv(board))}\nGamma LLC,Designer,Applied`;
+		const plan = buildImportPlan(parseApplicationsCsv(legacyCsv), board);
+		expect(plan.creates).toHaveLength(1);
+		expect(plan.creates[0].fields.company).toBe('Gamma LLC');
+		expect(plan.creates[0].preservedId).toBeNull();   // 1.0.0 rows carry no id to preserve
+		expect(plan.skipped).toBe(2);                      // the two existing rows matched, unchanged
 	});
 });
 
