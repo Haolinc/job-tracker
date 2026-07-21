@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
 import { classifyEmail } from '../services/classifier';
-import { setSyncRunning } from '../services/syncState';
+import { setSyncRunning, setImportRunning } from '../services/syncState';
 import type { EmailResult } from '../types';
 
 // classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
@@ -89,6 +89,18 @@ describe('POST /sync concurrency guard', () => {
 			expect(body.error).toContain('already running');
 		} finally {
 			setSyncRunning(false);
+		}
+	});
+
+	it('should reject a sync with 409 while a CSV import is being applied (mutual exclusion)', async () => {
+		setImportRunning(true);
+		try {
+			const response = await fetch(`${baseUrl}/api/gmail/sync`, { method: 'POST' });
+			expect(response.status).toBe(409);
+			const body = await response.json() as { error: string };
+			expect(body.error).toContain('CSV import');
+		} finally {
+			setImportRunning(false);
 		}
 	});
 });

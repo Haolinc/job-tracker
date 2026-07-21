@@ -1,1 +1,3 @@
-- Initial release
+- Fix csv import issues
+- Application delete confirmation now use custom modal instead of javascript alert
+- Revise rest confirmation wording and launcher stop syncing confirmation text

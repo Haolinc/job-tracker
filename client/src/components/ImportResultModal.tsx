@@ -43,31 +43,37 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 				role="dialog"
 				aria-modal="true"
 				onClick={e => e.stopPropagation()}
-				className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center"
+				className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center flex flex-col max-h-[85vh]"
 			>
-				<div className={`mx-auto mb-4 flex items-center justify-center w-12 h-12 rounded-full text-2xl font-bold ${tone.ring}`}>
+				<div className={`mx-auto mb-4 flex items-center justify-center w-12 h-12 rounded-full text-2xl font-bold flex-none ${tone.ring}`}>
 					{tone.icon}
 				</div>
 
-				<h2 className="text-lg font-semibold text-gray-800">{outcome.title}</h2>
-				{outcome.message && <p className="mt-2 text-sm text-gray-500">{outcome.message}</p>}
+				<h2 className="text-lg font-semibold text-gray-800 flex-none">{outcome.title}</h2>
 
-				{outcome.stats && outcome.stats.length > 0 && (
-					<div data-testid="import-result-stats" className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">
-						{outcome.stats.map(s => (
-							<div key={s.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
-								<span className="text-gray-600">{s.label}</span>
-								<span className={`font-semibold tabular-nums ${s.cls ?? 'text-gray-800'}`}>{s.value}</span>
-							</div>
-						))}
-					</div>
-				)}
+				{/* Scrolls when the body outgrows the dialog — a file rejection can list dozens of duplicate
+				    ids — so the header above and the Done button below always stay in view. */}
+				<div className="min-h-0 overflow-y-auto">
+					{/* pre-line: a file-rejection message lists one problem per line (duplicate ids, etc.) */}
+					{outcome.message && <p className="mt-2 text-sm text-gray-500 whitespace-pre-line">{outcome.message}</p>}
+
+					{outcome.stats && outcome.stats.length > 0 && (
+						<div data-testid="import-result-stats" className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">
+							{outcome.stats.map(s => (
+								<div key={s.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
+									<span className="text-gray-600">{s.label}</span>
+									<span className={`font-semibold tabular-nums ${s.cls ?? 'text-gray-800'}`}>{s.value}</span>
+								</div>
+							))}
+						</div>
+					)}
+				</div>
 
 				<button
 					data-testid="import-result-done"
 					ref={okRef}
 					onClick={onClose}
-					className="mt-5 w-full px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+					className="mt-5 flex-none w-full px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
 				>
 					Done
 				</button>
