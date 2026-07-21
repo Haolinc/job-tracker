@@ -14,9 +14,12 @@ export default function ResetConfirmModal({ applicationCount, resetting, onCance
 				<h2 className="text-lg font-bold text-gray-900 text-center mb-1">Reset database?</h2>
 				<p className="text-sm text-gray-500 text-center mb-6">
 					This deletes <span className="font-semibold text-gray-700">all {applicationCount} applications</span> and
-					clears the Gmail sync history, so the next sync re-processes everything from scratch.
-					This cannot be undone.
+					clears the Gmail sync history. Next sync will re-processes everything from scratch.
+					
 				</p>
+                <p className="text-sm text-gray-500 text-center mb-6">
+                    This cannot be undone.
+                </p>
 				<div className="flex gap-3">
 					<button
 						data-testid="reset-cancel"
@@ -31,7 +34,7 @@ export default function ResetConfirmModal({ applicationCount, resetting, onCance
 						disabled={resetting}
 						className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
 					>
-						{resetting ? 'Resetting…' : 'Yes, reset everything'}
+						{resetting ? 'Resetting…' : 'Reset'}
 					</button>
 				</div>
 			</div>
