@@ -6,7 +6,7 @@ import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
 import Filters from './components/Filters';
 import Toolbar, { type View } from './components/Toolbar';
-import ResetConfirmModal from './components/ResetConfirmModal';
+import WarningConfirmDialog from './components/WarningConfirmDialog';
 import ImportResultModal, { type ImportOutcome } from './components/ImportResultModal';
 import ImportConfirmModal from './components/ImportConfirmModal';
 import { getApplications, importApplications, resetDatabase, type ImportApplyPayload, type ImportApplyResult } from './api';
@@ -33,6 +33,10 @@ export default function App() {
 	const [pendingImport, setPendingImport] = useState<ImportPlan | null>(null);
 	const [showResetConfirm, setShowResetConfirm] = useState(false);
 	const [resetting, setResetting] = useState(false);
+	// The application awaiting delete confirmation in the styled dialog (null = dialog closed).
+	const [pendingDelete, setPendingDelete] = useState<Application | null>(null);
+	const [deleting, setDeleting] = useState(false);
+	const [deleteError, setDeleteError] = useState<string | null>(null);
 
 	useEffect(() => {
 		fetchAll(filters);
@@ -66,13 +70,25 @@ export default function App() {
 		fetchAll(filters);
 	};
 
-	const handleDelete = async (id: string) => {
-		if (confirm('Delete this application?')) {
-			try {
-				await remove(id);
-			} catch {
-				alert('Failed to delete. Please try again.');
-			}
+	// Open the styled confirm dialog (replacing the browser's native confirm); the delete itself runs
+	// in confirmDelete once the user approves.
+	const handleDelete = (id: string) => {
+		const applicationToDelete = applications.find(application => application.id === id);
+		if (!applicationToDelete) return;
+		setDeleteError(null);
+		setPendingDelete(applicationToDelete);
+	};
+
+	const confirmDelete = async () => {
+		if (!pendingDelete) return;
+		setDeleting(true);
+		try {
+			await remove(pendingDelete.id);
+			setPendingDelete(null);
+		} catch {
+			setDeleteError('Failed to delete. Please try again.');
+		} finally {
+			setDeleting(false);
 		}
 	};
 
@@ -279,12 +295,34 @@ export default function App() {
 			)}
 
 			{showResetConfirm && (
-				<ResetConfirmModal
-					applicationCount={applications.length}
-					resetting={resetting}
+				<WarningConfirmDialog
+					testIdPrefix="reset"
+					title="Reset database?"
+					confirmLabel="Reset"
+					busyLabel="Resetting…"
+					busy={resetting}
 					onCancel={() => setShowResetConfirm(false)}
 					onConfirm={handleReset}
-				/>
+				>
+					This deletes <span className="font-semibold text-gray-700">all {applications.length} applications</span> and
+					clears the Gmail sync history — the next sync re-processes everything from scratch. This cannot be undone.
+				</WarningConfirmDialog>
+			)}
+
+			{pendingDelete && (
+				<WarningConfirmDialog
+					testIdPrefix="delete"
+					title="Delete this application?"
+					confirmLabel="Delete"
+					busyLabel="Deleting…"
+					busy={deleting}
+					error={deleteError}
+					onCancel={() => setPendingDelete(null)}
+					onConfirm={confirmDelete}
+				>
+					This removes <span className="font-semibold text-gray-700">{pendingDelete.company} — {pendingDelete.role}</span> from
+					your board. This cannot be undone.
+				</WarningConfirmDialog>
 			)}
 		</div>
 	);
