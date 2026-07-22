@@ -240,6 +240,7 @@ export default function App() {
 						exportDisabled={applications.length === 0}
 						onReset={() => setShowResetConfirm(true)}
 						onAdd={() => setModal({})}
+						addDisabled={syncing}
 					/>
 				</div>
 
