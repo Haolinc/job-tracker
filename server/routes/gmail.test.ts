@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
 import { classifyEmail } from '../services/classifier';
-import { setSyncRunning, setImportRunning } from '../services/syncState';
+import { setSyncRunning, setImportRunning, setLastSyncEvent } from '../services/syncState';
 import type { EmailResult } from '../types';
 
 // classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
@@ -102,6 +102,44 @@ describe('POST /sync concurrency guard', () => {
 		} finally {
 			setImportRunning(false);
 		}
+	});
+});
+
+// The snapshot a reopened tab polls to restore its progress bar mid-sync.
+describe('GET /sync/status', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	beforeAll(async () => {
+		const app = express();
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+		setSyncRunning(false);
+		setLastSyncEvent(null);
+	});
+
+	it('reports a running sync and its latest progress event so a reconnecting tab can resume', async () => {
+		setSyncRunning(true);
+		setLastSyncEvent({ phase: 'progress', processed: 12, total: 40, added: 3, updated: 1, skipped: 8 });
+		const response = await fetch(`${baseUrl}/api/gmail/sync/status`);
+		expect(response.status).toBe(200);
+		const body = await response.json() as { running: boolean; event: { phase: string; processed: number; total: number } | null };
+		expect(body.running).toBe(true);
+		expect(body.event).toMatchObject({ phase: 'progress', processed: 12, total: 40 });
+	});
+
+	it('reports not-running when no sync is in flight (the client then ignores any stale event)', async () => {
+		setSyncRunning(false);
+		setLastSyncEvent({ phase: 'done', added: 5, updated: 2, skipped: 1, failed: 0, durationMs: 1234 });
+		const response = await fetch(`${baseUrl}/api/gmail/sync/status`);
+		const body = await response.json() as { running: boolean; event: unknown };
+		expect(body.running).toBe(false);
 	});
 });
 

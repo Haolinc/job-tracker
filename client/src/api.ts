@@ -45,6 +45,17 @@ export const getAuthStatus = (): Promise<{ connected: boolean }> =>
 export const disconnectGmail = (): Promise<{ success: boolean }> =>
 	api.post('/auth/disconnect').then(r => r.data as { success: boolean });
 
+// A single snapshot of the server-side sync, polled by a reconnecting tab to restore its progress bar (the
+// /sync stream only reaches the tab that started the run). `event` is the latest streamed event of any phase;
+// callers pair it with `running` — a false `running` means any event is from a sync that already finished.
+export interface SyncStatus {
+	running: boolean;
+	event: (SyncProgress & { phase?: string; failed?: number; durationMs?: number; error?: string }) | null;
+}
+
+export const getSyncStatus = (): Promise<SyncStatus> =>
+	api.get('/gmail/sync/status').then(r => r.data as SyncStatus);
+
 // Streams newline-delimited JSON progress events; calls onProgress for each, resolves with the final
 // result. Uses fetch (not axios) so we can read the response body incrementally.
 export async function syncGmail(days?: number, onProgress?: (p: SyncProgress) => void): Promise<SyncResult> {
