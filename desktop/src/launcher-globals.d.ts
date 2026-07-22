@@ -51,6 +51,30 @@ interface PullProgress {
 	cancellable?: boolean;
 }
 
+/** Live progress for an in-flight app update (Velopack), so the panel can show one updating line through the
+ *  download → staging → ready phases. Separate from PullProgress (model downloads): an update has its own
+ *  phase wording and a download-only 0-100 percent, not the pull line's per-layer byte shape. */
+interface UpdateProgress {
+	/** The target version being installed. */
+	version: string;
+	/** Where the update is:
+	 *   • 'downloading' — real byte-level progress (percent is a true 0-100 for the download).
+	 *   • 'staging'     — a delta's opaque patch-apply step, which Velopack reports NO progress for; the panel
+	 *                     shows an animated "please wait" line and ignores percent. Full downloads skip this.
+	 *   • 'done'        — downloaded and staged; the real install (the current\ swap) still happens on restart.
+	 *   • 'error'       — the download/stage failed (see message).
+	 */
+	phase: 'downloading' | 'staging' | 'done' | 'error';
+	/** 0-100 for the DOWNLOAD only (meaningful during 'downloading'; 100 on 'done'). Ignored for 'staging',
+	 *  which has no real progress to report. */
+	percent: number;
+	/** Bytes fetched / total for the download (present during 'downloading'). */
+	bytesCompleted?: number;
+	bytesTotal?: number;
+	/** What went wrong (present on 'error'). */
+	message?: string;
+}
+
 /** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live
  *  sync line instead of the per-email log detail. Mirrors the events routes/gmail.ts sends to the browser. */
 interface SyncProgressEvent {
@@ -97,6 +121,8 @@ interface LauncherBridge {
 	onStatus(handler: (status: LauncherStatus) => void): void;
 	/** Live progress for an in-flight model pull, so the panel can show a single updating line. */
 	onPullProgress(handler: (progress: PullProgress) => void): void;
+	/** Live progress for an in-flight app update, so the panel can show a single updating line. */
+	onUpdateProgress(handler: (progress: UpdateProgress) => void): void;
 	/** Live progress for a running Gmail sync, so the panel can show a single updating line. */
 	onSyncProgress(handler: (event: SyncProgressEvent) => void): void;
 }
