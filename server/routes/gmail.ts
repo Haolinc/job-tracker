@@ -16,7 +16,7 @@ import {
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
-import { isSyncRunning, setSyncRunning, isImportRunning } from '../services/syncState';
+import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent } from '../services/syncState';
 import { debug, guiLine } from '../logger';
 import type { EmailResult, Status } from '../types';
 
@@ -184,15 +184,23 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		return;
 	}
 	setSyncRunning(true);
+	// Drop any snapshot from the previous run so a reconnecting browser can't briefly read a stale 'done'
+	// as if it belonged to this sync (see /sync/status below).
+	setLastSyncEvent(null);
 	// Progress streams to the client as newline-delimited JSON: a 'start' event (with the total), a
 	// 'progress' event per email, and a final 'done' event. Once streaming begins the HTTP status is
 	// already 200, so a later error is reported as an 'error' event instead of a 500.
 	let streaming = false;
-	// Every event goes to the HTTP progress stream AND to the GUI channel as a marker line the desktop
-	// launcher turns into its live sync line (stdout only — never the log files).
+	// Every event goes to THREE places: the HTTP progress stream (the tab that started the sync), the GUI
+	// channel as a marker line the desktop launcher turns into its live sync line (stdout only, never the log
+	// files), and the shared snapshot a reconnecting browser reads via /sync/status. The HTTP write is the
+	// only one that can fail — if the browser closed mid-sync — so it's guarded: the sync must run to
+	// completion regardless (its DB writes are the real work), and a reopened tab resumes from the snapshot.
 	const send = (event: Record<string, unknown>) => {
-		res.write(JSON.stringify(event) + '\n');
+		setLastSyncEvent(event);
 		guiLine(`${SYNC_PROGRESS_MARKER} ${JSON.stringify(event)}`);
+		if (res.writableEnded || res.destroyed) return;   // client gone — keep syncing; snapshot + launcher still update
+		try { res.write(JSON.stringify(event) + '\n'); } catch { /* socket died between the check and the write */ }
 	};
 	try {
         const start = Date.now();
@@ -395,14 +403,23 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
         debug(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
 		send({ phase: 'done', added, updated, skipped, failed, durationMs });
-		res.end();
+		if (!res.writableEnded && !res.destroyed) res.end();   // no-op when the browser already disconnected
 	} catch (err) {
 		console.error('Sync error:', err);
-		if (streaming) { send({ phase: 'error', error: errMsg(err, 'Unknown error') }); res.end(); }
+		if (streaming) { send({ phase: 'error', error: errMsg(err, 'Unknown error') }); if (!res.writableEnded && !res.destroyed) res.end(); }
 		else res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
 	} finally {
 		setSyncRunning(false);
 	}
+});
+
+// Lets a browser that reconnects mid-sync (a tab closed and reopened) restore its progress bar: the /sync
+// progress stream belongs to the one request that started the sync, so a fresh page load polls this instead.
+// `running` says whether a sync is live right now; `event` is the latest snapshot (start/warming/progress/
+// done/error). The client only resumes its bar when running is true, so a stale 'done' from an earlier sync
+// is ignored on a cold open.
+router.get('/sync/status', requireAuth, (_req: Request, res: Response) => {
+	res.json({ running: isSyncRunning(), event: getLastSyncEvent() });
 });
 
 export default router;
