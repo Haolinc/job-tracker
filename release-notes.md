@@ -1,3 +1,4 @@
-- Fix csv import issues
-- Application delete confirmation now use custom modal instead of javascript alert
-- Revise rest confirmation wording and launcher stop syncing confirmation text
+- Improve local LLM and parser email extraction logic
+- Revise in-app update text
+- Fix issue on progress bar disappear when the browser is refreshed
+- Disable Add Application button while syncing
