@@ -1,6 +1,6 @@
 {
 	"name": "job-tracker-server",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"type": "commonjs",
 	"scripts": {
 		"start": "tsx index.ts",

@@ -39,7 +39,13 @@ const paths = resolveLauncherPaths();
 
 let controlWindow: BrowserWindow | null = null;
 const log = createLog(() => controlWindow);
-const updater = new Updater(() => controlWindow, log, sendPullProgress);
+const updater = new Updater(
+	() => controlWindow,
+	log,
+	sendUpdateProgress,
+	() => server.stop(),              // keep the server down while an update downloads/installs (it runs from current\)
+	() => { void server.start(); },   // start it on a normal launch, or once the update is declined/deferred/aborted
+);
 const incompleteStore = new IncompleteDownloadStore(paths.incompleteDownloadsPath, log);
 const serverUrl = () => `http://localhost:${readEnvFile(paths.serverEnvPath).get('PORT') || DEFAULT_PORT}`;
 
@@ -57,7 +63,7 @@ let syncRunning = false;
 const server = new ServerManager(paths, log, serverUrl, ollama, () => {
 	if (!server.isRunning && !server.isStarting) syncRunning = false;   // the server is gone — so is its sync
 	void pushStatus();
-}, sendSyncProgress);
+}, sendSyncProgress, () => !updater.isUpdating);   // never (re)start the server under an in-progress update
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +93,11 @@ async function pushStatus(): Promise<void> {
 // Push a model-download progress update to the panel so it can render one live, in-place line.
 function sendPullProgress(progress: PullProgress): void {
 	controlWindow?.webContents.send('launcher:pull-progress', progress);
+}
+
+// Push an app-update progress update to the panel — its own live line, separate from model pulls.
+function sendUpdateProgress(progress: UpdateProgress): void {
+	controlWindow?.webContents.send('launcher:update-progress', progress);
 }
 
 // Push a sync progress event to the panel — same live-line treatment as model downloads.
@@ -504,8 +515,10 @@ if (!app.requestSingleInstanceLock()) {
 		createControlWindow();
 		controlWindow?.webContents.once('did-finish-load', () => {
 			log('launcher', `Launcher ready (v${app.getVersion()}).`);
-			void server.start();          // auto-start: the panel is for watching, not ceremony
-			updater.checkForUpdates();    // after the panel loads, so its log lines land in the console
+			// Check for an update FIRST, then start the server — the updater starts it once no update is applying
+			// (up to date, or the user declining/deferring). Keeps the server from spinning up while an update
+			// popup is showing, since it runs from current\, the folder Update.exe would swap.
+			updater.checkForUpdatesThenStartServer();
 		});
 		setInterval(() => void pushStatus(), STATUS_POLL_INTERVAL_MS);
 	});

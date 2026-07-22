@@ -10,10 +10,12 @@ interface ToolbarProps {
 	exportDisabled: boolean;
 	onReset: () => void;
 	onAdd: () => void;
+	// Adding while a sync is in flight can hand a new row an id the sync is about to assign — block it until done.
+	addDisabled: boolean;
 }
 
 /** The board/table toggle plus the import / export / reset / add actions in the page header. */
-export default function Toolbar({ view, onViewChange, onImportFile, onExport, exportDisabled, onReset, onAdd }: ToolbarProps) {
+export default function Toolbar({ view, onViewChange, onImportFile, onExport, exportDisabled, onReset, onAdd, addDisabled }: ToolbarProps) {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	return (
@@ -70,7 +72,9 @@ export default function Toolbar({ view, onViewChange, onImportFile, onExport, ex
 			<button
 				data-testid="btn-add-application"
 				onClick={onAdd}
-				className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
+				disabled={addDisabled}
+				title={addDisabled ? 'Wait for the Gmail sync to finish before adding an application' : undefined}
+				className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
 			>
 				+ Add Application
 			</button>

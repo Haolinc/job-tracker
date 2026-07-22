@@ -23,6 +23,7 @@ const launcherBridge: LauncherBridge = {
 	onLog: (handler) => ipcRenderer.on('launcher:log', (_event, line: string) => handler(line)),
 	onStatus: (handler) => ipcRenderer.on('launcher:status', (_event, status: LauncherStatus) => handler(status)),
 	onPullProgress: (handler) => ipcRenderer.on('launcher:pull-progress', (_event, progress: PullProgress) => handler(progress)),
+	onUpdateProgress: (handler) => ipcRenderer.on('launcher:update-progress', (_event, progress: UpdateProgress) => handler(progress)),
 	onSyncProgress: (handler) => ipcRenderer.on('launcher:sync-progress', (_event, syncEvent: SyncProgressEvent) => handler(syncEvent)),
 };
 

@@ -18,9 +18,13 @@ import type { Application, ApplicationFormData, Filters as FiltersType } from '.
 
 export default function App() {
 	const { applications, loading, fetchAll, add, update, remove } = useApplications();
-	const { connected, syncing, progress, lastResult, error: syncError, checkStatus, disconnect, sync } = useGmailSync();
 
 	const [filters, setFilters] = useState<FiltersType>({ search: '' });
+
+	// When a sync this tab RECONNECTED to (reopened mid-sync) finishes, refetch so the board shows its results.
+	// The normal, tab-initiated sync refetches in handleSync instead (it also computes the "new" highlight).
+	const { connected, syncing, progress, lastResult, error: syncError, checkStatus, disconnect, sync } =
+		useGmailSync(() => { void fetchAll(filters); });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
 
@@ -236,6 +240,7 @@ export default function App() {
 						exportDisabled={applications.length === 0}
 						onReset={() => setShowResetConfirm(true)}
 						onAdd={() => setModal({})}
+						addDisabled={syncing}
 					/>
 				</div>
 

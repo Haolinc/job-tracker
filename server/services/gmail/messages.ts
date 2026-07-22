@@ -139,11 +139,11 @@ function buildJobQuery(days: number): string {
 		`newer_than:${days}d`,
 		'-category:promotions',
 		'-category:social',
-		// Exclude your own sent mail — replies / follow-ups ("Re: Interview Request …") are not
-		// employer status updates. Without this, per-message processing classifies them and the
-		// recruiter's quoted subject leaks through (e.g. company "SS&C Incer"). Employer emails
-		// are never from:me, so nothing legitimate is lost.
-		'-from:me',
+		// Exclude your own sent replies / follow-ups ("Re: Interview Request …") — they are not
+		// employer status updates, and per-message processing would classify them and leak the
+		// recruiter's quoted subject through (e.g. company "SS&C Incer"). Employer emails
+		// are never in:sent, so nothing legitimate is lost.
+		'-in:sent',
 		// LinkedIn recommendation emails — cause false-positive "applied" entries.
 		'-subject:"you may be a fit for"',
 		'-subject:"new jobs similar to"',
