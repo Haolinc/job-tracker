@@ -7,6 +7,10 @@
 // PullProgress, SyncProgressEvent) are ambient globals declared in launcher-globals.d.ts, shared with the
 // main-process modules — one definition each, so the compiler catches any drift. A classic script can't
 // import, and this file stays import-free on purpose so it compiles to a plain classic script.
+//
+// The triple-slash reference (a comment directive, NOT an import — it keeps this a classic script) pulls in
+// those ambient types explicitly.
+/// <reference path="./launcher-globals.d.ts" />
 declare const launcher: LauncherBridge;   // exposed by preload.ts via contextBridge
 
 const logConsole = document.getElementById('log-console') as HTMLDivElement;
@@ -159,6 +163,55 @@ launcher.onPullProgress((progress) => {
 	syncDownloadControls();
 	renderPullProgress(progress);
 });
+
+// ── App-update progress ────────────────────────────────────────────────────────
+
+// The update's own live line, distinct from model pulls. The download reports a real 0-100 (the main process
+// rescales a delta's 0-70 band to fill it). The patch-apply step that follows a delta reports NO progress —
+// Velopack runs a patch tool silently — so instead of a fake percent we show "Staging package…" with dots that
+// cycle back and forth, purely to signal the launcher isn't frozen. Full downloads never enter staging. Nothing
+// says "installing": the real install happens on restart, so the finished line reads "restart to install".
+const renderUpdateLine = createLiveLine(logConsole);
+
+// Dots that grow then shrink (". → .. → ... → ..") — the animation for the progress-less staging phase, driven
+// by a local timer since no IPC events arrive while Velopack's patch tool runs.
+const STAGING_DOT_FRAMES = ['.', '..', '...', '..'];
+let stagingDotsTimer: number | null = null;
+
+function stopStagingDots(): void {
+	if (stagingDotsTimer !== null) { window.clearInterval(stagingDotsTimer); stagingDotsTimer = null; }
+}
+
+// Animate the staging line in place until another phase (done/error) arrives and stops it.
+function startStagingDots(label: string): void {
+	if (stagingDotsTimer !== null) return;   // already animating this staging phase
+	let frameIndex = 0;
+	const paintFrame = () => {
+		const dots = STAGING_DOT_FRAMES[frameIndex % STAGING_DOT_FRAMES.length];
+		frameIndex++;
+		renderUpdateLine(`⚙ ${label} — staging package, please wait${dots}`);
+	};
+	paintFrame();   // show immediately rather than after the first interval tick
+	stagingDotsTimer = window.setInterval(paintFrame, 400);
+}
+
+function renderUpdateProgress(progress: UpdateProgress): void {
+	const label = `Update${progress.version ? ` v${progress.version}` : ''}`;
+	// Any event other than an ongoing staging phase ends the dot animation.
+	if (progress.phase !== 'staging') stopStagingDots();
+
+	if (progress.phase === 'error') {
+		renderUpdateLine(`✗ ${label} — ${progress.message ?? 'update failed'}`, { finalize: true, tone: 'error' });
+	} else if (progress.phase === 'done') {
+		renderUpdateLine(`✓ ${label} downloaded — restart to install`, { finalize: true, tone: 'success' });
+	} else if (progress.phase === 'staging') {
+		startStagingDots(label);
+	} else {
+		const bytes = progress.bytesTotal ? `  ${formatBytes(progress.bytesCompleted ?? 0)} / ${formatBytes(progress.bytesTotal)}` : '';
+		renderUpdateLine(`⬇ ${label} — downloading${bytes}  (${progress.percent}%)`);
+	}
+}
+launcher.onUpdateProgress(renderUpdateProgress);
 
 // ── Sync progress ────────────────────────────────────────────────────────────
 

@@ -34,6 +34,9 @@ export class ServerManager {
 		private readonly ollama: OllamaService,
 		private readonly onStateChange: () => void,
 		private readonly onSyncProgress: (event: SyncProgressEvent) => void,
+		// Gate consulted before every (re)start: false blocks the spawn — e.g. an app update is in flight and
+		// the server must stay down so it doesn't lock the current\ folder Update.exe swaps. Defaults to always-on.
+		private readonly canStart: () => boolean = () => true,
 	) {}
 
 	get isRunning(): boolean {
@@ -47,6 +50,12 @@ export class ServerManager {
 	async start(): Promise<void> {
 		if (this.childProcess || this.starting) {
 			this.log('launcher', 'Server is already starting or running.');
+			return;
+		}
+		// An app update is applying: the server runs from current\, the folder Update.exe swaps, so refuse to
+		// (re)start it until the update finishes — a manual Start click or a racing auto-start lands here too.
+		if (!this.canStart()) {
+			this.log('launcher', 'Not starting the server — an app update is in progress.');
 			return;
 		}
 		// Flip to "starting" and tell the panel now, so Start disables immediately — everything below is async

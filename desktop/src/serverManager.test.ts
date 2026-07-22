@@ -141,6 +141,19 @@ describe('ServerManager lifecycle', () => {
 		expect(log).toHaveBeenCalledWith('launcher', expect.stringContaining('already running at http://localhost:3001'));
 	});
 
+	it('should refuse to start when the canStart gate is closed (an app update is in progress)', async () => {
+		const manager = new ServerManager(
+			paths, log, () => 'http://localhost:3001', { ensureRunning } as unknown as OllamaService,
+			onStateChange, onSyncProgress, () => false,   // gate closed
+		);
+
+		await manager.start();
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(manager.isRunning).toBe(false);
+		expect(manager.isStarting).toBe(false);   // the gate check runs before "starting" is flipped on
+		expect(log).toHaveBeenCalledWith('launcher', expect.stringContaining('update is in progress'));
+	});
+
 	it('should clear the starting state when the packaged server build is missing', async () => {
 		paths = { ...paths, runningPackaged: true } as LauncherPaths;
 		existsSyncMock.mockReturnValue(false);
