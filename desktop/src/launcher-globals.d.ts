@@ -78,7 +78,7 @@ interface UpdateProgress {
 /** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live
  *  sync line instead of the per-email log detail. Mirrors the events routes/gmail.ts sends to the browser. */
 interface SyncProgressEvent {
-	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
+	phase: 'start' | 'warming' | 'progress' | 'done' | 'cancelled' | 'error';
 	/** The scan window in days (present on 'start') — how far back this sync searches Gmail. */
 	days?: number;
 	processed?: number;

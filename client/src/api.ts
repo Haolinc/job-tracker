@@ -56,6 +56,11 @@ export interface SyncStatus {
 export const getSyncStatus = (): Promise<SyncStatus> =>
 	api.get('/gmail/sync/status').then(r => r.data as SyncStatus);
 
+// Ask the server to stop the running sync. Resolves once the request is acknowledged; the sync itself ends
+// a moment later as a 'cancelled' event on the progress stream / snapshot.
+export const cancelGmailSync = (): Promise<{ cancelling: boolean }> =>
+	api.post('/gmail/sync/cancel').then(r => r.data as { cancelling: boolean });
+
 // Streams newline-delimited JSON progress events; calls onProgress for each, resolves with the final
 // result. Uses fetch (not axios) so we can read the response body incrementally.
 export async function syncGmail(days?: number, onProgress?: (p: SyncProgress) => void): Promise<SyncResult> {
@@ -85,10 +90,12 @@ export async function syncGmail(days?: number, onProgress?: (p: SyncProgress) =>
 			const line = buffer.slice(0, nl).trim();
 			buffer = buffer.slice(nl + 1);
 			if (!line) continue;
-			const ev = JSON.parse(line) as { phase: string } & SyncResult & SyncProgress & { error?: string };
-			if (ev.phase === 'done') final = { added: ev.added, updated: ev.updated, skipped: ev.skipped, failed: ev.failed, durationMs: ev.durationMs };
-			else if (ev.phase === 'error') throw new Error(ev.error ?? 'Sync failed');
-			else onProgress?.(ev);   // 'start' and 'progress'
+			const progressEvent = JSON.parse(line) as { phase: string } & SyncResult & SyncProgress & { error?: string };
+			if (progressEvent.phase === 'done') final = { added: progressEvent.added, updated: progressEvent.updated, skipped: progressEvent.skipped, failed: progressEvent.failed, durationMs: progressEvent.durationMs };
+			// A user-cancelled sync ends normally (not an error) carrying the partial counts it saved.
+			else if (progressEvent.phase === 'cancelled') final = { added: progressEvent.added, updated: progressEvent.updated, skipped: progressEvent.skipped, failed: progressEvent.failed, durationMs: progressEvent.durationMs, cancelled: true };
+			else if (progressEvent.phase === 'error') throw new Error(progressEvent.error ?? 'Sync failed');
+			else onProgress?.(progressEvent);   // 'start' and 'progress'
 		}
 	}
 	if (!final) throw new Error('Sync ended without a result');

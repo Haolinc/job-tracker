@@ -7,15 +7,17 @@ const SCAN_WINDOWS = [30, 60, 90, 180];
 interface Props {
 	connected: boolean;
 	syncing: boolean;
+	cancelling: boolean;
 	progress: SyncProgress | null;
 	lastResult: SyncResult | null;
 	error: string | null;
 	onConnect: () => void;
 	onDisconnect: () => void;
 	onSync: (days: number) => void;
+	onCancel: () => void;
 }
 
-export default function GmailSync({ connected, syncing, progress, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
+export default function GmailSync({ connected, syncing, cancelling, progress, lastResult, error, onConnect, onDisconnect, onSync, onCancel }: Props) {
 	const [days, setDays] = useState(30);
 	return (
 		<div data-testid="gmail-sync" className="flex items-center gap-2 flex-wrap">
@@ -42,6 +44,15 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 							: '\u{1F4E7}'}
 						{syncing ? 'Syncing...' : 'Sync Gmail'}
 					</button>
+					{syncing && (
+						<button
+							data-testid="gmail-cancel-btn"
+							onClick={onCancel}
+							disabled={cancelling}
+							title="Stop this sync — emails already processed are kept, the rest run next time"
+							className="px-3 py-2 border border-red-200 bg-white text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+						>{cancelling ? 'Cancelling…' : 'Cancel'}</button>
+					)}
 					<button
 						data-testid="gmail-disconnect-btn"
 						onClick={onDisconnect}
@@ -70,6 +81,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					)}
 					{!syncing && lastResult && (
 						<span data-testid="gmail-sync-result" className="text-xs text-gray-400 w-full sm:w-auto">
+							{lastResult.cancelled && <span className="font-semibold text-amber-600">Sync cancelled &middot; </span>}
 							<span className="font-semibold text-emerald-600">+{lastResult.added} added</span>
 							{' '}&middot;{' '}
 							<span className="font-semibold text-blue-600">{lastResult.updated} updated</span>
