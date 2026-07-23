@@ -54,13 +54,40 @@ describe('GmailSync', () => {
 		expect(screen.getByTestId('gmail-connect-btn')).toBeInTheDocument();
 	});
 
-	it('should show a Cancel button only while syncing and call onCancel when clicked', async () => {
-		const onCancel = vi.fn();
-		const { rerender } = render(<GmailSync {...base} onCancel={onCancel} />);
+	it('should show a Cancel button only while syncing', () => {
+		const { rerender } = render(<GmailSync {...base} />);
 		expect(screen.queryByTestId('gmail-cancel-btn')).toBeNull();   // nothing to cancel when idle
-		rerender(<GmailSync {...base} syncing onCancel={onCancel} />);
+		rerender(<GmailSync {...base} syncing />);
+		expect(screen.getByTestId('gmail-cancel-btn')).toBeInTheDocument();
+	});
+
+	it('should confirm before cancelling: Cancel opens a dialog, and only Stop sync calls onCancel', async () => {
+		const onCancel = vi.fn();
+		render(<GmailSync {...base} syncing onCancel={onCancel} />);
 		await user.click(screen.getByTestId('gmail-cancel-btn'));
+		expect(screen.getByTestId('gmail-cancel-sync-confirm-modal')).toBeInTheDocument();
+		expect(onCancel).not.toHaveBeenCalled();                     // opening the dialog must not cancel yet
+		await user.click(screen.getByTestId('gmail-cancel-sync-confirm'));
 		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
+	it('should dismiss the confirm dialog without cancelling when "Keep syncing" is clicked', async () => {
+		const onCancel = vi.fn();
+		render(<GmailSync {...base} syncing onCancel={onCancel} />);
+		await user.click(screen.getByTestId('gmail-cancel-btn'));
+		await user.click(screen.getByTestId('gmail-cancel-sync-cancel'));
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(screen.queryByTestId('gmail-cancel-sync-confirm-modal')).toBeNull();
+	});
+
+	it('should auto-dismiss the confirm dialog if the sync finishes while it is open', async () => {
+		const onCancel = vi.fn();
+		const { rerender } = render(<GmailSync {...base} syncing onCancel={onCancel} />);
+		await user.click(screen.getByTestId('gmail-cancel-btn'));
+		expect(screen.getByTestId('gmail-cancel-sync-confirm-modal')).toBeInTheDocument();
+		rerender(<GmailSync {...base} syncing={false} onCancel={onCancel} />);   // sync finished on its own
+		expect(screen.queryByTestId('gmail-cancel-sync-confirm-modal')).toBeNull();
+		expect(onCancel).not.toHaveBeenCalled();                     // the moot question is dropped, not answered
 	});
 
 	it('should disable the Cancel button and show "Cancelling…" once a cancel is in flight', () => {
