@@ -25,6 +25,10 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 	// Draft for the "attach an email" row (a pasted Gmail link/id + the stage it represents).
 	const [emailDraft, setEmailDraft] = useState('');
 	const [emailDraftCat, setEmailDraftCat] = useState<Status>('applied');
+	// The email row being dragged, and the one it is hovering over — together they drive the "lifted" and
+	// "drop here" styling. Both reset when the drag ends, however it ends.
+	const [draggedEmailIndex, setDraggedEmailIndex] = useState<number | null>(null);
+	const [dropTargetEmailIndex, setDropTargetEmailIndex] = useState<number | null>(null);
 
 	const set = <K extends keyof ApplicationFormData>(k: K, v: ApplicationFormData[K]) =>
 		setForm(f => ({ ...f, [k]: v }));
@@ -41,6 +45,18 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 		setEmailDraft('');
 	};
 	const removeEmail = (messageId: string) => set('emails', form.emails.filter(e => e.messageId !== messageId));
+
+	// Reordering only touches the draft form — like every other field, it reaches the server on Save.
+	// The stored order is what the card and table display, so this is how the user arranges those pills.
+	const emailsAreReorderable = form.emails.length > 1;
+	const endEmailDrag = () => { setDraggedEmailIndex(null); setDropTargetEmailIndex(null); };
+	const moveEmail = (fromIndex: number, toIndex: number) => {
+		if (fromIndex === toIndex) return;
+		const reorderedEmails = [...form.emails];
+		const [movedEmail] = reorderedEmails.splice(fromIndex, 1);
+		reorderedEmails.splice(toIndex, 0, movedEmail);
+		set('emails', reorderedEmails);
+	};
 
 	const handleSubmit: SubmitEventHandler<HTMLFormElement> = (e) => {
 		e.preventDefault();
@@ -130,14 +146,50 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 
 							{form.emails.length > 0 && (
 								<div className="flex flex-col gap-1 border-t border-gray-100 pt-2">
-									{form.emails.map(e => (
-										<div key={e.messageId} data-testid="email-row" className="flex items-center gap-2 text-xs">
-											<span className="px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{STATUS_LABELS[e.category]}</span>
-											<span className="flex-1 truncate text-gray-500" title={e.messageId}>{e.messageId}</span>
-											<button data-testid="email-row-remove" type="button" onClick={() => removeEmail(e.messageId)}
-												className="text-gray-400 hover:text-red-500 px-1" title="Remove">&times;</button>
-										</div>
-									))}
+									{emailsAreReorderable && (
+										<p data-testid="email-reorder-hint" className="text-xs text-gray-400">Drag to reorder</p>
+									)}
+									{form.emails.map((e, emailIndex) => {
+										const isDragged = draggedEmailIndex === emailIndex;
+										const isDropTarget = dropTargetEmailIndex === emailIndex && draggedEmailIndex !== emailIndex;
+										return (
+											<div
+												key={e.messageId}
+												data-testid="email-row"
+												// Leave the attribute off entirely for a lone email — it has nothing to swap with.
+												draggable={emailsAreReorderable || undefined}
+												onDragStart={emailsAreReorderable ? event => {
+													setDraggedEmailIndex(emailIndex);
+													event.dataTransfer.effectAllowed = 'move';
+													// Some browsers refuse to start a drag unless some payload is set.
+													event.dataTransfer.setData('text/plain', String(emailIndex));
+												} : undefined}
+												onDragOver={emailsAreReorderable ? event => {
+													event.preventDefault();   // required, or onDrop never fires
+													event.dataTransfer.dropEffect = 'move';
+													setDropTargetEmailIndex(emailIndex);
+												} : undefined}
+												onDragLeave={emailsAreReorderable ? () => {
+													setDropTargetEmailIndex(current => (current === emailIndex ? null : current));
+												} : undefined}
+												onDrop={emailsAreReorderable ? event => {
+													event.preventDefault();
+													if (draggedEmailIndex !== null) moveEmail(draggedEmailIndex, emailIndex);
+													endEmailDrag();
+												} : undefined}
+												onDragEnd={emailsAreReorderable ? endEmailDrag : undefined}
+												className={`flex items-center gap-2 text-xs rounded px-1 py-0.5${
+													emailsAreReorderable ? ' cursor-grab active:cursor-grabbing' : ''
+												}${isDragged ? ' opacity-40' : ''}${isDropTarget ? ' ring-2 ring-blue-400' : ''}`}
+											>
+												{emailsAreReorderable && <span aria-hidden className="text-gray-300 select-none">⠿</span>}
+												<span className="px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{STATUS_LABELS[e.category]}</span>
+												<span className="flex-1 truncate text-gray-500" title={e.messageId}>{e.messageId}</span>
+												<button data-testid="email-row-remove" type="button" onClick={() => removeEmail(e.messageId)}
+													className="text-gray-400 hover:text-red-500 px-1" title="Remove">&times;</button>
+											</div>
+										);
+									})}
 								</div>
 							)}
 

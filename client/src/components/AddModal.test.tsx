@@ -331,4 +331,70 @@ describe('AddModal', () => {
 		await user.click(screen.getByTestId('email-row-remove'));
 		expect(screen.queryByTestId('email-row')).toBeNull();
 	});
+
+	describe('reordering tracked emails', () => {
+		// jsdom doesn't build a DataTransfer for synthetic drag events, so supply the bits the handlers touch.
+		const dragPayload = () => ({ dataTransfer: { setData: vi.fn(), effectAllowed: '', dropEffect: '' } });
+
+		const threeEmails = {
+			id: 'x', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'M1', category: 'applied',   date: '2026-01-01' },
+				{ messageId: 'M2', category: 'interview', date: '2026-02-01' },
+				{ messageId: 'M3', category: 'rejected',  date: '2026-03-01' },
+			],
+		} as unknown as Partial<ApplicationFormData>;
+
+		const rowIds = () => screen.getAllByTestId('email-row').map(row => row.textContent?.match(/M\d/)?.[0]);
+
+		it('should not offer dragging for a single email — there is nothing to reorder', () => {
+			const initial = {
+				id: 'x', company: 'Acme', role: 'SWE',
+				emails: [{ messageId: 'M1', category: 'applied', date: '2026-01-01' }],
+			} as unknown as Partial<ApplicationFormData>;
+			render(<AddModal initial={initial} onSave={vi.fn()} onClose={vi.fn()} />);
+			expect(screen.getByTestId('email-row')).not.toHaveAttribute('draggable');
+			expect(screen.queryByTestId('email-reorder-hint')).toBeNull();
+		});
+
+		it('should move an email to the dropped-on position without saving until Save is clicked', async () => {
+			const user = userEvent.setup();
+			const onSave = vi.fn();
+			render(<AddModal initial={threeEmails} onSave={onSave} onClose={vi.fn()} />);
+			expect(screen.getByTestId('email-reorder-hint')).toBeInTheDocument();
+
+			const rows = screen.getAllByTestId('email-row');
+			expect(rows[0]).toHaveAttribute('draggable', 'true');
+			fireEvent.dragStart(rows[2], dragPayload());   // grab the last one
+			fireEvent.dragOver(rows[0], dragPayload());
+			fireEvent.drop(rows[0], dragPayload());        // drop it on the first
+
+			// the draft form shows the new order immediately, but nothing has been persisted yet
+			expect(rowIds()).toEqual(['M3', 'M1', 'M2']);
+			expect(onSave).not.toHaveBeenCalled();
+
+			await user.click(screen.getByTestId('modal-submit'));
+			expect(onSave.mock.calls[0][0].emails.map((e: { messageId: string }) => e.messageId)).toEqual(['M3', 'M1', 'M2']);
+		});
+
+		it('should discard a reorder when the modal is closed instead of saved', async () => {
+			const user = userEvent.setup();
+			const onSave = vi.fn();
+			render(<AddModal initial={threeEmails} onSave={onSave} onClose={vi.fn()} />);
+			const rows = screen.getAllByTestId('email-row');
+			fireEvent.dragStart(rows[0], dragPayload());
+			fireEvent.drop(rows[2], dragPayload());
+			expect(rowIds()).toEqual(['M2', 'M3', 'M1']);
+			await user.click(screen.getByTestId('modal-cancel'));
+			expect(onSave).not.toHaveBeenCalled();   // the stored order is untouched
+		});
+
+		it('should leave the order alone when an email is dropped back on itself', () => {
+			render(<AddModal initial={threeEmails} onSave={vi.fn()} onClose={vi.fn()} />);
+			const rows = screen.getAllByTestId('email-row');
+			fireEvent.dragStart(rows[1], dragPayload());
+			fireEvent.drop(rows[1], dragPayload());
+			expect(rowIds()).toEqual(['M1', 'M2', 'M3']);
+		});
+	});
 });
