@@ -237,7 +237,7 @@ const renderSyncLine = createLiveLine(logConsole);
 // ever arrives — so track the sync ourselves and close the line out when the server goes away.
 let syncInProgress = false;
 function renderSyncProgress(event: SyncProgressEvent): void {
-	syncInProgress = event.phase !== 'done' && event.phase !== 'error';
+	syncInProgress = event.phase !== 'done' && event.phase !== 'cancelled' && event.phase !== 'error';
 	const countsText = `${event.added ?? 0} added, ${event.updated ?? 0} updated, ${event.skipped ?? 0} skipped`;
 	if (event.phase === 'start') {
 		const totalEmails = event.total ?? 0;
@@ -251,6 +251,9 @@ function renderSyncProgress(event: SyncProgressEvent): void {
 		const failedNote = event.failed ? `, ${event.failed} failed (will retry)` : '';
 		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
 		renderSyncLine(`✓ Sync finished: ${countsText}${failedNote}${durationText}`, { finalize: true, tone: 'success' });
+	} else if (event.phase === 'cancelled') {
+		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
+		renderSyncLine(`⊘ Sync cancelled: ${countsText} saved${durationText}`, { finalize: true, tone: 'warning' });
 	} else if (event.phase === 'error') {
 		renderSyncLine(`✗ Sync failed: ${event.error ?? 'unknown error'}`, { finalize: true, tone: 'error' });
 	}

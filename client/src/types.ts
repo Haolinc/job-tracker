@@ -47,6 +47,7 @@ export interface SyncResult {
 	skipped: number;
 	failed: number;   // emails that errored on fetch this run; not synced, retried next sync
 	durationMs: number;   // wall-clock time the sync took
+	cancelled?: boolean;   // the user stopped the sync early; the counts above are the partial progress that was saved
 }
 
 export interface SyncProgress {

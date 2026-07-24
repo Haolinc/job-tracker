@@ -16,7 +16,7 @@ import {
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
-import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent } from '../services/syncState';
+import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent, isSyncCancelRequested, requestSyncCancel, clearSyncCancel } from '../services/syncState';
 import { debug, guiLine } from '../logger';
 import type { EmailResult, Status } from '../types';
 
@@ -187,6 +187,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	// Drop any snapshot from the previous run so a reconnecting browser can't briefly read a stale 'done'
 	// as if it belonged to this sync (see /sync/status below).
 	setLastSyncEvent(null);
+	// Clear any cancel left set from a prior run so this sync starts fresh (also cleared in finally).
+	clearSyncCancel();
 	// Progress streams to the client as newline-delimited JSON: a 'start' event (with the total), a
 	// 'progress' event per email, and a final 'done' event. Once streaming begins the HTTP status is
 	// already 200, so a later error is reported as an 'error' event instead of a 500.
@@ -252,6 +254,10 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const concurrency = Number(process.env.SYNC_CONCURRENCY) || 3;
 		const pending: Extract<ClassifyResult, { kind: 'merge' }>[] = [];
 		for await (const classified of mapAhead(streamJobMessages(req.session.tokens!, newIds, failedIds), concurrency, classifyOne)) {
+			// Cancel checkpoint: stop consuming new results the moment the user cancels. Whatever was already
+			// classified into `pending` is simply dropped (never applied, so not marked synced) — the next sync
+			// re-fetches it. In-flight classify calls do no DB writes, so abandoning them is safe.
+			if (isSyncCancelRequested()) break;
 			processed++;
 			if (classified.kind === 'failed') {
 				classifyFailedIds.push(classified.messageId);
@@ -282,6 +288,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// PHASE 2 — sequential, order-sensitive merge, in date order. Re-bind the classified result's fields
 		// under the names the logic below uses; `email` is a thin stand-in for the two date fields it reads.
 		for (const classified of pending) {
+			// Cancel checkpoint between merges: each email is committed atomically, so stopping here keeps every
+			// application already written and leaves the remaining ones for the next sync.
+			if (isSyncCancelRequested()) break;
 			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy } = classified;
 			const email = { internalDate: classified.internalDate, lastMessageDate: classified.lastMessageDate };
 
@@ -402,7 +411,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
         debug(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
         debug(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
-		send({ phase: 'done', added, updated, skipped, failed, durationMs });
+		// A user cancel ends the run as 'cancelled' (partial counts, not an error) — everything processed so far
+		// is saved; the rest is left for the next sync.
+		send({ phase: isSyncCancelRequested() ? 'cancelled' : 'done', added, updated, skipped, failed, durationMs });
 		if (!res.writableEnded && !res.destroyed) res.end();   // no-op when the browser already disconnected
 	} catch (err) {
 		console.error('Sync error:', err);
@@ -410,7 +421,20 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		else res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
 	} finally {
 		setSyncRunning(false);
+		clearSyncCancel();   // never let this run's cancel bleed into the next sync
 	}
+});
+
+// Ask the running sync to stop. Cooperative: the sync loop checks the flag between emails and ends as
+// 'cancelled', keeping everything it already saved. 409 when nothing is running, so the button can't set a
+// flag that a later, unrelated sync would then honour.
+router.post('/sync/cancel', requireAuth, (_req: Request, res: Response) => {
+	if (!isSyncRunning()) {
+		res.status(409).json({ error: 'No sync is running.' });
+		return;
+	}
+	requestSyncCancel();
+	res.json({ cancelling: true });
 });
 
 // Lets a browser that reconnects mid-sync (a tab closed and reopened) restore its progress bar: the /sync

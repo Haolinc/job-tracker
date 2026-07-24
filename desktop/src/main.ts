@@ -102,7 +102,7 @@ function sendUpdateProgress(progress: UpdateProgress): void {
 
 // Push a sync progress event to the panel — same live-line treatment as model downloads.
 function sendSyncProgress(syncEvent: SyncProgressEvent): void {
-	syncRunning = syncEvent.phase !== 'done' && syncEvent.phase !== 'error';
+	syncRunning = syncEvent.phase !== 'done' && syncEvent.phase !== 'cancelled' && syncEvent.phase !== 'error';
 	controlWindow?.webContents.send('launcher:sync-progress', syncEvent);
 }
 

@@ -12,6 +12,9 @@ interface WarningConfirmDialogProps {
 	children: ReactNode;   // the warning message body
 	onCancel: () => void;
 	onConfirm: () => void;
+	// Label for the decline button — defaults to "Cancel", but a dialog about cancelling something wants a
+	// clearer word (e.g. "Keep syncing") so the two buttons don't both read like "cancel".
+	cancelLabel?: string;
 }
 
 /**
@@ -21,7 +24,7 @@ interface WarningConfirmDialogProps {
  * not a general-purpose yes/no prompt — so the red confirm button always signals real consequences.
  */
 export default function WarningConfirmDialog({
-	testIdPrefix, title, confirmLabel, busyLabel, busy, error, children, onCancel, onConfirm,
+	testIdPrefix, title, confirmLabel, busyLabel, busy, error, children, onCancel, onConfirm, cancelLabel = 'Cancel',
 }: WarningConfirmDialogProps) {
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
@@ -40,7 +43,7 @@ export default function WarningConfirmDialog({
 						onClick={onCancel}
 						className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50"
 					>
-						Cancel
+						{cancelLabel}
 					</button>
 					<button
 						data-testid={`${testIdPrefix}-confirm`}

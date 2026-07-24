@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
 import { classifyEmail } from '../services/classifier';
-import { setSyncRunning, setImportRunning, setLastSyncEvent } from '../services/syncState';
+import { setSyncRunning, setImportRunning, setLastSyncEvent, isSyncCancelRequested, clearSyncCancel } from '../services/syncState';
 import type { EmailResult } from '../types';
 
 // classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
@@ -140,6 +140,49 @@ describe('GET /sync/status', () => {
 		const response = await fetch(`${baseUrl}/api/gmail/sync/status`);
 		const body = await response.json() as { running: boolean; event: unknown };
 		expect(body.running).toBe(false);
+	});
+});
+
+// The endpoint the Cancel button hits — it only sets the cooperative cancel flag the sync loop checks.
+describe('POST /sync/cancel', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	beforeAll(async () => {
+		const app = express();
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+		setSyncRunning(false);
+		clearSyncCancel();
+	});
+
+	it('sets the cancel flag and returns cancelling:true while a sync is running', async () => {
+		setSyncRunning(true);
+		clearSyncCancel();
+		try {
+			const response = await fetch(`${baseUrl}/api/gmail/sync/cancel`, { method: 'POST' });
+			expect(response.status).toBe(200);
+			const body = await response.json() as { cancelling: boolean };
+			expect(body.cancelling).toBe(true);
+			expect(isSyncCancelRequested()).toBe(true);
+		} finally {
+			setSyncRunning(false);
+			clearSyncCancel();
+		}
+	});
+
+	it('rejects with 409 and sets no flag when no sync is running', async () => {
+		setSyncRunning(false);
+		clearSyncCancel();
+		const response = await fetch(`${baseUrl}/api/gmail/sync/cancel`, { method: 'POST' });
+		expect(response.status).toBe(409);
+		expect(isSyncCancelRequested()).toBe(false);
 	});
 });
 

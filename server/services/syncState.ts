@@ -27,6 +27,24 @@ export function setLastSyncEvent(event: Record<string, unknown> | null): void {
 	lastSyncEvent = event;
 }
 
+// Set by POST /sync/cancel to ask the running sync to stop at its next safe checkpoint. The sync loop
+// checks it between emails and exits cooperatively, keeping every email it already committed (the rest stay
+// unsynced and are picked up by the next sync). Cleared at the start AND end of each run so a cancel can
+// never leak into the following sync.
+let syncCancelRequested = false;
+
+export function isSyncCancelRequested(): boolean {
+	return syncCancelRequested;
+}
+
+export function requestSyncCancel(): void {
+	syncCancelRequested = true;
+}
+
+export function clearSyncCancel(): void {
+	syncCancelRequested = false;
+}
+
 // Whether a CSV import plan is being applied. Sync and import are mutually exclusive: a sync running
 // mid-import would read half-applied state, and an import applied mid-sync would invalidate the plan
 // the user just confirmed. The import transaction is short, so the window this flag is set is tiny.

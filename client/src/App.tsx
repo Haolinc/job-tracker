@@ -23,7 +23,7 @@ export default function App() {
 
 	// When a sync this tab RECONNECTED to (reopened mid-sync) finishes, refetch so the board shows its results.
 	// The normal, tab-initiated sync refetches in handleSync instead (it also computes the "new" highlight).
-	const { connected, syncing, progress, lastResult, error: syncError, checkStatus, disconnect, sync } =
+	const { connected, syncing, cancelling, progress, lastResult, error: syncError, checkStatus, disconnect, sync, cancel } =
 		useGmailSync(() => { void fetchAll(filters); });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
@@ -219,12 +219,14 @@ export default function App() {
 					<GmailSync
 						connected={connected}
 						syncing={syncing}
+						cancelling={cancelling}
 						progress={progress}
 						lastResult={lastResult}
 						error={syncError}
 						onConnect={() => { window.location.href = '/api/auth/google'; }}
 						onDisconnect={disconnect}
 						onSync={handleSync}
+						onCancel={cancel}
 					/>
 				</div>
 			</header>
