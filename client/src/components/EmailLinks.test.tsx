@@ -10,12 +10,12 @@ const refs: EmailRef[] = [
 ];
 
 describe('EmailLinks', () => {
-	it('should render one Gmail link per email, ordered chronologically by date', () => {
+	it('should render one Gmail link per email in the order they are stored', () => {
 		render(<EmailLinks emails={refs} account="me@work.com" />);
 		const links = screen.getAllByTestId('email-link');
 		expect(links).toHaveLength(3);
-		// sorted by date asc → applied, interview, rejected (regardless of input order)
-		expect(links.map(a => a.textContent?.trim())).toEqual(['✉ Applied', '✉ Interview', '✉ Rejected']);
+		// Stored order is the display order — it's what the user arranges in the edit modal, so it is never re-sorted.
+		expect(links.map(a => a.textContent?.trim())).toEqual(['✉ Rejected', '✉ Applied', '✉ Interview']);
 	});
 
 	it("should point every link at the application's Gmail account, opening in a new tab", () => {
@@ -36,6 +36,11 @@ describe('EmailLinks', () => {
 		render(<EmailLinks emails={[]} />);
 		expect(screen.queryByTestId('email-links')).toBeNull();
 		expect(screen.queryByTestId('email-link')).toBeNull();
+	});
+
+	it('should keep the pills as plain links — reordering lives in the edit modal, not on the card', () => {
+		render(<EmailLinks emails={refs} account="me@work.com" />);
+		for (const link of screen.getAllByTestId('email-link')) expect(link).not.toHaveAttribute('draggable');
 	});
 
 	it('labels a fast-apply notice "⚡ Fast Applied" while other emails keep their stage label', () => {
