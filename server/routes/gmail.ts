@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmail/messages';
-import { classifyEmail, warmUpModel } from '../services/classifier';
+import { classifyEmail, warmUpModel, pickCompanyRole } from '../services/classifier';
 import { parseEmail } from '../services/parser/templates';
 import { extractGeneralCompanyRole } from '../services/parser/companyRole';
 import { extractJobNumber } from '../services/parser/reqId';
@@ -67,11 +67,54 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
 	// with zero AI cost. Falls back to the LLM for everything else.
 	let classification = parseEmail(subject, from, body);
-	const detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+	let detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+	// Carries a salvaged hint from a picker rejection into the full classifier below (see the reject branch).
+	let classifierHints: { company?: string | null; role?: string | null } | undefined;
+
+	// The general template can capture a noun phrase without knowing what it IS ("your interest in X" fits
+	// both "…in Axoni" and "…in Software Engineer"), so it emits the candidates untyped. Resolve them:
+	//   • < 2 candidates → there is nothing to choose between, and a lone span is as likely a role as a company
+	//     (the Leidos "Mid-Level Software Engineer" trap). Hand it to the full classifier to read the whole
+	//     email. Pass NO company hint — an untyped lone span is not a company we can trust.
+	//   • ≥ 2 candidates → the cheap picker TYPES them (which is the company, which the role) without re-reading
+	//     the body. If it is not confident any span is a legitimate company, it returns null → slide to full.
+	if (classification?.ambiguous_spans && classification.category !== 'ignored') {
+		const spans = classification.ambiguous_spans;
+		// Log the candidate list + the parser's own first-match guess, so a wrong company stays traceable to
+		// which candidates were (and weren't) on offer.
+		debug(`[sync] ambiguous candidates=${JSON.stringify(spans)} parserGuess="${classification.company}" subject="${subject}"`);
+		if (spans.length < 2) {
+			debug(`[sync] <2 candidates; deferring to full classify subject="${subject}"`);
+			classifierHints = {};   // deliberately no hints — the lone untyped span is not a company we trust
+			classification = null;
+			detectedBy = 'llm';
+		} else {
+			const picked = await pickCompanyRole(spans, subject, from);
+			if (picked?.company) {
+				debug(`[sync] picked: company="${picked.company}" role="${picked.role ?? ''}" subject="${subject}"`);
+				classification = { ...classification, company: picked.company, role: picked.role ?? classification.role };
+			} else if (picked) {
+				// Picker was not confident any span is a legitimate employer. Slide to the full classifier, carrying
+				// the role it DID find as a hint; do NOT hint the company (there is none it trusted).
+				debug(`[sync] picker named no employer; deferring to full classify subject="${subject}"`);
+				classifierHints = { role: picked.role };
+				classification = null;
+				detectedBy = 'llm';
+			}
+			// picked === null (Ollama down / bad response) → keep the parser's guess, exactly as before.
+		}
+	}
 
 	if (!classification) {
+		// Hand the parser's best guesses to the LLM as reference so its full read can ADOPT the exact company
+		// spelling / recovered role or OVERRIDE them from the whole email, instead of the parser's work being
+		// discarded at this boundary and re-derived from scratch. A picker rejection has already prepared
+		// `classifierHints` (role only, no company); otherwise derive both from the parser. Cache-safe: the
+		// hints ride in the user turn, never the fixed system prompt.
+		const parserCandidates = extractGeneralCompanyRole(subject, body);
+		const hints = classifierHints ?? { company: parserCandidates?.company, role: parserCandidates?.role };
 		try {
-			classification = await classifyEmail(subject, from, body);
+			classification = await classifyEmail(subject, from, body, hints);
 		} catch (err) {
 			// NOT marked synced: a classifier failure (Ollama down, malformed response) must not consume
 			// the email forever — it stays unsynced, counts into the sync's `failed` tally, and is retried
@@ -80,20 +123,22 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 			return { kind: 'failed', threadId, messageId };
 		}
 
-		// The LLM is the SOURCE OF TRUTH for company/role on this path. The deterministic regex only
-		// FILLS GAPS — when the LLM returned null — and never overrides a value the LLM produced.
-		// (Overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa".)
+		// Safety net for a field the LLM STILL left null despite the hint. Never OVERRIDE a value the LLM
+		// produced (overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa"). Don't
+		// re-insert the parser's company when a picker rejection already flagged it as NOT an employer
+		// (classifierHints set) — that value is a role, not a company.
 		if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
-			const ext = extractGeneralCompanyRole(subject, body);
-			if (!classification.company && ext) classification.company = ext.company;
-			if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
+			if (!classification.company && parserCandidates && !classifierHints) classification.company = parserCandidates.company;
+			if (!classification.role) classification.role = (classifierHints?.role ?? parserCandidates?.role) ?? recoverRoleFromBody(body, subject);
 		}
 	} else if (classification.category !== 'ignored' && !classification.role) {
 		// The parser nailed company + category but couldn't pull a role from the templated text. Consult the
 		// LLM for the ROLE ONLY — the parser's company/category stay authoritative. A failed or empty call
 		// just leaves the role null → "Unknown Role", same as before.
 		try {
-			const ai = await classifyEmail(subject, from, body);
+			// Anchor the LLM to the company the parser already nailed so its role read isn't distracted into
+			// re-deciding the employer (whose value we keep regardless).
+			const ai = await classifyEmail(subject, from, body, { company: classification.company });
 			if (ai.role) {
 				classification = { ...classification, role: ai.role };
 				debug(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);

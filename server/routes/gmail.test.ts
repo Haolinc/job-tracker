@@ -3,24 +3,28 @@ import express from 'express';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
-import { classifyEmail } from '../services/classifier';
+import { classifyEmail, pickCompanyRole } from '../services/classifier';
+import { parseEmail } from '../services/parser/templates';
 import { setSyncRunning, setImportRunning, setLastSyncEvent, isSyncCancelRequested, clearSyncCancel } from '../services/syncState';
 import type { EmailResult } from '../types';
 
-// classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
-// parser so the mocked classifier is the only variable.
+// classifyOne's LLM path is under test — force every fixture past the hard filter so the mocked
+// classifier and parser are the only variables. parseEmail defaults to null (no deterministic hit).
 vi.mock('../services/classifier', () => ({
 	classifyEmail: vi.fn(),
 	warmUpModel: vi.fn(),
+	pickCompanyRole: vi.fn(),
 }));
 vi.mock('../services/filters', () => ({
 	isIgnorableEmail: () => false,
 }));
 vi.mock('../services/parser/templates', () => ({
-	parseEmail: () => null,
+	parseEmail: vi.fn(() => null),
 }));
 
 const classifyEmailMock = vi.mocked(classifyEmail);
+const pickCompanyRoleMock = vi.mocked(pickCompanyRole);
+const parseEmailMock = vi.mocked(parseEmail);
 
 async function* range(n: number): AsyncGenerator<number> {
 	for (let i = 0; i < n; i++) yield i;
@@ -39,6 +43,9 @@ describe('classifyOne', () => {
 
 	beforeEach(() => {
 		classifyEmailMock.mockReset();
+		pickCompanyRoleMock.mockReset();
+		parseEmailMock.mockReset();
+		parseEmailMock.mockReturnValue(null);   // default: no deterministic hit, so the LLM path runs
 	});
 
 	it('should report a classifier failure as failed, never as an ignored skip', async () => {
@@ -59,6 +66,77 @@ describe('classifyOne', () => {
 		classifyEmailMock.mockResolvedValue({ category: 'ignored', company: null, role: null });
 		const result = await classifyOne(email);
 		expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+	});
+
+	// The parser can capture a noun phrase without knowing whether it names a company or a job title
+	// ("your interest in X"), so it emits the candidates untyped. These cover how they get resolved: a lone
+	// span goes to the full classifier; ≥2 spans go to the cheap picker, which types them or declines.
+	describe('when the parser could not type its spans', () => {
+		// What the general template emits for "…applying to Acme … the Software Engineer position": two
+		// candidates, but which is the company is only a guess because "applying to X" doesn't say what X is.
+		const twoSpanParse = {
+			category: 'applied' as const, company: 'Acme', role: 'Software Engineer',
+			classifier_code: 'general_template', ambiguous_spans: ['Acme', 'Software Engineer'],
+		};
+
+		// What it emits for "…your interest in Software Engineer": a LONE span that is really the role, grabbed
+		// as the company. Unconfirmed, this is the record that reaches the board with a bogus employer.
+		const loneSpanParse = {
+			category: 'applied' as const, company: 'Software Engineer', role: null,
+			classifier_code: 'general_template', ambiguous_spans: ['Software Engineer'],
+		};
+
+		it('should keep the parser result and never call the LLM when the spans are typed', async () => {
+			// No ambiguous_spans → the sentence structure already named both slots; nothing to confirm.
+			parseEmailMock.mockReturnValue({ category: 'applied', company: 'Axoni', role: 'Software Engineer', classifier_code: 'general_template' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).not.toHaveBeenCalled();
+			expect(classifyEmailMock).not.toHaveBeenCalled();   // the free path stays free
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', detectedBy: 'parser' });
+		});
+
+		it('should skip the picker and defer a lone candidate to the full classifier', async () => {
+			// < 2 candidates: nothing to pick between, and the lone span is really a role — the Leidos trap. Go
+			// straight to the full classifier, which reads the whole email for the real employer.
+			parseEmailMock.mockReturnValue(loneSpanParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Leidos', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).not.toHaveBeenCalled();   // no genuine choice → don't burn a picker call
+			expect(classifyEmailMock).toHaveBeenCalledTimes(1);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Leidos', detectedBy: 'llm' });
+		});
+
+		it('should adopt the company/role the picker assigns to the candidates', async () => {
+			parseEmailMock.mockReturnValue({
+				category: 'applied', company: 'Axoni', role: null,
+				classifier_code: 'general_template', ambiguous_spans: ['Axoni', 'Software Engineer'],
+			});
+			pickCompanyRoleMock.mockResolvedValue({ company: 'Axoni', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).toHaveBeenCalledWith(['Axoni', 'Software Engineer'], email.subject, email.from);
+			expect(classifyEmailMock).not.toHaveBeenCalled();   // the picker replaces the full classification
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Software Engineer', detectedBy: 'parser' });
+		});
+
+		it('should defer to a full classification when the picker is not confident of any employer', async () => {
+			// ≥2 candidates but the picker judges none a legitimate company (e.g. both are titles). It returns
+			// company:null → slide to the full classifier, which finds the real employer.
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue({ company: null, role: 'Software Engineer' });
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Axoni', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(classifyEmailMock).toHaveBeenCalledTimes(1);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', detectedBy: 'llm' });
+		});
+
+		it('should keep the parser guess when the picker is unavailable', async () => {
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue(null);   // Ollama down / unparseable response
+			const result = await classifyOne(email);
+			// Degrades to the pre-picker behaviour rather than losing the email or burning a full call.
+			expect(classifyEmailMock).not.toHaveBeenCalled();
+			expect(result).toMatchObject({ kind: 'merge', company: 'Acme', role: 'Software Engineer', detectedBy: 'parser' });
+		});
 	});
 });
 

@@ -39,6 +39,9 @@ Extract a unique requisition/job/reference number when labelled ("Job ID:", "Req
 
 If the body is unrendered template/code (contains "<%", "I18n.t", "*---*"), ignore it and use Subject + Sender.
 
+REFERENCE CANDIDATES
+The user message may end with "Reference candidates" — a company and/or role a deterministic parser pulled from this email. Treat them as informed hints: the company's exact spelling is usually reliable, but a candidate can be mislabeled (a job title placed in the company slot, or a partial name). Confirm each against the email — adopt it when it fits, correct or replace it when the email disagrees. A candidate never changes the category.
+
 EXAMPLES
 Body "...career at JPMorganChase...", from "JPMorgan Chase & Co. <...@cloud.oracle.com>"
 -> {"category":"applied","company":"JPMorganChase","role_source":null,"role":null,"req_id_source":null,"req_id":null}
@@ -155,9 +158,23 @@ async function loadModelWithRetry(): Promise<boolean> {
 	return false;
 }
 
-async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
+/** Render the optional parser hints as a user-turn block, or '' when there is nothing to hint. */
+function buildReferenceBlock(hints?: { company?: string | null; role?: string | null }): string {
+	if (!hints) return '';
+	const lines: string[] = [];
+	if (hints.company) lines.push(`- company: "${hints.company}"`);
+	if (hints.role)    lines.push(`- role: "${hints.role}"`);
+	if (lines.length === 0) return '';
+	return `\n\nReference candidates (from a deterministic parser — adopt when correct, override when the email disagrees):\n${lines.join('\n')}`;
+}
+
+async function classifyEmail(subject: string, from: string, body: string, hints?: { company?: string | null; role?: string | null }): Promise<Classification> {
 	debug(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
-	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
+	// Parser candidates ride in the USER turn only — the system prompt stays byte-identical so Ollama's
+	// prompt-eval cache (the thing warmup primes) survives. The model treats them as overridable references.
+	const referenceBlock = buildReferenceBlock(hints);
+	if (referenceBlock) debug(`[classify] hints company="${hints?.company ?? ''}" role="${hints?.role ?? ''}"`);
+	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}${referenceBlock}`, {
 		maxOutputTokens: 150,   // JSON output is ~40-60 tokens — extra room for longer role names
 	});
 	debug(`[classify] tokens: prompt=${chatResponse.prompt_eval_count ?? 0}`);
@@ -184,4 +201,98 @@ async function classifyEmail(subject: string, from: string, body: string): Promi
 	};
 }
 
-export { classifyEmail, warmUpModel };
+// ── Company/role picker (chooses among the parser's candidates) ──────────────
+
+// A cheap, focused call: the parser already narrowed the email to a short candidate list, so the picker only
+// TYPES those spans — which is the employer, which is the job title — and NEVER re-reads the whole body. That
+// is the whole point of parsing first: keep this fast (a handful of spans, no body eval). Only invoked for
+// ≥2 candidates (a lone span goes to the full classifier instead — see gmail.ts), so it always has a real
+// choice to make.
+//
+// Written in the full classifier's STYLE, not a one-liner: labeled COMPANY/ROLE rule sections, a
+// reason-before-answer scratch field (the chain-of-thought that drove the full classifier's accuracy), and
+// worked examples — because the terse original prompt is exactly what mislabeled a role as the company. The
+// answer fields are grammar-locked to the spans (or null), so the model can only label or decline, never
+// invent. STRICT null-when-uncertain: a null slot slides to the full classifier rather than shipping a guess.
+const pickerSystemPrompt = `You are given candidate spans pulled from a job-application email, with its From and Subject. Each span is the EMPLOYER (company), the JOB TITLE (role), or neither. Put the best-fitting span in each slot. Return ONLY this JSON (no prose, no markdown):
+
+{
+  "company_reason": "<one short phrase: which span is the employer, or why none is> (fill BEFORE company)",
+  "company": "<the exact span that names the employer, or null>",
+  "role_reason": "<one short phrase: which span is the job title, or why none is> (fill BEFORE role)",
+  "role": "<the exact span that names the job title, or null>"
+}
+
+COMPANY — the organization doing the hiring.
+- A job title is NEVER a company: "Software Engineer", "QA Analyst", "Mid-Level Software Engineer", "Web Developer", "Data Scientist" are roles.
+- An ATS or job board is NEVER a company: Greenhouse, Lever, iCIMS, Taleo, Workday, LinkedIn, Indeed, SmartRecruiters → null.
+- A bare location or work mode is NEVER a company: "Remote", "Hybrid", "New York".
+
+ROLE — the job title applied for, e.g. "<Level> <Discipline> Engineer/Analyst/Developer/Manager/Designer/Scientist".
+
+STRICT — accuracy over coverage:
+- Copy a span EXACTLY as given; never invent, edit, merge, or shorten one.
+- A span may fit NEITHER slot. If you are not confident a span is a legitimate company (or role), put null there — do NOT force a guess. A null is safe: a fuller classifier re-reads the whole email.
+
+EXAMPLES
+From "careers@bloomberg.net", Spans ["Bloomberg","IT Service Desk Analyst"]
+-> {"company_reason":"Bloomberg is a known employer","company":"Bloomberg","role_reason":"IT Service Desk Analyst is a job title","role":"IT Service Desk Analyst"}
+Spans ["Greenhouse","Backend Engineer"]
+-> {"company_reason":"Greenhouse is an ATS, not an employer","company":null,"role_reason":"Backend Engineer is a job title","role":"Backend Engineer"}
+Spans ["Software Engineer","Platform Engineer"]
+-> {"company_reason":"both spans are job titles; no employer named","company":null,"role_reason":"Software Engineer is the title","role":"Software Engineer"}`;
+
+/**
+ * Ask the model which of `spans` is the employer and which is the job title. Called ONLY for ≥2 candidates
+ * (the caller routes a lone span to the full classifier), so there is always a genuine choice to make.
+ *
+ * The answer fields are grammar-constrained to an enum of the SPANS THEMSELVES (plus null), so the model can
+ * only label a real candidate or decline — it cannot invent a company. A `reason` scratch field is generated
+ * before each answer (chain-of-thought), mirroring the full classifier's source-before-value technique. That
+ * enum changes per email, so this grammar compiles fresh each call — tiny, but not free.
+ *
+ * Returns null on a failed/unparseable call (caller keeps the parser's own guess); a successful call with
+ * `company === null` is a real "not confident any span is the employer" and tells the caller to slide to the
+ * full classifier.
+ */
+async function pickCompanyRole(spans: string[], subject: string, from: string): Promise<{ company: string | null; role: string | null } | null> {
+	if (spans.length === 0) return null;
+	// enum (not a bare string type) is what forbids invention: the sampler can emit only one of these exact
+	// strings or null. Kept in the parser's priority order so ties break the way the deterministic guess did.
+	const spanEnum = { enum: [...spans, null] };
+	try {
+		const chatResponse = await ollama.chat({
+			model: classifierModel(),
+			messages: [
+				{ role: 'system', content: pickerSystemPrompt },
+				{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nSpans:\n${spans.map(s => `- ${s}`).join('\n')}` },
+			],
+			format: {
+				type: 'object',
+				properties: {
+					company_reason: { type: 'string' },
+					company:        spanEnum,
+					role_reason:    { type: 'string' },
+					role:           spanEnum,
+				},
+				required: ['company_reason', 'company', 'role_reason', 'role'],
+			},
+			options: {
+				num_predict: 100,   // two short reason phrases + two copied spans — 100 covers long titles with room
+				temperature: 0,
+			},
+		});
+		const responseText = chatResponse.message.content.trim();
+		debug(`[pick] spans=${JSON.stringify(spans)} ->`, responseText.replace(/\s*\n\s*/g, ' '));
+		const start = responseText.indexOf('{'), end = responseText.lastIndexOf('}');
+		const parsed = JSON.parse(start !== -1 && end !== -1 ? responseText.slice(start, end + 1) : responseText) as Record<string, unknown>;
+		// Belt and braces behind the grammar: only ever return a string the parser actually found in the email.
+		const labelled = (value: unknown) => (typeof value === 'string' && spans.includes(value) ? value : null);
+		return { company: labelled(parsed.company), role: labelled(parsed.role) };
+	} catch (error) {
+		debug(`[pick] failed: ${error instanceof Error ? error.message : String(error)}`);
+		return null;
+	}
+}
+
+export { classifyEmail, warmUpModel, pickCompanyRole };

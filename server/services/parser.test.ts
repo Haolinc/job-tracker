@@ -226,8 +226,10 @@ describe('parseEmail', () => {
 		});
 	}
 
-	// Workday emails are per-company customised; the general template mis-reads them (here it would grab the
-	// role "Mid-Level Software Engineer" as the company), so a @myworkday.com sender must defer to the LLM.
+	// Workday emails are no longer blanket-deferred (legitimate employers use Workday heavily). This one still
+	// defers — but via the company==role structural guard, not a sender special-case: "applying to [Role]" grabs
+	// "Mid-Level Software Engineer" as the company AND recoverRoleFromBody reads it as the role, so the two match
+	// and the parser bows out. The full classifier / refiner then reads "working at Leidos" for the real employer.
 	it('defers a Workday (@myworkday.com) email to the LLM instead of mis-parsing (Leidos)', () => {
 		const res = parseEmail(
 			'Leidos -Thank You For Applying to Mid-Level Software Engineer',
@@ -292,6 +294,34 @@ describe('extractGeneralCompanyRole', () => {
 	});
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
+	});
+
+	// Patterns that name both slots ("applying for [Role] at [Company]") are self-typing; the bare
+	// "interest in X" patterns are not, and only those need the LLM to say which slot X fills.
+	describe('span typing', () => {
+		it('marks a both-slots sentence unambiguous, with no spans to label', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for applying for the Software Engineer position at Pomelo Care.');
+			expect(r?.ambiguous).toBe(false);
+			expect(r?.spans).toEqual([]);
+		});
+		it('marks a bare "interest in [X]" ambiguous and offers X for labelling', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+			expect(r?.ambiguous).toBe(true);
+			expect(r?.spans).toContain('Lockheed Martin');
+		});
+		it('still guesses the role as the company when unconfirmed — the case the picker exists to fix', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Software Engineer. We have received your application.');
+			// Nothing here says "Software Engineer" is a title, so the regex reads it as the employer and
+			// neither structural guard fires. The flag is what gets the LLM to catch it.
+			expect(r?.company).toBe('Software Engineer');
+			expect(r?.ambiguous).toBe(true);
+			expect(r?.spans).toContain('Software Engineer');
+		});
+		it('collects every untyped candidate, in priority order, not just the first', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for applying to Axoni. We appreciate your interest in Blackstone.');
+			// "applying to" (pattern 8) outranks "interest in" (pattern 9), and both reach the picker.
+			expect(r?.spans.slice(0, 2)).toEqual(['Axoni', 'Blackstone']);
+		});
 	});
 	it('returns null for a "keep track of your application" draft reminder', () => {
 		expect(extractGeneralCompanyRole('Keep track', 'Keep track of your application. If you are still working on the application, finish it here.')).toBeNull();
