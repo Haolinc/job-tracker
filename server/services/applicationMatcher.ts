@@ -74,12 +74,22 @@ export async function findExisting(company: string, role: string | null, externa
 	//   • DOMAIN — unique to one employer (job-board hosts excluded); bridges spellings ("JPMorgan" ↔ "JPMorganChase").
 	//   • NAME   — first-word matches, kept only if the same entity ("Epic" ✗ "Epic Kids") and not carrying a different domain.
 	const byDomain = domain ? await db.findByCompanyDomain(domain) : [];
-	const byName = (await db.findByCompanyFirstWord(company.split(/\s+/)[0])).filter(app =>
-		companiesSameEntity(app.company, company) && (!domain || !app.company_domain || app.company_domain === domain),
-	);
+	// NAME probe: gather every record that could be this employer under a different spelling, from TWO sources
+	// because neither alone is complete — findByCompanyFirstWord catches descriptor variants ("Fora" ↔ "Fora
+	// Travel"); findByCompanyKey catches spacing/punctuation/case variants a first-word prefix can't see
+	// ("JPMorganChase" ↔ "JPMorgan Chase"). Both are then confirmed by companiesSameEntity and kept off a
+	// conflicting domain. Dedup the union (the two probes overlap) and against the domain hits.
+	const onCompatibleDomain = (app: Application) => !domain || !app.company_domain || app.company_domain === domain;
+	const byName = [...await db.findByCompanyFirstWord(company.split(/\s+/)[0]), ...await db.findByCompanyKey(company)]
+		.filter(app => companiesSameEntity(app.company, company) && onCompatibleDomain(app));
 	const seenIds = new Set(byDomain.map(app => app.id));
-    // When domain and name are both found, then dedup the overlapping record
-	let companyApps = [...byDomain, ...byName.filter(app => !seenIds.has(app.id))];
+	const dedupedByName: Application[] = [];
+	for (const app of byName) {
+		if (seenIds.has(app.id)) continue;   // already gathered by domain, or a duplicate across the two name probes
+		seenIds.add(app.id);
+		dedupedByName.push(app);
+	}
+	let companyApps = [...byDomain, ...dedupedByName];
 
 	// No candidate → new application. No global req-number fallback: req numbers are unique only WITHIN a
 	// company, so a global match could merge a different employer.

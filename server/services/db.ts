@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Application, CreateApplicationData, MarkSyncedData, EmailRef } from '../types';
+import { companyKey } from './companyIdentity';
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 // Embedded SQLite (better-sqlite3, synchronous) — one file, no server process. The exported API keeps the
@@ -282,6 +283,19 @@ export const findByCompanyFirstWord = async (firstWord: string): Promise<Applica
 	const escapedFirstWord = firstWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const boundedFirstWord = new RegExp(`^${escapedFirstWord}(?![a-z0-9])`, 'i');
 	return rows.filter(row => boundedFirstWord.test(row.company)).map(toApplication);
+};
+
+/**
+ * All applications whose company matches `company` once spacing, punctuation, and case are stripped
+ * ("JPMorgan Chase" ↔ "JPMorganChase", "MITRE" ↔ "mitre"). A full scan — negligible at this app's scale —
+ * because a collapsed-key equality can't be expressed as a SQL prefix (the space that splits them is the very
+ * thing we ignore). Complements findByCompanyFirstWord, which handles descriptor variants ("Fora" ↔ "Fora Travel").
+ */
+export const findByCompanyKey = async (company: string): Promise<Application[]> => {
+	const collapsedKey = companyKey(company);
+	if (!collapsedKey) return [];
+	const rows = getDatabase().prepare('SELECT * FROM applications').all() as ApplicationRow[];
+	return rows.map(toApplication).filter(app => companyKey(app.company) === collapsedKey);
 };
 
 /** All applications from the same real company domain — the strongest dedup key (one domain = one employer). */
