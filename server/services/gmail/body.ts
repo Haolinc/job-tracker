@@ -26,12 +26,24 @@ function decodePart(part: gmail_v1.Schema$MessagePart): string {
 	return Buffer.from(part.body!.data!, 'base64url').toString('utf-8');
 }
 
+// Block-level / line-break tags whose boundaries are actual line breaks in the rendered email. HTML has no
+// hard-wraps — the browser wraps visually — so every one of these boundaries is a real break the reader sees,
+// unlike a lone newline in plain text. We turn them into a blank-line paragraph break (not a space) so the
+// downstream whitespace collapse keeps them as "\n" boundaries, and a company name in one block can't run
+// into the text of the next ("…applying to Meta" sits in its own block, ABOVE the "Hi Hao Lin" greeting, so
+// it must not flatten to "applying to Meta Hi Hao Lin"). Everything else — inline tags: span, a, b, strong,
+// em, font, img — is dropped to a single space so words on the same rendered line stay on it.
+const HTML_BLOCK_BOUNDARY = /<\/?(?:p|div|br|hr|tr|li|ul|ol|table|blockquote|h[1-6])\b[^>]*>/gi;
+
 function stripHtml(html: string): string {
 	return html
 		.replace(/<style[\s\S]*?<\/style>/gi, '')
 		.replace(/<script[\s\S]*?<\/script>/gi, '')
-		.replace(/<[^>]+>/g, ' ')
-		.replace(/\s+/g, ' ')
+		.replace(HTML_BLOCK_BOUNDARY, '\n\n')   // block/line-break boundary -> paragraph break (survives the collapse as a boundary)
+		.replace(/<[^>]+>/g, ' ')               // remaining inline tags -> space, keeping same-line words together
+		.replace(/[^\S\n]+/g, ' ')              // collapse runs of spaces/tabs, leaving newlines intact
+		.replace(/ *\n */g, '\n')               // drop spaces hugging a newline
+		.replace(/\n{2,}/g, '\n\n')             // cap consecutive breaks at a single blank line
 		.trim();
 }
 

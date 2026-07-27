@@ -31,6 +31,26 @@ describe('buildBody — generic mail (cleanBody)', () => {
 		);
 		expect(out).toBe('Your Application at the MTA\nDear Hao Lin\nThank you for your interest. We have received your application.');
 	});
+	it('turns block-level HTML boundaries (<p>/<div>) into a "\\n" so a heading does not run into the next block', () => {
+		// Meta's shape: the "applying to Meta" heading and the "Hi Hao Lin" greeting live in SEPARATE blocks.
+		// Flattening every tag to a space glued them ("applying to Meta Hi Hao Lin," which the parser read as
+		// the company); a block boundary must survive as a "\n" so the capture stops at "Meta".
+		const out = buildBody(
+			msg(part('text/html', '<p>Thank you for applying to Meta</p><p>Hi Hao Lin, we received your application.</p>')),
+			'careers@meta.com',
+		);
+		expect(out).toBe('Thank you for applying to Meta\nHi Hao Lin, we received your application.');
+	});
+	it('keeps words on the same rendered line together across inline tags (<b>/<a>)', () => {
+		// Inline tags are NOT line breaks — dropping <b> to a space must not split "The New York Times"
+		// onto separate lines the way a block boundary would.
+		const out = buildBody(
+			msg(part('text/html', '<p>Thanks for your interest in <b>The New York Times</b>.</p>')),
+			'careers@nyt.com',
+		);
+		expect(out).toContain('The New York Times');   // inline tag boundaries stayed on one line
+		expect(out).not.toContain('\n');               // a single block -> no boundary inside it
+	});
 	it('falls back to the HTML part when the plain part is an unrendered template', () => {
 		const out = buildBody(
 			msg(part('text/plain', '<% I18n.t("confirmation.body") %>'), part('text/html', '<p>Thanks for applying to <b>Globex</b>!</p>')),
