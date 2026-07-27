@@ -26,7 +26,11 @@ const GEN_END = '(?=[.,!?\\n]|$)';
 /** Trim the capture to its leading proper-noun run, then reject req numbers / bad length. */
 function cleanGeneralCompany(s: string | null | undefined): string | null {
 	if (!s) return null;
-	const run = s.trim().match(PROPER_NOUN_RUN);              // didn't start with a capital → not a company name
+	// Drop a leading lowercase article the capture swept in from prose ("at the MTA" → "the MTA" → "MTA").
+	// Case-SENSITIVE on purpose: a capitalized "The" is part of the name itself ("The New York Times",
+	// "The Trade Desk") and must survive, so this must not run under a /i regex.
+	const withoutLeadingArticle = s.trim().replace(/^the\s+/, '');
+	const run = withoutLeadingArticle.match(PROPER_NOUN_RUN);   // didn't start with a capital → not a company name
 	if (!run) return null;
 	s = run[0].trim();
 	if (s.length < 2 || s.length > 50) return null;
@@ -119,7 +123,13 @@ function collectUntypedCompanySpans(text: string): string[] {
  * the same value this function has always returned, so an unconfirmed result never regresses.
  */
 export function extractGeneralCompanyRole(subject: string, body: string): { company: string; role: string | null; roleConfident: boolean; ambiguous: boolean; spans: string[] } | null {
-	const text = `${subject}\n${body}`;
+	// BODY-FIRST priority: the sender's own prose is the most reliable source; the subject is a condensed
+	// restatement that often swaps in a fuller/legal form ("…career with the MTA" in the body vs "at the
+	// Metropolitan Transportation Authority" in the subject). Concatenating body BEFORE subject makes every
+	// first-match-wins pattern prefer the body, and the subject fills in only when the body names nothing.
+	// Safe now that cleanBody keeps paragraph breaks as boundaries, so a body capture stops at the greeting
+	// ("…at the MTA⏎Dear Hao Lin") instead of swallowing it.
+	const text = `${body}\n${subject}`;
 	// Not applications: demographic surveys and "finish your draft" reminders.
 	if (/\b(demographic|survey)\b/i.test(text)) return null;
 	if (/keep track of your application|still working on the application|if you have completed the application/i.test(body)) return null;

@@ -295,6 +295,21 @@ describe('extractGeneralCompanyRole', () => {
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
 	});
+	it('reads the company from the BODY before the subject, stopping at the paragraph boundary ("MTA")', () => {
+		// cleanBody now delivers a paragraph break as "\n", so the body capture stops at the greeting instead
+		// of swallowing it ("MTA Dear Hao Lin Thank"). Body-first + the leading-"the" strip give the short form
+		// the body uses — which the subject's "Metropolitan Transportation Authority" no longer overrides.
+		const r = extractGeneralCompanyRole(
+			'Your Application for Application Developer Levels 1 - 5 at the Metropolitan Transportation Authority',
+			'Your Application for Application Developer Levels 1 - 5 at the MTA\nDear Hao Lin\nThank you for your interest in a career with the MTA. We have received your application for Application Developer Levels 1 - 5.',
+		);
+		expect(r?.company).toBe('MTA');
+		expect(r?.role).toBe('Application Developer Levels 1 - 5');
+	});
+	it('keeps a capitalized leading "The" that is part of the name ("The New York Times")', () => {
+		const r = extractGeneralCompanyRole('x', 'Thank you for applying to The New York Times. Your application has been received.');
+		expect(r?.company).toBe('The New York Times');
+	});
 
 	// Patterns that name both slots ("applying for [Role] at [Company]") are self-typing; the bare
 	// "interest in X" patterns are not, and only those need the LLM to say which slot X fills.

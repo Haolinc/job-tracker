@@ -21,6 +21,16 @@ describe('buildBody — generic mail (cleanBody)', () => {
 		const out = buildBody(msg(part('text/plain', 'We&rsquo;ve received your application &amp; will &#x2018;review&#x2019; it.')), 'careers@acme.com');
 		expect(out).toBe("We've received your application & will 'review' it.");
 	});
+	it('keeps a paragraph break as a "\\n" boundary but collapses a hard-wrapped line into a space', () => {
+		// Real plain-text shape (MTA): a blank line separates "…at the MTA" from the greeting — a reliable
+		// boundary that must survive as "\n" — while a lone newline only hard-wraps one sentence ("We
+		// have\nreceived"), which must become a space so the sentence stays intact.
+		const out = buildBody(
+			msg(part('text/plain', 'Your Application at the MTA\r\n\r\nDear Hao Lin\r\n\r\nThank you for your interest. We have\r\nreceived your application.')),
+			'noreply@hr1.mta.org',
+		);
+		expect(out).toBe('Your Application at the MTA\nDear Hao Lin\nThank you for your interest. We have received your application.');
+	});
 	it('falls back to the HTML part when the plain part is an unrendered template', () => {
 		const out = buildBody(
 			msg(part('text/plain', '<% I18n.t("confirmation.body") %>'), part('text/html', '<p>Thanks for applying to <b>Globex</b>!</p>')),
