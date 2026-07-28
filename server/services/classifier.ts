@@ -1,5 +1,6 @@
 import type { Classification } from '../types';
 import { canonicalReqId } from './parser/reqId';
+import { tidyRole } from './parser/roles';
 import { debug } from '../logger';
 import ollama from 'ollama';
 
@@ -209,86 +210,132 @@ async function classifyEmail(subject: string, from: string, body: string, hints?
 // ≥2 candidates (a lone span goes to the full classifier instead — see gmail.ts), so it always has a real
 // choice to make.
 //
-// Written in the full classifier's STYLE, not a one-liner: labeled COMPANY/ROLE rule sections, a
-// reason-before-answer scratch field (the chain-of-thought that drove the full classifier's accuracy), and
-// worked examples — because the terse original prompt is exactly what mislabeled a role as the company. The
-// answer fields are grammar-locked to the spans (or null), so the model can only label or decline, never
-// invent. STRICT null-when-uncertain: a null slot slides to the full classifier rather than shipping a guess.
-const pickerSystemPrompt = `You are given candidate spans pulled from a job-application email, with its From and Subject. Each span is the EMPLOYER (company), the JOB TITLE (role), or neither. Put the best-fitting span in each slot. Return ONLY this JSON (no prose, no markdown):
+// SOURCE-GROUNDED extraction, not span selection. The old picker was grammar-locked to the parser's exact
+// candidate spans (an enum), so when the parser mis-cut a span ("Astronomer for the Software Engineer…",
+// "Meta Hi Hao Lin") the correct answer was literally not in the allowed set — the model could only relabel a
+// bad cut, never fix it. Here the model reads the candidate-bearing sentence and returns the correct SLICE of
+// the text; the parser's spans are demoted to HINTS. Anti-hallucination moves from "must equal a span" to
+// "must appear verbatim in the email" (a substring check in code + a retry) — looser, so it can re-cut, but
+// still incapable of inventing a company. Reason-before-answer scratch fields carry the chain-of-thought.
+const pickerSystemPrompt = `You read a short excerpt of a job-application email and extract two things: the EMPLOYER (company) doing the hiring, and the JOB TITLE (role) the applicant applied for.
 
+You are given From, Subject, a Body excerpt, and candidate spans the parser guessed. The hints are ROUGH: they may glue a company to a greeting or a title ("Astronomer for the Software Engineer, Astro Core Services", "Meta Hi Hao Lin"), carry a requisition id, or trail extra words. Return the CORRECT slice of the text — do not trust a hint that is mis-cut.
+
+Return ONLY this JSON (no prose, no markdown):
 {
-  "company_reason": "<one short phrase: which span is the employer, or why none is> (fill BEFORE company)",
-  "company": "<the exact span that names the employer, or null>",
-  "role_reason": "<one short phrase: which span is the job title, or why none is> (fill BEFORE role)",
-  "role": "<the exact span that names the job title, or null>"
+  "company_reason": "<one short phrase: where the employer appears, or why none does> (fill BEFORE company)",
+  "company": "<the employer, copied verbatim from the text, or null>",
+  "role_reason": "<one short phrase: where the job title appears, or why none does> (fill BEFORE role)",
+  "role": "<the job title, copied verbatim from the text, or null>"
 }
 
-COMPANY — the organization doing the hiring.
-- A job title is NEVER a company: "Software Engineer", "QA Analyst", "Mid-Level Software Engineer", "Web Developer", "Data Scientist" are roles.
-- An ATS or job board is NEVER a company: Greenhouse, Lever, iCIMS, Taleo, Workday, LinkedIn, Indeed, SmartRecruiters → null.
-- A bare location or work mode is NEVER a company: "Remote", "Hybrid", "New York".
+RULES
+- VERBATIM: every returned value must appear word-for-word in the From, Subject, or Body excerpt. Never invent, translate, reword, or merge across a gap. If a value is not present, use null.
+- TRIM to the entity: from "…apply to Astronomer for the Software Engineer, Astro Core Services role" → company "Astronomer", role "Software Engineer, Astro Core Services". From "…applying to Meta Hi Hao Lin," → company "Meta". Drop greetings, "for the …" prose, and requisition ids.
+- COMPANY is the hiring organization. A job title, an ATS/job board (Greenhouse, Lever, iCIMS, Taleo, Workday, LinkedIn, Indeed, SmartRecruiters, Recruitee), a bare location, or a work mode is NEVER the company → null.
+- ROLE is the job title. A company name is never the role.
+- Accuracy over coverage: if unsure, use null — a fuller classifier re-reads the whole email.
 
-ROLE — the job title applied for, e.g. "<Level> <Discipline> Engineer/Analyst/Developer/Manager/Designer/Scientist".
+EXAMPLE
+From "no-reply@recruitee.com", Subject "Thank you for applying", Body "Thank you for your recent application for the Software Development Engineer in Test opportunity at FlexTrade."
+-> {"company_reason":"named after 'at' in the body","company":"FlexTrade","role_reason":"the title before 'opportunity'","role":"Software Development Engineer in Test"}`;
 
-STRICT — accuracy over coverage:
-- Copy a span EXACTLY as given; never invent, edit, merge, or shorten one.
-- A span may fit NEITHER slot. If you are not confident a span is a legitimate company (or role), put null there — do NOT force a guess. A null is safe: a fuller classifier re-reads the whole email.
-
-EXAMPLES
-From "careers@bloomberg.net", Spans ["Bloomberg","IT Service Desk Analyst"]
--> {"company_reason":"Bloomberg is a known employer","company":"Bloomberg","role_reason":"IT Service Desk Analyst is a job title","role":"IT Service Desk Analyst"}
-Spans ["Greenhouse","Backend Engineer"]
--> {"company_reason":"Greenhouse is an ATS, not an employer","company":null,"role_reason":"Backend Engineer is a job title","role":"Backend Engineer"}
-Spans ["Software Engineer","Platform Engineer"]
--> {"company_reason":"both spans are job titles; no employer named","company":null,"role_reason":"Software Engineer is the title","role":"Software Engineer"}`;
+const normalizeForCompare = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
- * Ask the model which of `spans` is the employer and which is the job title. Called ONLY for ≥2 candidates
- * (the caller routes a lone span to the full classifier), so there is always a genuine choice to make.
- *
- * The answer fields are grammar-constrained to an enum of the SPANS THEMSELVES (plus null), so the model can
- * only label a real candidate or decline — it cannot invent a company. A `reason` scratch field is generated
- * before each answer (chain-of-thought), mirroring the full classifier's source-before-value technique. That
- * enum changes per email, so this grammar compiles fresh each call — tiny, but not free.
+ * Anti-hallucination check that replaces the old span-enum: a returned value is trusted only if it appears
+ * verbatim (whitespace/case-insensitive) in the email's own text. Looser than "equals a parser span" — the
+ * model may re-cut a mis-glued span — but it still cannot invent a company that isn't in the email.
+ */
+function appearsInSource(value: string, groundingSources: string[]): boolean {
+	const normalizedValue = normalizeForCompare(value);
+	return normalizedValue.length > 0 && groundingSources.some(source => normalizeForCompare(source).includes(normalizedValue));
+}
+
+/**
+ * The candidate-bearing sentence(s) — the excerpt the picker extracts from. The picker used to be blind to the
+ * body for speed; source-grounded extraction needs enough context to re-cut a mis-glued span, but not the
+ * whole body. Pick the body sentences that mention a candidate (matched by the candidate's leading words,
+ * since a trimmed span may not be verbatim), in order, capped; fall back to the opening sentences.
+ */
+export function pickerContext(body: string, spans: string[]): string {
+	const sentences = body.split(/(?<=[.!?])\s+|\n+/).map(sentence => sentence.trim()).filter(Boolean);
+	// Match a sentence by each span's leading words — a trimmed span may not be verbatim, but its first few are.
+	const spanLeadWords = spans
+		.map(span => normalizeForCompare(span).split(' ').slice(0, 3).join(' '))
+		.filter(leadWords => leadWords.length >= 3);
+	const matchedSentences: string[] = [];
+	for (const sentence of sentences) {
+		const normalizedSentence = normalizeForCompare(sentence);
+		if (spanLeadWords.some(leadWords => normalizedSentence.includes(leadWords)) && !matchedSentences.includes(sentence)) matchedSentences.push(sentence);
+		if (matchedSentences.join(' ').length > 400) break;
+	}
+	return (matchedSentences.length ? matchedSentences : sentences.slice(0, 2)).join(' ').slice(0, 500);
+}
+
+/**
+ * Extract the employer and job title from the candidate-bearing sentence. Called ONLY for ≥2 candidates (the
+ * caller routes a lone span to the full classifier). The parser's spans are HINTS, not the answer set: the
+ * model returns the correct SLICE of the email text, and a substring check (plus one corrective retry) keeps
+ * it from inventing anything not in the email — so it can fix a mis-cut span the old enum forbade correcting.
  *
  * Returns null on a failed/unparseable call (caller keeps the parser's own guess); a successful call with
- * `company === null` is a real "not confident any span is the employer" and tells the caller to slide to the
- * full classifier.
+ * `company === null` is a real "no trustworthy employer in the text" and tells the caller to slide to the
+ * full classifier. The role is run through tidyRole so a recovered title gets the same req/location cleanup.
  */
-async function pickCompanyRole(spans: string[], subject: string, from: string): Promise<{ company: string | null; role: string | null } | null> {
+async function pickCompanyRole(spans: string[], subject: string, from: string, body: string): Promise<{ company: string | null; role: string | null } | null> {
 	if (spans.length === 0) return null;
-	// enum (not a bare string type) is what forbids invention: the sampler can emit only one of these exact
-	// strings or null. Kept in the parser's priority order so ties break the way the deterministic guess did.
-	const spanEnum = { enum: [...spans, null] };
-	try {
+	const bodyExcerpt = pickerContext(body, spans);
+	const groundingSources = [subject, body, from];   // a valid answer must be verbatim in one of these
+	const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+		{ role: 'system', content: pickerSystemPrompt },
+		{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody excerpt:\n${bodyExcerpt}\n\nParser hints (rough, may be mis-cut): ${spans.join(' | ')}` },
+	];
+	const nullableString = { type: ['string', 'null'] };
+	const runPickerCall = async () => {
 		const chatResponse = await ollama.chat({
 			model: classifierModel(),
-			messages: [
-				{ role: 'system', content: pickerSystemPrompt },
-				{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nSpans:\n${spans.map(s => `- ${s}`).join('\n')}` },
-			],
+			messages,
 			format: {
 				type: 'object',
 				properties: {
 					company_reason: { type: 'string' },
-					company:        spanEnum,
+					company:        nullableString,
 					role_reason:    { type: 'string' },
-					role:           spanEnum,
+					role:           nullableString,
 				},
 				required: ['company_reason', 'company', 'role_reason', 'role'],
 			},
 			options: {
-				num_predict: 100,   // two short reason phrases + two copied spans — 100 covers long titles with room
+				num_predict: 160,   // reads a sentence now; two reason phrases + two possibly-long titles
 				temperature: 0,
 			},
 		});
 		const responseText = chatResponse.message.content.trim();
+		const jsonStart = responseText.indexOf('{'), jsonEnd = responseText.lastIndexOf('}');
+		return { responseText, parsed: JSON.parse(jsonStart !== -1 && jsonEnd !== -1 ? responseText.slice(jsonStart, jsonEnd + 1) : responseText) as Record<string, unknown> };
+	};
+	try {
+		let { responseText, parsed } = await runPickerCall();
 		debug(`[pick] spans=${JSON.stringify(spans)} ->`, responseText.replace(/\s*\n\s*/g, ' '));
-		const start = responseText.indexOf('{'), end = responseText.lastIndexOf('}');
-		const parsed = JSON.parse(start !== -1 && end !== -1 ? responseText.slice(start, end + 1) : responseText) as Record<string, unknown>;
-		// Belt and braces behind the grammar: only ever return a string the parser actually found in the email.
-		const labelled = (value: unknown) => (typeof value === 'string' && spans.includes(value) ? value : null);
-		return { company: labelled(parsed.company), role: labelled(parsed.role) };
+		const keepIfInSource = (value: unknown) => (typeof value === 'string' && appearsInSource(value, groundingSources) ? value : null);
+		let company = keepIfInSource(parsed.company);
+		let role    = keepIfInSource(parsed.role);
+		// A non-null answer that is NOT verbatim-in-source is an over-edit — retry ONCE with feedback (research:
+		// a single correction round fixes the vast majority), then null anything still ungrounded.
+		const companyOverEdited = typeof parsed.company === 'string' && company === null;
+		const roleOverEdited    = typeof parsed.role === 'string' && role === null;
+		if (companyOverEdited || roleOverEdited) {
+			const offendingFields = [companyOverEdited ? `company "${String(parsed.company)}"` : '', roleOverEdited ? `role "${String(parsed.role)}"` : '']
+				.filter(Boolean).join(' and ');
+			messages.push({ role: 'assistant', content: responseText });
+			messages.push({ role: 'user', content: `The ${offendingFields} does not appear word-for-word in the text. Copy the exact substring from the From/Subject/Body excerpt, or use null. Return the JSON again.` });
+			({ responseText, parsed } = await runPickerCall());
+			debug(`[pick] retry ->`, responseText.replace(/\s*\n\s*/g, ' '));
+			company = keepIfInSource(parsed.company);
+			role    = keepIfInSource(parsed.role);
+		}
+		return { company, role: role ? tidyRole(role) : null };
 	} catch (error) {
 		debug(`[pick] failed: ${error instanceof Error ? error.message : String(error)}`);
 		return null;

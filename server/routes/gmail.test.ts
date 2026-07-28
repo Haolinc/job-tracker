@@ -113,7 +113,7 @@ describe('classifyOne', () => {
 			});
 			pickCompanyRoleMock.mockResolvedValue({ company: 'Axoni', role: 'Software Engineer' });
 			const result = await classifyOne(email);
-			expect(pickCompanyRoleMock).toHaveBeenCalledWith(['Axoni', 'Software Engineer'], email.subject, email.from);
+			expect(pickCompanyRoleMock).toHaveBeenCalledWith(['Axoni', 'Software Engineer'], email.subject, email.from, email.body);
 			expect(classifyEmailMock).not.toHaveBeenCalled();   // the picker replaces the full classification
 			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Software Engineer', detectedBy: 'parser' });
 		});

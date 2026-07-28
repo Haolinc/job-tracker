@@ -82,8 +82,16 @@ describe('tidyRole', () => {
 		['R-78284 Software Engineer I', 'Software Engineer I'],            // hyphenated leading req
 		['Development Engineer in Test [208728]', 'Development Engineer in Test'],   // bracket-wrapped id
 		['QA Engineer [Remote]', 'QA Engineer [Remote]'],                 // bracket without a digit kept
+		['Software Development Engineer in Test opportunity', 'Software Development Engineer in Test'],   // trailing descriptor noun
+		['Software Engineer opening', 'Software Engineer'],
+		['NAMR Software Engineering Program - Campus Hiring - 2026 position', 'NAMR Software Engineering Program - Campus Hiring - 2026'],   // trailing " position"
+		['Software Test Method Validation (TMV) 26-00635', 'Software Test Method Validation (TMV)'],   // space+hyphen req, both halves stripped
+		['SOFTW005349 - Software Developer I', 'Software Developer I'],    // leading 5-letter-prefix req joined by " - "
+		['R2026-1234: Platform Engineer', 'Platform Engineer'],           // leading req joined by " : "
 		// regressions — must be left intact:
 		['2026 Emerging Talent Software Engineers - Full time', '2026 Emerging Talent Software Engineers - Full time'],
+		['3D - Modeler', '3D - Modeler'],                                 // leading token has <4 digits → not a req, kept
+		['Software Engineer Opportunities in NJ', 'Software Engineer Opportunities in NJ'],   // "Opportunities" mid-string (not trailing) untouched
 		['3D Designer', '3D Designer'],
 		['Software Engineer III', 'Software Engineer III'],
 		['QA Automation Engineer (All Levels)', 'QA Automation Engineer (All Levels)'],
@@ -359,6 +367,12 @@ describe('recoverRoleFromBody', () => {
 		// False-positive guard: a bare "applying to [Company]" (no "[Company] -" prefix) must NOT become a role.
 		['Thank you for applying. Your application has been received.', 'Thank you for applying to Amazon', null],
 		['Just a plain confirmation with no recognizable title anywhere.', 'None', null],
+		// "apply to [Company] for the [Role] role" — the "for the" guard rejects the company-swallowing capture
+		// ("Astronomer for the Software Engineer…") so the lower-priority "the [Role] role" pattern recovers it.
+		['Thank you for taking the time to apply to Astronomer for the Software Engineer, Astro Core Services role.', 'None', 'Software Engineer, Astro Core Services'],
+		// department line "our [Dept] team for the following position: [Role]" — the prose is rejected, the
+		// colon-listed title after "following position:" wins.
+		['Your resume will be reviewed by our Recruiting team for the following position: Entry-Level Full Stack Software Developer', 'None', 'Entry-Level Full Stack Software Developer'],
 	];
 	it.each(cases)('body=%j subject=%j -> %j', (body, subject, expected) => {
 		expect(recoverRoleFromBody(body, subject)).toBe(expected);

@@ -89,7 +89,7 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 			classification = null;
 			detectedBy = 'llm';
 		} else {
-			const picked = await pickCompanyRole(spans, subject, from);
+			const picked = await pickCompanyRole(spans, subject, from, body);
 			if (picked?.company) {
 				debug(`[sync] picked: company="${picked.company}" role="${picked.role ?? ''}" subject="${subject}"`);
 				classification = { ...classification, company: picked.company, role: picked.role ?? classification.role };
