@@ -150,9 +150,12 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		}
 	}
 
-	// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
+	// Indeed / LinkedIn fast-apply carry the title EXACTLY as the job board posted it — a req-id or location in
+	// there is part of the posting, so trimming it would corrupt the real title. Store those verbatim. Other
+	// paths still get a final tidy so an AI-included req/ID or location tail
 	// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
-	if (classification.role) classification.role = tidyRole(classification.role) || null;
+	const postedVerbatim = classification.classifier_code === 'indeed_applied' || classification.classifier_code === 'linkedin_applied';
+	if (classification.role && !postedVerbatim) classification.role = tidyRole(classification.role) || null;
 	const { category, role } = classification;
 	const classifierCode = classification.classifier_code;
 	let { company } = classification;
