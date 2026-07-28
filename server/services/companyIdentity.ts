@@ -22,7 +22,7 @@ const ATS_DOMAINS = new Set([
 // alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
 // even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
+export const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
 
 // Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
 // "Sun West Mortgage" resolve to the same dedup key.

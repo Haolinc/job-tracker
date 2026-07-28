@@ -1,6 +1,7 @@
 import type { Classification } from '../types';
 import { canonicalReqId } from './parser/reqId';
 import { tidyRole } from './parser/roles';
+import { companyKey, ATS_BRANDS } from './companyIdentity';
 import { debug } from '../logger';
 import ollama from 'ollama';
 
@@ -219,7 +220,7 @@ async function classifyEmail(subject: string, from: string, body: string, hints?
 // still incapable of inventing a company. Reason-before-answer scratch fields carry the chain-of-thought.
 const pickerSystemPrompt = `You read a short excerpt of a job-application email and extract two things: the EMPLOYER (company) doing the hiring, and the JOB TITLE (role) the applicant applied for.
 
-You are given From, Subject, a Body excerpt, and candidate spans the parser guessed. The hints are ROUGH: they may glue a company to a greeting or a title ("Astronomer for the Software Engineer, Astro Core Services", "Meta Hi Hao Lin"), carry a requisition id, or trail extra words. Return the CORRECT slice of the text — do not trust a hint that is mis-cut.
+You are given a Subject, a Body excerpt, and candidate spans the parser guessed. The hints are ROUGH: they may glue a company to a greeting or a title ("Astronomer for the Software Engineer, Astro Core Services", "Meta Hi Hao Lin"), carry a requisition id, or trail extra words. Return the CORRECT slice of the text — do not trust a hint that is mis-cut.
 
 Return ONLY this JSON (no prose, no markdown):
 {
@@ -230,15 +231,17 @@ Return ONLY this JSON (no prose, no markdown):
 }
 
 RULES
-- VERBATIM: every returned value must appear word-for-word in the From, Subject, or Body excerpt. Never invent, translate, reword, or merge across a gap. If a value is not present, use null.
-- TRIM to the entity: from "…apply to Astronomer for the Software Engineer, Astro Core Services role" → company "Astronomer", role "Software Engineer, Astro Core Services". From "…applying to Meta Hi Hao Lin," → company "Meta". Drop greetings, "for the …" prose, and requisition ids.
+- VERBATIM: every returned value must appear word-for-word in the Subject or Body excerpt. Never invent, translate, reword, or merge across a gap — never append an ATS or portal name (e.g. "Acme @ iCIMS") that isn't already glued to the company in the text. If a value is not present, use null.
+- WORD ORDER: in "apply to X for the Y role" / "application to X for Y", X (right after "to") is the COMPANY and Y (after "for") is the ROLE — never the reverse. Drop the connective "for the" prose, greetings, and requisition ids.
 - COMPANY is the hiring organization. A job title, an ATS/job board (Greenhouse, Lever, iCIMS, Taleo, Workday, LinkedIn, Indeed, SmartRecruiters, Recruitee), a bare location, or a work mode is NEVER the company → null.
 - ROLE is the job title. A company name is never the role.
 - Accuracy over coverage: if unsure, use null — a fuller classifier re-reads the whole email.
 
-EXAMPLE
-From "no-reply@recruitee.com", Subject "Thank you for applying", Body "Thank you for your recent application for the Software Development Engineer in Test opportunity at FlexTrade."
--> {"company_reason":"named after 'at' in the body","company":"FlexTrade","role_reason":"the title before 'opportunity'","role":"Software Development Engineer in Test"}`;
+EXAMPLES
+Body "Thank you for your recent application for the Software Development Engineer in Test opportunity at FlexTrade."
+-> {"company_reason":"named after 'at' in the body","company":"FlexTrade","role_reason":"the title before 'opportunity'","role":"Software Development Engineer in Test"}
+Body "Thank you for taking the time to apply to Astronomer for the Software Engineer, Astro Core Services role."
+-> {"company_reason":"named after 'to' in the body","company":"Astronomer","role_reason":"the title after 'for the'","role":"Software Engineer, Astro Core Services"}`;
 
 const normalizeForCompare = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
@@ -250,6 +253,35 @@ const normalizeForCompare = (text: string) => text.toLowerCase().replace(/\s+/g,
 function appearsInSource(value: string, groundingSources: string[]): boolean {
 	const normalizedValue = normalizeForCompare(value);
 	return normalizedValue.length > 0 && groundingSources.some(source => normalizeForCompare(source).includes(normalizedValue));
+}
+
+/**
+ * Backstop for the case tightened grounding can't catch: an "Acme @ iCIMS" / "Acme @ MyWorkday" footer line
+ * that genuinely lands in the excerpt, so the model copies it verbatim and it passes appearsInSource. The
+ * employer is the hiring org, never the ATS/portal it was posted on — reject when the whole value is a known
+ * ATS brand, or when a trailing "@ <token>" (or " on <token>") names one.
+ */
+function isAtsContaminatedCompany(company: string): boolean {
+	if (ATS_BRANDS.has(companyKey(company))) return true;
+	const trailingPortal = company.match(/(?:@|\bon\b|\bvia\b)\s*([A-Za-z0-9][A-Za-z0-9.\- ]*)$/i);
+	return trailingPortal !== null && ATS_BRANDS.has(companyKey(trailingPortal[1]));
+}
+
+// A verbatim-but-over-captured company: the model dragged the surrounding sentence in with the name
+// ("employment with Peraton", "our company"). Grounding can't catch it (the prose IS in the body), so this
+// reject sends it to the full classifier. Two tells, kept deliberately narrow to avoid nuking real names:
+//   1. lowercase-first AND multi-word — a copied mid-sentence function word is lowercase, but a real name is
+//      capitalized even mid-sentence ("In-Depth Engineering", "Peraton"); the multi-word guard spares brand-cased
+//      single tokens like "eBay"/"iRobot"/"xAI".
+//   2. a possessive lead ("Our company", "Your team") even when capitalized at a sentence start.
+// Symmetric to cleanGeneralRole's prose reject on the role side. "The New York Times" survives both.
+function looksLikeProseCompany(company: string): boolean {
+	const trimmed = company.trim();
+	if (!trimmed) return true;
+	const isMultiWord = /\s/.test(trimmed);
+	if (isMultiWord && /^[a-z]/.test(trimmed)) return true;
+	if (isMultiWord && /^(?:our|your|my|their|his|her|its)\b/i.test(trimmed)) return true;
+	return false;
 }
 
 /**
@@ -283,13 +315,17 @@ export function pickerContext(body: string, spans: string[]): string {
  * `company === null` is a real "no trustworthy employer in the text" and tells the caller to slide to the
  * full classifier. The role is run through tidyRole so a recovered title gets the same req/location cleanup.
  */
-async function pickCompanyRole(spans: string[], subject: string, from: string, body: string): Promise<{ company: string | null; role: string | null } | null> {
+async function pickCompanyRole(spans: string[], subject: string, body: string): Promise<{ company: string | null; role: string | null } | null> {
 	if (spans.length === 0) return null;
 	const bodyExcerpt = pickerContext(body, spans);
-	const groundingSources = [subject, body, from];   // a valid answer must be verbatim in one of these
+	// Ground the answer against EXACTLY what the model is shown — the excerpt and subject — not the full body or
+	// sender. Validating against the whole body let a fabricated "Liberty Mutual @ icims" pass because that
+	// footer cruft lived in a part of the body the model never read; the sender (an ATS address) fed the model
+	// the very "icims" token it stitched on. Shown-set == validated-set is the whole anti-hallucination guarantee.
+	const groundingSources = [bodyExcerpt, subject];
 	const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
 		{ role: 'system', content: pickerSystemPrompt },
-		{ role: 'user',   content: `From: ${from}\nSubject: ${subject}\n\nBody excerpt:\n${bodyExcerpt}\n\nParser hints (rough, may be mis-cut): ${spans.join(' | ')}` },
+		{ role: 'user',   content: `Subject: ${subject}\n\nBody excerpt:\n${bodyExcerpt}\n\nParser hints (rough, may be mis-cut): ${spans.join(' | ')}` },
 	];
 	const nullableString = { type: ['string', 'null'] };
 	const runPickerCall = async () => {
@@ -318,22 +354,27 @@ async function pickCompanyRole(spans: string[], subject: string, from: string, b
 	try {
 		let { responseText, parsed } = await runPickerCall();
 		debug(`[pick] spans=${JSON.stringify(spans)} ->`, responseText.replace(/\s*\n\s*/g, ' '));
-		const keepIfInSource = (value: unknown) => (typeof value === 'string' && appearsInSource(value, groundingSources) ? value : null);
-		let company = keepIfInSource(parsed.company);
-		let role    = keepIfInSource(parsed.role);
-		// A non-null answer that is NOT verbatim-in-source is an over-edit — retry ONCE with feedback (research:
-		// a single correction round fixes the vast majority), then null anything still ungrounded.
+		const keepRoleIfInSource    = (value: unknown) => (typeof value === 'string' && appearsInSource(value, groundingSources) ? value : null);
+		// Company must be grounded, not an ATS/portal name copied whole from a footer, and not sentence prose
+		// dragged in with the name ("employment with Peraton", "our company").
+		const keepCompanyIfInSource = (value: unknown) =>
+			typeof value === 'string' && appearsInSource(value, groundingSources)
+				&& !isAtsContaminatedCompany(value) && !looksLikeProseCompany(value) ? value : null;
+		let company = keepCompanyIfInSource(parsed.company);
+		let role    = keepRoleIfInSource(parsed.role);
+		// A non-null answer we rejected (not verbatim-in-source, or an ATS name) is an over-edit — retry ONCE with
+		// feedback (research: a single correction round fixes the vast majority), then null anything still bad.
 		const companyOverEdited = typeof parsed.company === 'string' && company === null;
 		const roleOverEdited    = typeof parsed.role === 'string' && role === null;
 		if (companyOverEdited || roleOverEdited) {
 			const offendingFields = [companyOverEdited ? `company "${String(parsed.company)}"` : '', roleOverEdited ? `role "${String(parsed.role)}"` : '']
 				.filter(Boolean).join(' and ');
 			messages.push({ role: 'assistant', content: responseText });
-			messages.push({ role: 'user', content: `The ${offendingFields} does not appear word-for-word in the text. Copy the exact substring from the From/Subject/Body excerpt, or use null. Return the JSON again.` });
+			messages.push({ role: 'user', content: `The ${offendingFields} is not usable — it is not word-for-word in the text, it is an applicant-tracking/portal name (iCIMS, Workday, …) rather than the employer, or it drags in surrounding words ("employment with Acme", "our company"). Copy ONLY the exact employer/title substring from the Subject or Body excerpt, or use null. Return the JSON again.` });
 			({ responseText, parsed } = await runPickerCall());
 			debug(`[pick] retry ->`, responseText.replace(/\s*\n\s*/g, ' '));
-			company = keepIfInSource(parsed.company);
-			role    = keepIfInSource(parsed.role);
+			company = keepCompanyIfInSource(parsed.company);
+			role    = keepRoleIfInSource(parsed.role);
 		}
 		return { company, role: role ? tidyRole(role) : null };
 	} catch (error) {
@@ -342,4 +383,4 @@ async function pickCompanyRole(spans: string[], subject: string, from: string, b
 	}
 }
 
-export { classifyEmail, warmUpModel, pickCompanyRole };
+export { classifyEmail, warmUpModel, pickCompanyRole, appearsInSource, isAtsContaminatedCompany, looksLikeProseCompany };
