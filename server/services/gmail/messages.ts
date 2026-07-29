@@ -8,6 +8,7 @@ import type { EmailResult } from '../../types';
 import { getOAuthClient } from './oauth';
 import { buildBody } from './body';
 import { debug } from '../../logger';
+import { localDateString } from '../../utils';
 
 const BATCH_SIZE = 10;
 // Minimum spacing between batch *starts* (not a flat post-batch sleep). messages.get costs 20
@@ -80,7 +81,7 @@ function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 		from,
 		body:            buildBody(msg, from),
 		internalDate,
-		lastMessageDate: new Date(internalDate).toISOString().split('T')[0],
+		lastMessageDate: localDateString(internalDate),
 	};
 }
 

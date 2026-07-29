@@ -1,6 +1,7 @@
 import type { Application } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 import { serializeEmails } from './emailRefs';
+import { todayLocalDateTime } from './localDate';
 
 // RFC-4180 escaping: quote a cell if it contains a comma, quote, or newline; double any inner quotes.
 function csvCell(value: unknown): string {
@@ -47,7 +48,7 @@ export function downloadApplicationsCsv(apps: Application[]): void {
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;
-	a.download = `job-applications-${new Date().toISOString().slice(0, 10)}.csv`;
+	a.download = `job-applications-${todayLocalDateTime()}.csv`;
 	document.body.appendChild(a);
 	a.click();
 	a.remove();

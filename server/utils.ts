@@ -42,3 +42,12 @@ export function formatDuration(ms: number): string {
 	if (s || !parts.length) parts.push(`${s}s`);
 	return parts.join(' ');
 }
+
+// YYYY-MM-DD in the machine's LOCAL timezone. Used for date_applied/last_activity so an email received
+// in the evening in a timezone behind UTC keeps its local calendar day instead of rolling to the next
+// (toISOString would format in UTC, shifting the date). The desktop app runs on the user's own machine,
+// so local time here IS the user's day.
+export function localDateString(epochMs: number): string {
+	const d = new Date(epochMs);
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

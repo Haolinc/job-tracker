@@ -2,6 +2,7 @@ import { useState, type ReactNode, type SubmitEventHandler } from 'react';
 import type { ApplicationFormData, Status, InterviewStep } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 import { extractMessageId } from '../utils/emailRefs';
+import { todayLocalDate } from '../utils/localDate';
 
 const EMPTY: ApplicationFormData = {
 	company: '', role: '', status: 'applied', reached_interview: false,
@@ -9,7 +10,7 @@ const EMPTY: ApplicationFormData = {
 	account: '', emails: [],
 };
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+const todayIso = () => todayLocalDate();
 
 interface Props {
 	initial: Partial<ApplicationFormData> | null;
