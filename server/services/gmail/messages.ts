@@ -81,7 +81,7 @@ function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 		from,
 		body:            buildBody(msg, from),
 		internalDate,
-		lastMessageDate: localDateString(internalDate),
+		lastMessageDate: localDateString(new Date(internalDate)),
 	};
 }
 

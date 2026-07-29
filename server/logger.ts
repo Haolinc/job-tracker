@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { localDateString, localTimestamp } from './utils';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -38,13 +39,8 @@ let active = false;
 const formatArg = (a: unknown): string =>
 	typeof a === 'object' && a !== null ? JSON.stringify(a, null, 2) : String(a);
 
-/** Today as YYYY-MM-DD in LOCAL time — log days should match the user's calendar, not UTC's. */
-function localDateStamp(): string {
-	const now = new Date();
-	const month = String(now.getMonth() + 1).padStart(2, '0');
-	const day   = String(now.getDate()).padStart(2, '0');
-	return `${now.getFullYear()}-${month}-${day}`;
-}
+// Local date/time formatting lives in ./utils (localDateString, localTimestamp) so every caller — logs,
+// email dates, exports — formats identically. The rotation logic below keys off localDateString().
 
 function closeStreams(): void {
 	debugStream?.end();
@@ -55,7 +51,7 @@ function closeStreams(): void {
 
 /** Close both streams when the date has changed, so the next write reopens them under the new day's files. */
 function rotateOnDateChange(): void {
-	const today = localDateStamp();
+	const today = localDateString();
 	if (today === openStreamsDate) return;
 	closeStreams();
 	openStreamsDate = today;
@@ -104,7 +100,7 @@ function currentDebugStream(): fs.WriteStream | null {
 	dropStreamsWhoseFileWasDeleted();
 	if (!debugStream) {
 		debugStream = openLogStream('debug');
-		debugStream.write(`\n--- Logging enabled ${new Date().toISOString()} ---\n`);
+		debugStream.write(`\n--- Logging enabled ${localTimestamp()} ---\n`);
 	}
 	return debugStream;
 }
@@ -214,5 +210,5 @@ export const isEnabled = (): boolean => active;
  *   mark('fetchJobEmails done');
  */
 export function mark(label: string): void {
-	writeDebugLine(`\n=== ${label} — ${new Date().toISOString()} ===`);
+	writeDebugLine(`\n=== ${label} — ${localTimestamp()} ===`);
 }

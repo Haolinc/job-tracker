@@ -43,11 +43,38 @@ export function formatDuration(ms: number): string {
 	return parts.join(' ');
 }
 
-// YYYY-MM-DD in the machine's LOCAL timezone. Used for date_applied/last_activity so an email received
-// in the evening in a timezone behind UTC keeps its local calendar day instead of rolling to the next
-// (toISOString would format in UTC, shifting the date). The desktop app runs on the user's own machine,
-// so local time here IS the user's day.
-export function localDateString(epochMs: number): string {
-	const d = new Date(epochMs);
-	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// ── Local date/time formatting ───────────────────────────────────────────────
+// The desktop app runs on the user's own machine, so LOCAL time IS the user's day and clock. toISOString()
+// would format in UTC, which for a timezone behind UTC turns an evening instant into the next calendar day —
+// the bug these helpers exist to avoid. One home for all of it so every caller formats identically.
+
+const twoDigits = (value: number): string => String(value).padStart(2, '0');
+
+/** A calendar day as YYYY-MM-DD in the machine's local timezone. Used for date_applied/last_activity and
+ *  the dated log filenames, so an evening email keeps its local day instead of rolling to the next. */
+export function localDateString(instant: Date = new Date()): string {
+	return `${instant.getFullYear()}-${twoDigits(instant.getMonth() + 1)}-${twoDigits(instant.getDate())}`;
+}
+
+/** A local wall-clock timestamp "YYYY-MM-DD HH:mm:ss ABBR (UTC±HH:MM)": the date matches localDateString,
+ *  the time is the local clock, and the timezone (short name when the runtime supplies one, plus the numeric
+ *  offset) makes the instant unambiguous to a reader in any timezone. Used for in-file log timestamps. */
+export function localTimestamp(instant: Date = new Date()): string {
+	const wallClockTime = `${localDateString(instant)} ${twoDigits(instant.getHours())}:${twoDigits(instant.getMinutes())}:${twoDigits(instant.getSeconds())}`;
+
+	// getTimezoneOffset is minutes from local TO UTC: +240 => UTC-4 (behind UTC), -480 => UTC+8 (ahead).
+	const minutesFromLocalToUtc = instant.getTimezoneOffset();
+	const offsetSign = minutesFromLocalToUtc <= 0 ? '+' : '-';
+	const utcOffsetLabel = `UTC${offsetSign}${twoDigits(Math.floor(Math.abs(minutesFromLocalToUtc) / 60))}:${twoDigits(Math.abs(minutesFromLocalToUtc) % 60)}`;
+
+	// A short zone name ("EDT", "PST") is friendlier than the offset alone; skip a "GMT-4"-style name (the
+	// numeric offset already covers it) and tolerate a runtime without full ICU data.
+	let zoneAbbreviation = '';
+	try {
+		const shortZoneName = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+			.formatToParts(instant).find(part => part.type === 'timeZoneName')?.value;
+		if (shortZoneName && !/^(?:UTC|GMT)/i.test(shortZoneName)) zoneAbbreviation = `${shortZoneName} `;
+	} catch { /* Intl without full ICU — the numeric offset is enough */ }
+
+	return `${wallClockTime} ${zoneAbbreviation}(${utcOffsetLabel})`;
 }
