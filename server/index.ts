@@ -27,7 +27,9 @@ if (launcherPid) {
 const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
 for (const key of required) {
 	if (!process.env[key]) {
-		console.error(`ERROR: ${key} is not set. Add it to your .env file.`);
+		// Every required key is also editable in the launcher's Config panel (see desktop/src/config.ts),
+		// which is where a desktop user sets these — the .env file is the dev-facing path to the same values.
+		console.error(`ERROR: ${key} is not set. Add it via the launcher's Config panel, or to your .env file.`);
 		process.exit(1);
 	}
 }
