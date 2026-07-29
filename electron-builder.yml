@@ -29,8 +29,14 @@ extraResources:
   - from: build/icon.ico
     to: icon.ico
   # Production-only, Electron-ABI copy of the server produced by scripts/stage-server.mjs.
+  # The explicit filter is required from electron-builder 26 on: without it the copy silently drops
+  # node_modules (so better-sqlite3's native .node never ships and the packaged server dies on startup).
   - from: build-staging/server
     to: server
+  # electron-builder 26 excludes node_modules from an extraResources directory copy, which would drop
+  # better-sqlite3's native .node and break the packaged server on startup. Copy it as its own entry.
+  - from: build-staging/server/node_modules
+    to: server/node_modules
   - from: client/dist
     to: client/dist
   - from: scripts

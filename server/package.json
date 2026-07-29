@@ -19,8 +19,12 @@
 		"dotenv": "^16.0.0",
 		"express": "^4.18.0",
 		"express-session": "^1.17.0",
-		"googleapis": "^140.0.0",
+		"googleapis": "^173.0.0",
 		"ollama": "^0.6.3"
+	},
+	"//overrides": "gaxios (via googleapis-common) pulls an old rimraf->glob->minimatch chain whose brace-expansion has a DoS advisory. npm cannot dedupe it because the copy is nested, so pin the fixed line here. Drop this once gaxios ships a rimraf that no longer needs it.",
+	"overrides": {
+		"brace-expansion": "^5.0.8"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
