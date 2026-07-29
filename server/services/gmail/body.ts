@@ -26,12 +26,24 @@ function decodePart(part: gmail_v1.Schema$MessagePart): string {
 	return Buffer.from(part.body!.data!, 'base64url').toString('utf-8');
 }
 
+// Block-level / line-break tags whose boundaries are actual line breaks in the rendered email. HTML has no
+// hard-wraps — the browser wraps visually — so every one of these boundaries is a real break the reader sees,
+// unlike a lone newline in plain text. We turn them into a blank-line paragraph break (not a space) so the
+// downstream whitespace collapse keeps them as "\n" boundaries, and a company name in one block can't run
+// into the text of the next ("…applying to Meta" sits in its own block, ABOVE the "Hi Hao Lin" greeting, so
+// it must not flatten to "applying to Meta Hi Hao Lin"). Everything else — inline tags: span, a, b, strong,
+// em, font, img — is dropped to a single space so words on the same rendered line stay on it.
+const HTML_BLOCK_BOUNDARY = /<\/?(?:p|div|br|hr|tr|li|ul|ol|table|blockquote|h[1-6])\b[^>]*>/gi;
+
 function stripHtml(html: string): string {
 	return html
 		.replace(/<style[\s\S]*?<\/style>/gi, '')
 		.replace(/<script[\s\S]*?<\/script>/gi, '')
-		.replace(/<[^>]+>/g, ' ')
-		.replace(/\s+/g, ' ')
+		.replace(HTML_BLOCK_BOUNDARY, '\n\n')   // block/line-break boundary -> paragraph break (survives the collapse as a boundary)
+		.replace(/<[^>]+>/g, ' ')               // remaining inline tags -> space, keeping same-line words together
+		.replace(/[^\S\n]+/g, ' ')              // collapse runs of spaces/tabs, leaving newlines intact
+		.replace(/ *\n */g, '\n')               // drop spaces hugging a newline
+		.replace(/\n{2,}/g, '\n\n')             // cap consecutive breaks at a single blank line
 		.trim();
 }
 
@@ -106,8 +118,28 @@ function cleanBody(raw: string): string {
 	const footerIdx = text.search(FOOTER_RE);
 	if (footerIdx > 0) text = text.slice(0, footerIdx);
 
-	// 8. Collapse whitespace.
-	return text.replace(/\s+/g, ' ').trim();
+	// 8. Collapse whitespace, KEEPING paragraph breaks as boundaries.
+	return collapseWhitespaceKeepingParagraphs(text);
+}
+
+/**
+ * Collapse whitespace but preserve a paragraph break as a single "\n" boundary. Plain-text senders separate
+ * paragraphs with a blank line — the reliable boundary between "…at the MTA" and the "Dear Hao Lin" greeting —
+ * but ALSO hard-wrap long sentences with a lone newline ("We have\nreceived your application"). The old
+ * blanket `\s+ -> " "` erased the paragraph boundary, so a company capture ran straight through the greeting
+ * ("MTA Dear Hao Lin Thank"); keeping EVERY newline would instead split hard-wrapped sentences. So: a
+ * blank-line paragraph break becomes one "\n" (which the parser's `[^.!?\n]` patterns stop at), while a lone
+ * hard-wrap newline collapses to a space. HTML bodies have no newlines by this point, so they are unaffected.
+ */
+function collapseWhitespaceKeepingParagraphs(text: string): string {
+	const PARAGRAPH_BOUNDARY = String.fromCharCode(1);   // transient SOH sentinel; never occurs in email text
+	return text
+		.replace(/\r\n?/g, '\n')                           // normalize CRLF / lone CR to LF
+		.replace(/[^\S\n]+/g, ' ')                         // collapse runs of spaces/tabs, leave newlines
+		.replace(/ *\n[ \t]*\n\s*/g, PARAGRAPH_BOUNDARY)   // blank-line paragraph break -> boundary marker
+		.replace(/ *\n */g, ' ')                           // remaining lone (hard-wrap) newline -> space
+		.split(PARAGRAPH_BOUNDARY).join('\n')              // marker -> single boundary newline
+		.trim();
 }
 
 /**

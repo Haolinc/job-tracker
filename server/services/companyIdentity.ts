@@ -22,7 +22,7 @@ const ATS_DOMAINS = new Set([
 // alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
 // even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
+export const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
 
 // Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
 // "Sun West Mortgage" resolve to the same dedup key.
@@ -87,6 +87,14 @@ export function companyDomainFromSender(from: string): string | null {
 const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
 
 /**
+ * Canonical match key: lowercase, alphanumerics only — spacing, casing, and punctuation collapse away, so
+ * "JPMorganChase" ≡ "JPMorgan Chase" and "MITRE" ≡ "mitre" resolve to one employer. This exists because the
+ * deterministic parser and the LLM classifier read a company from different places (body prose vs the sender)
+ * and will not spell it identically; the match layer absorbs that instead of forcing the two to agree.
+ */
+export const companyKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
  * LOOSE name match — one name's words are a leading prefix of the other's ("Epic" ⊂ "Epic Kids",
  * "Lila" ⊂ "Lila Sciences"). Used only to GATHER candidates cheaply; findExisting then confirms the
  * real employer with the sender domain and companiesSameEntity. Keeps "Morgan Stanley" vs "Morgan
@@ -106,6 +114,7 @@ function companiesCompatible(a: string, b: string): boolean {
  * This is the fallback when the sender domain can't decide (e.g. both records came from ATS senders).
  */
 export function companiesSameEntity(a: string, b: string): boolean {
+	if (companyKey(a) === companyKey(b)) return true;   // identical once spacing/punctuation/case are ignored
 	if (!companiesCompatible(a, b)) return false;
 	const wa = companyWords(a), wb = companyWords(b);
 	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];

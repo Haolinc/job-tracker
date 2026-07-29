@@ -82,8 +82,16 @@ describe('tidyRole', () => {
 		['R-78284 Software Engineer I', 'Software Engineer I'],            // hyphenated leading req
 		['Development Engineer in Test [208728]', 'Development Engineer in Test'],   // bracket-wrapped id
 		['QA Engineer [Remote]', 'QA Engineer [Remote]'],                 // bracket without a digit kept
+		['Software Development Engineer in Test opportunity', 'Software Development Engineer in Test'],   // trailing descriptor noun
+		['Software Engineer opening', 'Software Engineer'],
+		['NAMR Software Engineering Program - Campus Hiring - 2026 position', 'NAMR Software Engineering Program - Campus Hiring - 2026'],   // trailing " position"
+		['Software Test Method Validation (TMV) 26-00635', 'Software Test Method Validation (TMV)'],   // space+hyphen req, both halves stripped
+		['SOFTW005349 - Software Developer I', 'Software Developer I'],    // leading 5-letter-prefix req joined by " - "
+		['R2026-1234: Platform Engineer', 'Platform Engineer'],           // leading req joined by " : "
 		// regressions — must be left intact:
 		['2026 Emerging Talent Software Engineers - Full time', '2026 Emerging Talent Software Engineers - Full time'],
+		['3D - Modeler', '3D - Modeler'],                                 // leading token has <4 digits → not a req, kept
+		['Software Engineer Opportunities in NJ', 'Software Engineer Opportunities in NJ'],   // "Opportunities" mid-string (not trailing) untouched
 		['3D Designer', '3D Designer'],
 		['Software Engineer III', 'Software Engineer III'],
 		['QA Automation Engineer (All Levels)', 'QA Automation Engineer (All Levels)'],
@@ -226,8 +234,10 @@ describe('parseEmail', () => {
 		});
 	}
 
-	// Workday emails are per-company customised; the general template mis-reads them (here it would grab the
-	// role "Mid-Level Software Engineer" as the company), so a @myworkday.com sender must defer to the LLM.
+	// Workday emails are no longer blanket-deferred (legitimate employers use Workday heavily). This one still
+	// defers — but via the company==role structural guard, not a sender special-case: "applying to [Role]" grabs
+	// "Mid-Level Software Engineer" as the company AND recoverRoleFromBody reads it as the role, so the two match
+	// and the parser bows out. The full classifier / refiner then reads "working at Leidos" for the real employer.
 	it('defers a Workday (@myworkday.com) email to the LLM instead of mis-parsing (Leidos)', () => {
 		const res = parseEmail(
 			'Leidos -Thank You For Applying to Mid-Level Software Engineer',
@@ -293,6 +303,49 @@ describe('extractGeneralCompanyRole', () => {
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
 	});
+	it('reads the company from the BODY before the subject, stopping at the paragraph boundary ("MTA")', () => {
+		// cleanBody now delivers a paragraph break as "\n", so the body capture stops at the greeting instead
+		// of swallowing it ("MTA Dear Hao Lin Thank"). Body-first + the leading-"the" strip give the short form
+		// the body uses — which the subject's "Metropolitan Transportation Authority" no longer overrides.
+		const r = extractGeneralCompanyRole(
+			'Your Application for Application Developer Levels 1 - 5 at the Metropolitan Transportation Authority',
+			'Your Application for Application Developer Levels 1 - 5 at the MTA\nDear Hao Lin\nThank you for your interest in a career with the MTA. We have received your application for Application Developer Levels 1 - 5.',
+		);
+		expect(r?.company).toBe('MTA');
+		expect(r?.role).toBe('Application Developer Levels 1 - 5');
+	});
+	it('keeps a capitalized leading "The" that is part of the name ("The New York Times")', () => {
+		const r = extractGeneralCompanyRole('x', 'Thank you for applying to The New York Times. Your application has been received.');
+		expect(r?.company).toBe('The New York Times');
+	});
+
+	// Patterns that name both slots ("applying for [Role] at [Company]") are self-typing; the bare
+	// "interest in X" patterns are not, and only those need the LLM to say which slot X fills.
+	describe('span typing', () => {
+		it('marks a both-slots sentence unambiguous, with no spans to label', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for applying for the Software Engineer position at Pomelo Care.');
+			expect(r?.ambiguous).toBe(false);
+			expect(r?.spans).toEqual([]);
+		});
+		it('marks a bare "interest in [X]" ambiguous and offers X for labelling', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+			expect(r?.ambiguous).toBe(true);
+			expect(r?.spans).toContain('Lockheed Martin');
+		});
+		it('still guesses the role as the company when unconfirmed — the case the picker exists to fix', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Software Engineer. We have received your application.');
+			// Nothing here says "Software Engineer" is a title, so the regex reads it as the employer and
+			// neither structural guard fires. The flag is what gets the LLM to catch it.
+			expect(r?.company).toBe('Software Engineer');
+			expect(r?.ambiguous).toBe(true);
+			expect(r?.spans).toContain('Software Engineer');
+		});
+		it('collects every untyped candidate, in priority order, not just the first', () => {
+			const r = extractGeneralCompanyRole('x', 'Thank you for applying to Axoni. We appreciate your interest in Blackstone.');
+			// "applying to" (pattern 8) outranks "interest in" (pattern 9), and both reach the picker.
+			expect(r?.spans.slice(0, 2)).toEqual(['Axoni', 'Blackstone']);
+		});
+	});
 	it('returns null for a "keep track of your application" draft reminder', () => {
 		expect(extractGeneralCompanyRole('Keep track', 'Keep track of your application. If you are still working on the application, finish it here.')).toBeNull();
 	});
@@ -314,6 +367,12 @@ describe('recoverRoleFromBody', () => {
 		// False-positive guard: a bare "applying to [Company]" (no "[Company] -" prefix) must NOT become a role.
 		['Thank you for applying. Your application has been received.', 'Thank you for applying to Amazon', null],
 		['Just a plain confirmation with no recognizable title anywhere.', 'None', null],
+		// "apply to [Company] for the [Role] role" — the "for the" guard rejects the company-swallowing capture
+		// ("Astronomer for the Software Engineer…") so the lower-priority "the [Role] role" pattern recovers it.
+		['Thank you for taking the time to apply to Astronomer for the Software Engineer, Astro Core Services role.', 'None', 'Software Engineer, Astro Core Services'],
+		// department line "our [Dept] team for the following position: [Role]" — the prose is rejected, the
+		// colon-listed title after "following position:" wins.
+		['Your resume will be reviewed by our Recruiting team for the following position: Entry-Level Full Stack Software Developer', 'None', 'Entry-Level Full Stack Software Developer'],
 	];
 	it.each(cases)('body=%j subject=%j -> %j', (body, subject, expected) => {
 		expect(recoverRoleFromBody(body, subject)).toBe(expected);

@@ -60,4 +60,15 @@ describe('companiesSameEntity', () => {
 	it('is false for a different first word entirely', () => {
 		expect(companiesSameEntity('Lila', 'Lilac')).toBe(false);
 	});
+	it('is true across spacing/punctuation/case differences (parser vs classifier disagree on spelling)', () => {
+		// The exact regression: the parser reads body "JPMorganChase", the classifier reads sender "JPMorgan
+		// Chase" — same employer, and they must merge instead of fragmenting the application.
+		expect(companiesSameEntity('JPMorganChase', 'JPMorgan Chase')).toBe(true);
+		expect(companiesSameEntity('MITRE', 'mitre')).toBe(true);
+		expect(companiesSameEntity('Morgan & Morgan', 'Morgan and Morgan')).toBe(false);   // '&' vs 'and' → distinct keys, not collapsed together
+	});
+	it('does not let the collapse key override a genuinely different second word', () => {
+		// "Epic" vs "Epic Kids" must still be distinct — collapse equality only fires on the WHOLE name.
+		expect(companiesSameEntity('Epic', 'EpicKids')).toBe(false);
+	});
 });

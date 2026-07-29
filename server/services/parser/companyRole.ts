@@ -26,7 +26,11 @@ const GEN_END = '(?=[.,!?\\n]|$)';
 /** Trim the capture to its leading proper-noun run, then reject req numbers / bad length. */
 function cleanGeneralCompany(s: string | null | undefined): string | null {
 	if (!s) return null;
-	const run = s.trim().match(PROPER_NOUN_RUN);              // didn't start with a capital → not a company name
+	// Drop a leading lowercase article the capture swept in from prose ("at the MTA" → "the MTA" → "MTA").
+	// Case-SENSITIVE on purpose: a capitalized "The" is part of the name itself ("The New York Times",
+	// "The Trade Desk") and must survive, so this must not run under a /i regex.
+	const withoutLeadingArticle = s.trim().replace(/^the\s+/, '');
+	const run = withoutLeadingArticle.match(PROPER_NOUN_RUN);   // didn't start with a capital → not a company name
 	if (!run) return null;
 	s = run[0].trim();
 	if (s.length < 2 || s.length > 50) return null;
@@ -36,65 +40,113 @@ function cleanGeneralCompany(s: string | null | undefined): string | null {
 }
 
 /**
- * Deterministically pull company (and role when present) from the sentence
- * structures common to application-acknowledgement / rejection emails:
+ * Patterns 1-5: the sentence names BOTH slots, so each capture's type is fixed by its position —
+ * "applying for [Role] at [Company]" can only be read one way. These need no LLM confirmation.
  *
  *   "...applying for [the] [Role] [position|role] at|with [Company]"
  *   "...your interest in [the] [Role] position at|with [Company]"
  *   "...employment with [Company] in our [Role] position"
- *   "...joining [the] [Company] [team]"
- *   "...applying to | application to | apply at [Company]"     (company only)
- *
- * Regex beats the LLM here: it never hallucinates, preserves exact requisition
- * numbers, and is reproducible. Returns null (defer to the LLM) when no structure
- * matches or the captured company fails validation. Exported so the sync loop can
- * override the LLM's company/role on the AI-status path.
+ *   "...applying to [Company] - [Role]"                          (subject)
  */
-export function extractGeneralCompanyRole(subject: string, body: string): { company: string; role: string | null; roleConfident: boolean } | null {
-	const text = `${subject}\n${body}`;
+function matchTypedPatterns(text: string, subject: string): { company: string; role: string | null } | null {
+	let m: RegExpMatchArray | null;
+
+	// 1. applying for [the] [role|position of] [Role] [position|role] at|with [Company]
+	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (m) return { role: m[1], company: m[2] };
+
+	// 2. application to [the] [Role] opening|position|role at|with [Company]
+	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
+	m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (m) return { role: m[1], company: m[2] };
+
+	// 3. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
+	// ("...interest in the Software Engineer (NYC) opportunity at PermitFlow", "...the Engineer,
+	// Product Integration (Paisly) opportunity at JetBlue")
+	m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (m) return { role: m[1], company: m[2] };
+
+	// 4. employment with [Company] in our [Role] position
+	m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i'));
+	if (m) return { company: m[1], role: m[2] };
+
+	// 5. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
+	// often holds a comma the sentence-bounded patterns above can't keep ("The New York Times - Software
+	// Engineer, Programming"). Spaces around the dash are required, so hyphenated names ("Coca-Cola") don't split.
+	m = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i);
+	if (m) return { company: m[1], role: m[2] };
+
+	return null;
+}
+
+/**
+ * Patterns 6-9: a bare noun phrase after a preposition. The sentence gives NO clue to the capture's
+ * type — "thank you for your interest in X" reads identically for "…in Axoni" (a company) and "…in
+ * Software Engineer" (a role), and only the second is wrong. So these return CANDIDATES, in priority
+ * order, for the LLM to label; the caller keeps the first as its guess when no LLM is available.
+ */
+function collectUntypedCompanySpans(text: string): string[] {
+	const spans: string[] = [];
+	const add = (raw: string | undefined) => {
+		const span = cleanGeneralCompany(raw);
+		if (span && !spans.includes(span)) spans.push(span);
+	};
+
+	// 6. joining [the] [Company] [team] — "interest in joining Luma!", "joining the Deltek team"
+	add(text.match(new RegExp(`joining (?:the\\s+)?${GEN_CO}${GEN_END}`, 'i'))?.[1]);
+
+	// 7. [a] career [opportunities] at [Company] — Workday/Oracle HR confirmations:
+	// "interested in a career at JPMorganChase". Deterministic so it never depends on the LLM's mood.
+	add(text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i'))?.[1]);
+
+	// 8. applying to | application to | apply at [Company]
+	add(text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i'))?.[1]);
+
+	// 9. [your] interest in [Company] (LAST — broadest) — "interest in Lockheed Martin", "interest in
+	// Blue Mountain Quality Resources, LLC and our …". The proper-noun-run trim + the structural guards
+	// in the caller keep this from grabbing a role phrase ("interest in the Software Engineer …").
+	add(text.match(new RegExp(`\\b(?:your |the )?interest in ${GEN_CO}${GEN_END}`, 'i'))?.[1]);
+
+	return spans;
+}
+
+/**
+ * Deterministically pull company (and role when present) from the sentence structures common to
+ * application-acknowledgement / rejection emails.
+ *
+ * Regex beats the LLM here: it never hallucinates, preserves exact requisition numbers, and is
+ * reproducible. Returns null (defer to the LLM) when no structure matches or the captured company
+ * fails validation. Exported so the sync loop can override the LLM's company/role on the AI-status path.
+ *
+ * `ambiguous` marks the results that came from the untyped patterns, where `company` is only a
+ * best guess and `spans` holds every candidate for the LLM to label. When no LLM runs, the guess is
+ * the same value this function has always returned, so an unconfirmed result never regresses.
+ */
+export function extractGeneralCompanyRole(subject: string, body: string): { company: string; role: string | null; roleConfident: boolean; ambiguous: boolean; spans: string[] } | null {
+	// BODY-FIRST priority: the sender's own prose is the most reliable source; the subject is a condensed
+	// restatement that often swaps in a fuller/legal form ("…career with the MTA" in the body vs "at the
+	// Metropolitan Transportation Authority" in the subject). Concatenating body BEFORE subject makes every
+	// first-match-wins pattern prefer the body, and the subject fills in only when the body names nothing.
+	// Safe now that cleanBody keeps paragraph breaks as boundaries, so a body capture stops at the greeting
+	// ("…at the MTA⏎Dear Hao Lin") instead of swallowing it.
+	const text = `${body}\n${subject}`;
 	// Not applications: demographic surveys and "finish your draft" reminders.
 	if (/\b(demographic|survey)\b/i.test(text)) return null;
 	if (/keep track of your application|still working on the application|if you have completed the application/i.test(body)) return null;
 
 	let company: string | null = null;
 	let role:    string | null = null;
-	let m: RegExpMatchArray | null;
+	let untypedSpans: string[] = [];
 
-	// 1. applying for [the] [role|position of] [Role] [position|role] at|with [Company]
-	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
-	if (m) { role = m[1]; company = m[2]; }
-
-	// 2. application to [the] [Role] opening|position|role at|with [Company]
-	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
-	if (!company) { m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
-
-	// 3. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
-	// ("...interest in the Software Engineer (NYC) opportunity at PermitFlow", "...the Engineer,
-	// Product Integration (Paisly) opportunity at JetBlue")
-	if (!company) { m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) { role = m[1]; company = m[2]; } }
-
-	// 4. employment with [Company] in our [Role] position
-	if (!company) { m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i')); if (m) { company = m[1]; role = m[2]; } }
-
-	// 5. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
-	// often holds a comma the sentence-bounded patterns above can't keep ("The New York Times - Software
-	// Engineer, Programming"). Spaces around the dash are required, so hyphenated names ("Coca-Cola") don't split.
-	if (!company) { m = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i); if (m) { company = m[1]; role = m[2]; } }
-
-	// 6. joining [the] [Company] [team]   (company only) — "interest in joining Luma!", "joining the Deltek team"
-	if (!company) { m = text.match(new RegExp(`joining (?:the\\s+)?${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 7. [a] career [opportunities] at [Company]   (company only) — Workday/Oracle HR confirmations:
-	// "interested in a career at JPMorganChase". Deterministic so it never depends on the LLM's mood.
-	if (!company) { m = text.match(new RegExp(`\\bcareer(?:\\s+opportunities)?\\s+at\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 8. applying to | application to | apply at [Company]   (company only)
-	if (!company) { m = text.match(new RegExp(`\\b(?:applying to|application to|apply at)\\s+${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
-
-	// 9. [your] interest in [Company]   (company only, LAST — broadest) — "interest in Lockheed Martin",
-	// "interest in Blue Mountain Quality Resources, LLC and our …". The proper-noun-run trim + the
-	// structural guard below keep this from grabbing a role phrase ("interest in the Software Engineer …").
-	if (!company) { m = text.match(new RegExp(`\\b(?:your |the )?interest in ${GEN_CO}${GEN_END}`, 'i')); if (m) company = cleanGeneralCompany(m[1]); }
+	const typed = matchTypedPatterns(text, subject);
+	if (typed) {
+		company = typed.company;
+		role    = typed.role;
+	} else {
+		untypedSpans = collectUntypedCompanySpans(text);
+		company = untypedSpans[0] ?? null;   // priority order = the first-match-wins answer this has always given
+	}
+	const ambiguous = !typed;
 
 	const cleanCompany = cleanGeneralCompany(company);
 	if (!cleanCompany) return null;
@@ -121,5 +173,11 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 	if (cleanRole && norm(cleanCompany) === norm(cleanRole)) return null;
 
-	return { company: cleanCompany, role: cleanRole, roleConfident };
+	// One list holding both kinds of span, because the whole question is which is which: the untyped
+	// company candidates plus the recovered role, so the LLM can fill either slot from either span.
+	const spans = ambiguous
+		? [...untypedSpans, ...(cleanRole && !untypedSpans.includes(cleanRole) ? [cleanRole] : [])]
+		: [];
+
+	return { company: cleanCompany, role: cleanRole, roleConfident, ambiguous, spans };
 }

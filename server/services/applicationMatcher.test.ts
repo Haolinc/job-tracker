@@ -6,6 +6,7 @@ import type { Application, Category } from '../types';
 const dbMock = vi.hoisted(() => ({
 	findByCompanyDomain: vi.fn(async (_d: string) => [] as Application[]),
 	findByCompanyFirstWord: vi.fn(async (_w: string) => [] as Application[]),
+	findByCompanyKey: vi.fn(async (_c: string) => [] as Application[]),
 }));
 vi.mock('./db', () => dbMock);
 
@@ -82,6 +83,16 @@ describe('findExisting', () => {
 		// not the rejection's missing confirmation — it must not swallow it (the original Palantir bug).
 		setExisting([app({ id: 'C', role: 'Engineer', status: 'rejected', date_applied: '2026-02-18', awaiting_application: true })]);
 		expect(await findExisting('Acme', 'Engineer', null, null, true, false, '2026-06-07')).toBeUndefined();
+	});
+
+	it('merges spelling variants via the collapsed-key probe (JPMorgan Chase → JPMorganChase)', async () => {
+		// The parser wrote "JPMorganChase", a later email's classifier wrote "JPMorgan Chase" — different first
+		// words, so findByCompanyFirstWord misses it; findByCompanyKey surfaces it by collapsed key and they merge
+		// instead of fragmenting into two applications.
+		const existing = app({ company: 'JPMorganChase', role: 'Engineer', date_applied: '2026-02-16' });
+		setExisting([]);                                          // first-word probe finds nothing (spelling differs)
+		dbMock.findByCompanyKey.mockImplementation(async () => [existing]);
+		expect(await findExisting('JPMorgan Chase', 'Engineer', null, null, true, true, '2026-02-16')).toMatchObject({ id: existing.id });
 	});
 
 	it('a different req number is a distinct posting', async () => {
