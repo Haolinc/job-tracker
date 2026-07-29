@@ -150,15 +150,19 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		}
 	}
 
-	// Indeed / LinkedIn fast-apply carry the title EXACTLY as the job board posted it — a req-id or location in
-	// there is part of the posting, so trimming it would corrupt the real title. Store those verbatim. Other
-	// paths still get a final tidy so an AI-included req/ID or location tail
-	// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
-	const postedVerbatim = classification.classifier_code === 'indeed_applied' || classification.classifier_code === 'linkedin_applied';
-	if (classification.role && !postedVerbatim) classification.role = tidyRole(classification.role) || null;
-	const { category, role } = classification;
+	const { category } = classification;
 	const classifierCode = classification.classifier_code;
-	let { company } = classification;
+	let { company, role } = classification;
+
+	// Deterministic mechanical net (the symbolic half of the pipeline). The picker and full classifier JUDGE the
+	// semantics — which span is the company, which the role, when to abstain — and are told to keep the WHOLE
+	// title (levels, departments, specializations) rather than mechanically trim, because that is where the LLM
+	// over-reaches (dropping a real "- Stores & Supply Chain", or nulling a title because a req-id is glued on).
+	// tidyRole is the precise, list-based pass that strips ONLY mechanical noise the model leaves — a trailing
+	// requisition id, a city/state, a work-mode word — and never touches a real title part, so it cleans an
+	// un-stripped id without re-introducing the over-trim. Skipped for fast-apply, which stores the board's
+	// posted title verbatim.
+	if (role && !isFastApplyNotice(classifierCode)) role = tidyRole(role);
 
 	// Normalize legal suffixes for consistent dedup.
 	if (company) company = normalizeCompany(company);

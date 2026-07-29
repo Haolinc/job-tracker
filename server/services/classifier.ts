@@ -32,15 +32,15 @@ ROLE (stop at first hit)
 1. Explicit phrase in subject/body: "application for X", "applied to X", "Application received for: X", "interest in the X position/role".
 2. Title-cased title right before "position"/"role"/"opening".
 3. Title in a LinkedIn/assessment subject.
-Else null. Extract even unfamiliar/internal titles. Don't confuse company with role (company follows "interest in"; role precedes "position"). Keep clean: drop req numbers and location tails. Strip a trailing work-mode tail only when a place follows ("Software Engineer Onsite Great River, NY" -> "Software Engineer"); keep it if a number or non-place word follows.
+Else null. Extract even unfamiliar/internal titles. Don't confuse company with role (company follows "interest in"; role precedes "position"). Keep the WHOLE job title: every seniority level ("I", "II", "3"), every department or team after a comma or dash ("Engineer - Stores & Supply Chain", "Software Engineer I - Implementations"), and every specialization is PART of the title — never drop them. Only a requisition/job id, a city/state, and a bare work-mode word are NOT part of it: when one is glued on, return the title WITHOUT it ("1031800BR - Engineer II" -> "Engineer II", "Software Developer I SOFTW005349" -> "Software Developer I", "Software Engineer Onsite Great River, NY" -> "Software Engineer") — but NEVER null a real title just because an id trails it (the id goes in req_id). Keep a meaningful qualifier in parentheses ("(Java)", "(Remote)").
 
 REQ_ID
 Extract a unique requisition/job/reference number when labelled ("Job ID:", "Req #", "reference number:", "(ID: ...)") OR in unmistakable req format unlabelled (year-hyphen-number 2026-71968; letter+digits R232753 / 722493BR; long standalone digit id 3092179). Keep EXACTLY as written. Null if not confident it's a req. Never a seniority level ("II"), a year inside a title, or a phone/date/salary/zip. 
 
 If the body is unrendered template/code (contains "<%", "I18n.t", "*---*"), ignore it and use Subject + Sender.
 
-REFERENCE CANDIDATES
-The user message may end with "Reference candidates" — a company and/or role a deterministic parser pulled from this email. Treat them as informed hints: the company's exact spelling is usually reliable, but a candidate can be mislabeled (a job title placed in the company slot, or a partial name). Confirm each against the email — adopt it when it fits, correct or replace it when the email disagrees. A candidate never changes the category.
+REFERENCE CANDIDATES — JUDGE THEM
+The user message may end with "Reference candidates" — a company and/or role a deterministic parser pulled from this email. JUDGE each against the email rather than trusting it: if it is right, keep it; if it carries extra words (a greeting, "for the …" prose, a location or work-mode tail, an ATS name), return only the trimmed entity; if it is mislabeled (a job title sitting in the company slot, e.g. "Java Developer" as the company) or does not actually appear in the email, replace it from the email or use null. For the ROLE, the candidate has already been machine-stripped of ids and locations: adopt it when it is a clean, COMPLETE title, but if the email shows a real part it dropped (a level, a department after a comma or dash, a specialization), return the fuller title from the email instead. Never echo a candidate you cannot confirm in the text. A candidate never changes the category.
 
 EXAMPLES
 Body "...career at JPMorganChase...", from "JPMorgan Chase & Co. <...@cloud.oracle.com>"
@@ -229,7 +229,8 @@ Return ONLY this JSON (no prose, no markdown):
 }
 
 HOW TO JUDGE
-- TRIM, don't echo: if a candidate is the right entity wrapped in extra words, return ONLY the entity. "employment with Peraton" → "Peraton". "Software Engineer Opportunities in NJ" → "Software Engineer". "Software Test Method Validation (TMV) 26-00635" → drop the id. Greetings, "for the …" prose, locations, work modes, and requisition ids are never part of the name.
+- SPLIT semantic wrappers: if a candidate glues the name to a greeting, to "for the …" prose, or to the OTHER entity, return only the entity. "employment with Peraton" → "Peraton". "Astronomer for the Software Engineer" → company "Astronomer", role "Software Engineer". You MAY also drop a trailing requisition id, city/state, or bare work-mode word ("Software Engineer Opportunities in NJ" → "Software Engineer").
+- KEEP the whole title: a seniority level ("I", "II", "3"), a department or team after a comma or dash ("Engineer - Stores & Supply Chain", "Software Engineer I - Implementations"), and a specialization are PART of the job title — never drop them. When unsure whether a trailing word is noise or part of the title, KEEP it — a deterministic cleanup pass strips leftover ids and locations afterward, so you never need to over-trim.
 - REJECT to null: if NONE of the candidates is a real employer, company is null. An ATS/job board (iCIMS, Workday, Greenhouse, Lever, Taleo, LinkedIn, Indeed, SmartRecruiters, Recruitee), a bare job title, a location, a work mode, or sentence prose ("our company", "your team") is NOT an employer. A company name is never the role. When in doubt, null — a fuller classifier re-reads the whole email.
 - GROUNDED: the name you return must appear word-for-word in the Subject or Body excerpt (after trimming). Never invent, translate, or append text that is not there — never turn "Liberty Mutual Insurance" into "Liberty Mutual @ iCIMS".
 - WORD ORDER: in "apply to X for the Y role" / "application to X for Y", X (right after "to") is the COMPANY and Y (after "for") is the ROLE — never the reverse.
@@ -238,9 +239,11 @@ EXAMPLES
 Candidates: company="employment with Peraton" role="Entry-Level Full Stack Software Developer"; Body "…your interest in employment with Peraton for the Entry-Level Full Stack Software Developer position."
 -> {"company_reason":"candidate wraps the name in 'employment with' — trim to the org","company":"Peraton","role_reason":"clean title","role":"Entry-Level Full Stack Software Developer"}
 Candidates: company="our company" role="Frontend Software Engineers - Colorado Springs"; Body "Welcome to our company. …for the Frontend Software Engineers - Colorado Springs role."
--> {"company_reason":"'our company' is prose, not the hiring org — no candidate names an employer","company":null,"role_reason":"clean title","role":"Frontend Software Engineers - Colorado Springs"}
+-> {"company_reason":"'our company' is prose, not the hiring org — no candidate names an employer","company":null,"role_reason":"full title incl. the location tag — keep it, cleanup strips it later","role":"Frontend Software Engineers - Colorado Springs"}
 Candidates: company="Astronomer for the Software Engineer, Astro Core Services" role="Astronomer"; Body "…apply to Astronomer for the Software Engineer, Astro Core Services role."
--> {"company_reason":"trim the trailing title off the company","company":"Astronomer","role_reason":"the title after 'for the'; the other candidate is the company","role":"Software Engineer, Astro Core Services"}`;
+-> {"company_reason":"trim the trailing title off the company","company":"Astronomer","role_reason":"the title after 'for the'; the other candidate is the company — keep the team after the comma","role":"Software Engineer, Astro Core Services"}
+Candidates: company="Target" role="Engineer - Stores & Supply Chain"; Body "…your application for the Engineer - Stores & Supply Chain role at Target."
+-> {"company_reason":"named employer","company":"Target","role_reason":"the team after the dash is part of the title — keep it whole","role":"Engineer - Stores & Supply Chain"}`;
 
 const normalizeForCompare = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
