@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { localDateString, localTimestamp } from './utils';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -38,13 +39,8 @@ let active = false;
 const formatArg = (a: unknown): string =>
 	typeof a === 'object' && a !== null ? JSON.stringify(a, null, 2) : String(a);
 
-/** Today as YYYY-MM-DD in LOCAL time — log days should match the user's calendar, not UTC's. */
-function localDateStamp(): string {
-	const now = new Date();
-	const month = String(now.getMonth() + 1).padStart(2, '0');
-	const day   = String(now.getDate()).padStart(2, '0');
-	return `${now.getFullYear()}-${month}-${day}`;
-}
+// Local date/time formatting lives in ./utils (localDateString, localTimestamp) so every caller — logs,
+// email dates, exports — formats identically. The rotation logic below keys off localDateString().
 
 function closeStreams(): void {
 	debugStream?.end();
@@ -55,18 +51,56 @@ function closeStreams(): void {
 
 /** Close both streams when the date has changed, so the next write reopens them under the new day's files. */
 function rotateOnDateChange(): void {
-	const today = localDateStamp();
+	const today = localDateString();
 	if (today === openStreamsDate) return;
 	closeStreams();
 	openStreamsDate = today;
 }
 
+// Throttle for the deleted-file check below — a busy debug log must not stat the disk on every line.
+let lastLogFileCheckMs = 0;
+const LOG_FILE_CHECK_INTERVAL_MS = 2000;
+
+/**
+ * A WriteStream keeps writing into its open handle even after the file is deleted from disk, so a user who
+ * removes debug-YYYY-MM-DD.log mid-run would otherwise never see a new one appear. Periodically confirm the
+ * open files still exist and drop any stream whose file is gone, so the next write recreates it. Throttled so
+ * high-volume logging doesn't touch the filesystem on every write.
+ */
+function dropStreamsWhoseFileWasDeleted(): void {
+	if (!logsDirectory) return;
+	const now = Date.now();
+	if (now - lastLogFileCheckMs < LOG_FILE_CHECK_INTERVAL_MS) return;
+	lastLogFileCheckMs = now;
+	if (debugStream && !fs.existsSync(path.join(logsDirectory, `debug-${openStreamsDate}.log`))) {
+		debugStream.end();
+		debugStream = null;
+	}
+	if (errorStream && !fs.existsSync(path.join(logsDirectory, `error-${openStreamsDate}.log`))) {
+		errorStream.end();
+		errorStream = null;
+	}
+}
+
+/** Open a dated append stream, recreating the logs folder if it too was deleted and guarding against a
+ *  stream error (a deleted-file write can surface as one) taking the server down — drop it so it reopens. */
+function openLogStream(filePrefix: string): fs.WriteStream {
+	fs.mkdirSync(logsDirectory!, { recursive: true });
+	const stream = fs.createWriteStream(path.join(logsDirectory!, `${filePrefix}-${openStreamsDate}.log`), { flags: 'a' });
+	stream.on('error', () => {
+		if (debugStream === stream) debugStream = null;
+		if (errorStream === stream) errorStream = null;
+	});
+	return stream;
+}
+
 function currentDebugStream(): fs.WriteStream | null {
 	if (!logsDirectory) return null;
 	rotateOnDateChange();
+	dropStreamsWhoseFileWasDeleted();
 	if (!debugStream) {
-		debugStream = fs.createWriteStream(path.join(logsDirectory, `debug-${openStreamsDate}.log`), { flags: 'a' });
-		debugStream.write(`\n--- Logging enabled ${new Date().toISOString()} ---\n`);
+		debugStream = openLogStream('debug');
+		debugStream.write(`\n--- Logging enabled ${localTimestamp()} ---\n`);
 	}
 	return debugStream;
 }
@@ -74,8 +108,9 @@ function currentDebugStream(): fs.WriteStream | null {
 function currentErrorStream(): fs.WriteStream | null {
 	if (!logsDirectory) return null;
 	rotateOnDateChange();
+	dropStreamsWhoseFileWasDeleted();
 	if (!errorStream) {
-		errorStream = fs.createWriteStream(path.join(logsDirectory, `error-${openStreamsDate}.log`), { flags: 'a' });
+		errorStream = openLogStream('error');
 	}
 	return errorStream;
 }
@@ -175,5 +210,5 @@ export const isEnabled = (): boolean => active;
  *   mark('fetchJobEmails done');
  */
 export function mark(label: string): void {
-	writeDebugLine(`\n=== ${label} — ${new Date().toISOString()} ===`);
+	writeDebugLine(`\n=== ${label} — ${localTimestamp()} ===`);
 }
