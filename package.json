@@ -25,7 +25,7 @@
 	"devDependencies": {
 		"concurrently": "^9.1.0",
 		"electron": "^42.6.0",
-		"electron-builder": "^25.1.8",
+		"electron-builder": "^26.15.3",
 		"esbuild": "^0.28.1",
 		"rcedit": "^5.0.2",
 		"typescript": "^6.0.3",
@@ -33,5 +33,9 @@
 	},
 	"dependencies": {
 		"velopack": "1.2.0"
+	},
+	"//overrides": "electron-builder's packaging chain pulls old nested copies of these (rimraf->glob->minimatch->brace-expansion, and tar) whose advisories npm cannot dedupe away. Build-time only, but pin the fixed lines so `npm audit` stays clean. Drop each once electron-builder ships deps that no longer need it.",
+	"overrides": {
+		"brace-expansion": "^5.0.8"
 	}
 }
