@@ -1,4 +1,4 @@
-import type { Status, InterviewStep, Source } from './types';
+import type { Status, InterviewStep, Source, EmailOrigin } from './types';
 
 export const STATUS_LABELS: Record<Status, string> = {
 	applied:   'Applied',
@@ -58,3 +58,18 @@ export const provenanceBadges = (app: { detected_by?: Detection | null; edited?:
 	if (d) badges.push({ ...DETECTION_BADGE[d], title: `${DETECTION_BADGE[d].title} — edit to confirm and clear the tag` });
 	return badges;
 };
+
+// Per-email origin badges, shown ONLY in the edit modal's rows — the board and table are scanning surfaces,
+// where per-email provenance would be permanent cost for rarely-wanted detail. Sky reuses IMPORT_BADGE's
+// tint since it means the same thing one level down. An untagged ref badges as a muted 'Unknown' rather than
+// nothing, so the row reads "we don't know" instead of looking like the badge failed to render.
+const EMAIL_ORIGIN_BADGE: Record<EmailOrigin | 'unknown', ProvenanceBadge> = {
+	synced:   { label: 'Synced',   cls: 'bg-emerald-50 text-emerald-700', title: 'Found by a Gmail sync' },
+	imported: { label: 'Imported', cls: 'bg-sky-50 text-sky-700',         title: 'First seen in a CSV import' },
+	manual:   { label: 'Manual',   cls: 'bg-amber-50 text-amber-700',     title: 'Attached by hand in this window' },
+	unknown:  { label: 'Unknown',  cls: 'bg-gray-100 text-gray-500',      title: 'Attached before origins were tracked — no way to tell now' },
+};
+
+/** The badge for one ref: its origin, or the unknown badge when it predates the field. */
+export const emailOriginBadge = (emailRef: { origin?: EmailOrigin }): ProvenanceBadge =>
+	EMAIL_ORIGIN_BADGE[emailRef.origin ?? 'unknown'];

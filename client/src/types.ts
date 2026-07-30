@@ -2,6 +2,16 @@ export type Status = 'applied' | 'interview' | 'offer' | 'rejected';
 export type InterviewStep = 'phone_screen' | 'technical' | 'onsite' | 'final';
 export type Source = 'manual' | 'gmail' | 'csv';
 
+/**
+ * Which procedure attached an email ref: the Gmail sync created it, a CSV import first introduced its id, or
+ * the user attached it by hand. An import never relabels a ref the board already holds, and nothing relabels
+ * 'manual' — withOriginsResolvedAgainstBoard in utils/importCsv.ts carries the full rule.
+ *
+ * Optional: refs stored before this field existed have no recoverable provenance (unlike an id's shape, it
+ * cannot be derived after the fact), so they read back as undefined and badge as "Unknown".
+ */
+export type EmailOrigin = 'synced' | 'imported' | 'manual';
+
 // A Gmail message that drove this application to a given stage — lets the user open the actual email.
 // The inbox it lives in is the application-level `account` (one account per application), not stored per ref.
 export interface EmailRef {
@@ -9,6 +19,7 @@ export interface EmailRef {
 	category: Status;        // which stage this email represents (applied/interview/offer/rejected)
 	date: string;            // 'YYYY-MM-DD' of the email
 	fast_apply?: boolean;    // this email is a LinkedIn/Indeed fast-apply notice → shown as "⚡ Fast Applied"
+	origin?: EmailOrigin;    // which procedure attached it — see EmailOrigin for the precedence rules
 }
 
 export interface Application {

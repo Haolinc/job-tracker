@@ -4,7 +4,9 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
 import { classifyEmail, pickCompanyRole } from '../services/classifier';
+import { listJobMessageIds, getAccountEmail, streamJobMessages } from '../services/gmail/messages';
 import { parseEmail } from '../services/parser/templates';
+import * as db from '../services/db';
 import { setSyncRunning, setImportRunning, setLastSyncEvent, isSyncCancelRequested, clearSyncCancel } from '../services/syncState';
 import type { EmailResult } from '../types';
 
@@ -21,10 +23,24 @@ vi.mock('../services/filters', () => ({
 vi.mock('../services/parser/templates', () => ({
 	parseEmail: vi.fn(() => null),
 }));
+// Gmail itself is the only thing the sync route can't be run against — stub the three calls that reach it
+// so the route's own merge/write logic (which is what the origin tests below assert) runs for real.
+vi.mock('../services/gmail/messages', () => ({
+	listJobMessageIds: vi.fn(),
+	getAccountEmail: vi.fn(),
+	streamJobMessages: vi.fn(),
+}));
 
 const classifyEmailMock = vi.mocked(classifyEmail);
 const pickCompanyRoleMock = vi.mocked(pickCompanyRole);
 const parseEmailMock = vi.mocked(parseEmail);
+const listJobMessageIdsMock = vi.mocked(listJobMessageIds);
+const getAccountEmailMock = vi.mocked(getAccountEmail);
+const streamJobMessagesMock = vi.mocked(streamJobMessages);
+
+// Real in-memory database: what the sync WRITES is the behavior under test, so the data layer is not mocked.
+process.env.DB_PATH = ':memory:';
+db.initializeDatabase();
 
 async function* range(n: number): AsyncGenerator<number> {
 	for (let i = 0; i < n; i++) yield i;
@@ -298,5 +314,103 @@ describe('mapAhead', () => {
 		const out: number[] = [];
 		for await (const r of mapAhead(range(0), 3, async (i) => i)) out.push(r);
 		expect(out).toEqual([]);
+	});
+});
+
+// ── Email origin: the sync procedure's tag ──────────────────────────────────
+// Gmail is stubbed; the classifier is stubbed; everything the ROUTE does with the result — building the
+// ref, merging it onto an application, writing it — runs for real against an in-memory database. That is
+// what makes these assertions about origin 'synced' meaningful rather than a restatement of the literal.
+describe('POST /sync — email origin', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	// Each fixture carries its own subject so the classifier stub can answer per message (the route
+	// classifies concurrently, so a mockResolvedValueOnce chain would be order-dependent and flaky).
+	const syncedEmail = (messageId: string, subject: string, lastMessageDate: string): EmailResult => ({
+		threadId: messageId,
+		messageId,
+		subject,
+		from: 'careers@acme.com',
+		body: 'Thanks for applying to Acme as a Software Engineer.',
+		lastMessageDate,
+		internalDate: Date.parse(lastMessageDate),
+	});
+	const applicationConfirmation = syncedEmail('19f0000000000001', 'Your application to Acme', '2026-07-10');
+	const rejectionUpdate         = syncedEmail('19f0000000000002', 'Update on your Acme application', '2026-07-20');
+
+	// An 'applied' confirmation fills the application's confirmed slot; a 'rejected' status update joins the
+	// same-posting application that predates it. Together they exercise create-then-append in one sync.
+	const classifyBySubject = (subject: string) => Promise.resolve(
+		subject === rejectionUpdate.subject
+			? { category: 'rejected' as const, company: 'Acme', role: 'Software Engineer' }
+			: { category: 'applied' as const, company: 'Acme', role: 'Software Engineer' },
+	);
+
+	// Feed the route exactly these messages, then read back what it wrote.
+	const runSyncOver = async (emails: EmailResult[]) => {
+		listJobMessageIdsMock.mockResolvedValue(emails.map(email => email.messageId));
+		getAccountEmailMock.mockResolvedValue('me@work.com');
+		streamJobMessagesMock.mockImplementation(async function* () { yield* emails; });
+		const response = await fetch(`${baseUrl}/api/gmail/sync`, { method: 'POST' });
+		await response.text();   // drain the ndjson progress stream so the handler finishes
+		return db.getAll();
+	};
+
+	beforeAll(async () => {
+		const app = express();
+		app.use(express.json());
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+		setSyncRunning(false);
+	});
+
+	beforeEach(async () => {
+		await db.clearAll();
+		classifyEmailMock.mockReset();
+		parseEmailMock.mockReset();
+		parseEmailMock.mockReturnValue(null);
+		classifyEmailMock.mockImplementation(classifyBySubject);
+	});
+
+	it('should tag a ref the sync creates as synced', async () => {
+		const board = await runSyncOver([applicationConfirmation]);
+		expect(board).toHaveLength(1);
+		expect(board[0].emails).toEqual([
+			{ messageId: '19f0000000000001', category: 'applied', date: '2026-07-10', fast_apply: false, origin: 'synced' },
+		]);
+	});
+
+	it('should tag a ref synced when the sync APPENDS it to an application it already matched', async () => {
+		// The confirmation creates the application; the later rejection merges onto it. Both refs are the
+		// sync's own work, so both are 'synced' — this covers the updateWithEmail append path, not just create.
+		const board = await runSyncOver([applicationConfirmation, rejectionUpdate]);
+		expect(board).toHaveLength(1);
+		expect(board[0].emails.map(emailRef => [emailRef.messageId, emailRef.origin])).toEqual([
+			['19f0000000000001', 'synced'],
+			['19f0000000000002', 'synced'],
+		]);
+	});
+
+	it('should NOT relabel a ref the user attached by hand when the sync merges into that application', async () => {
+		// The rule that matters most, end to end: the user attached this exact message id in the UI, and a
+		// later sync picks the same message up. It must keep 'manual' — and must not be recorded twice.
+		await db.create({
+			company: 'Acme', role: 'Software Engineer', status: 'applied', interview_step: null,
+			date_applied: '2026-07-10', last_activity: null, job_url: null, notes: null,
+			source: 'manual', gmail_thread_id: null, account: 'me@work.com',
+			emails: [{ messageId: rejectionUpdate.messageId, category: 'rejected', date: '2026-07-20', origin: 'manual' }],
+		});
+		const board = await runSyncOver([rejectionUpdate]);
+		expect(board).toHaveLength(1);
+		expect(board[0].status).toBe('rejected');           // the sync's field update still lands
+		expect(board[0].emails).toHaveLength(1);            // …without recording the ref a second time
+		expect(board[0].emails[0].origin).toBe('manual');   // …and without stealing its origin
 	});
 });

@@ -86,6 +86,56 @@ describe('updateWithEmail', () => {
 	it('should be a silent no-op for a missing id (matches the previous updateOne semantics)', async () => {
 		await expect(db.updateWithEmail('99999', { status: 'rejected' }, { messageId: 'm1', category: 'rejected', date: '2026-06-10' })).resolves.toBeUndefined();
 	});
+
+	it('should store the ref the sync built, origin and all', async () => {
+		const application = await db.create(baseData);
+		await db.updateWithEmail(application.id, { status: 'rejected' },
+			{ messageId: 'imported-1', category: 'rejected', date: '2026-06-10', origin: 'synced' });
+		const [afterSync] = await db.getAll();
+		expect(afterSync.emails[0].origin).toBe('synced');
+	});
+
+	// The enforcement point for "manual is never relabelled": a re-sync of a message the user attached by
+	// hand hits this method with origin 'synced', and the already-held messageId must come out untouched.
+	it('should NOT relabel a ref the user attached by hand when a later sync re-encounters it', async () => {
+		const application = await db.create({
+			...baseData,
+			emails: [{ messageId: 'imported-1', category: 'applied', date: '2026-06-01', origin: 'manual' }],
+		});
+		await db.updateWithEmail(application.id, { status: 'rejected' },
+			{ messageId: 'imported-1', category: 'rejected', date: '2026-06-10', origin: 'synced' });
+		const [afterSync] = await db.getAll();
+		expect(afterSync.status).toBe('rejected');                      // the field update still lands
+		expect(afterSync.emails).toHaveLength(1);                       // …without a second copy of the ref
+		expect(afterSync.emails[0].origin).toBe('manual');              // …and without stealing its origin
+		expect(afterSync.emails[0].category).toBe('applied');           // (the whole ref is left alone)
+	});
+});
+
+// `origin` lives INSIDE the existing `emails` JSON column, so adding it changed no DDL and needed no
+// migration — which matters because this codebase has no migration mechanism at all (no user_version, no
+// ALTER TABLE, only CREATE TABLE IF NOT EXISTS). Rows written before the field existed simply lack the key.
+// This is the exact ref shape on disk today, and it must read back untagged rather than crash or be handed
+// a guessed provenance.
+describe('rows written before origins existed', () => {
+	const refAsStoredBeforeOrigins = { messageId: 'm-legacy', category: 'applied' as const, date: '2026-06-01', fast_apply: false };
+
+	it('should read a pre-origin ref back as untagged, with every other field intact', async () => {
+		await db.create({ ...baseData, emails: [refAsStoredBeforeOrigins] });
+		const [stored] = await db.getAll();
+		expect(stored.emails).toEqual([refAsStoredBeforeOrigins]);   // nothing added, nothing lost
+		expect(stored.emails[0].origin).toBeUndefined();
+	});
+
+	it('should let a later sync tag a NEW ref on that application without disturbing the legacy one', async () => {
+		const application = await db.create({ ...baseData, emails: [refAsStoredBeforeOrigins] });
+		await db.updateWithEmail(application.id, { status: 'rejected' },
+			{ messageId: 'm-new', category: 'rejected', date: '2026-06-10', origin: 'synced' });
+		const [afterSync] = await db.getAll();
+		// The untagged ref stays untagged — a partially tagged list is the normal steady state after upgrade,
+		// not something to normalize away.
+		expect(afterSync.emails.map(emailRef => emailRef.origin)).toEqual([undefined, 'synced']);
+	});
 });
 
 describe('findByCompanyFirstWord', () => {
@@ -227,7 +277,8 @@ describe('applyImportPlan', () => {
 
 	it('should mark every syncEmails ref synced', async () => {
 		await db.applyImportPlan({ ...emptyPlan, syncEmails: [ref('m-1'), ref('m-2')] });
-		expect(await db.getSyncedMessageIds(['m-1', 'm-2', 'm-3'])).toEqual(new Set(['m-1', 'm-2']));
+		expect(await db.getSyncedMessageIds(['m-1', 'm-2', 'm-3']))
+			.toEqual(new Set(['m-1', 'm-2']));
 	});
 
 	it('should roll the WHOLE plan back when any piece fails (one transaction)', async () => {

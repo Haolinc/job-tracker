@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddModal from './AddModal';
-import type { ApplicationFormData } from '../types';
+import type { ApplicationFormData, EmailRef } from '../types';
 
 // Elements are located by stable data-testid (decoupled from copy/placeholder/styling); text and values
 // are asserted separately. So a wording change to a label/button won't break "find the element".
@@ -293,7 +293,68 @@ describe('AddModal', () => {
 		const saved = onSave.mock.calls[0][0];
 		// the application carries the Gmail account; each ref carries just its stage + id (date defaults to today)
 		expect(saved.account).toBe('me@work.com');
-		expect(saved.emails).toEqual([{ messageId: 'ABC123', category: 'interview', date: expect.any(String) }]);
+		// Attaching in the UI IS the manual procedure, so the ref is tagged 'manual' at its origin.
+		expect(saved.emails).toEqual([{ messageId: 'ABC123', category: 'interview', date: expect.any(String), origin: 'manual' }]);
+	});
+
+	it('should leave the origin of an untouched ref alone when the user edits an application', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn();
+		// A synced ref and an imported one already on the application; the user only adds a third.
+		render(<AddModal onSave={onSave} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: '19f2f3cdc380bf18', category: 'applied', date: '2026-02-01', origin: 'synced' },
+				{ messageId: '19fa39ea58dd4af9', category: 'interview', date: '2026-03-10', origin: 'imported' },
+			],
+		}} />);
+
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: '19fa89aa994dd02e' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		await user.click(screen.getByTestId('modal-submit'));
+
+		// Only the newly attached ref is 'manual' — saving does not relabel what the user never touched.
+		expect(onSave.mock.calls[0][0].emails.map((emailRef: EmailRef) => [emailRef.messageId, emailRef.origin])).toEqual([
+			['19f2f3cdc380bf18', 'synced'],
+			['19fa39ea58dd4af9', 'imported'],
+			['19fa89aa994dd02e', 'manual'],
+		]);
+	});
+
+	// Origin is surfaced HERE and nowhere else: the board and table stay clean, and this is the window where
+	// emails are curated, so it is where knowing "who attached this" actually matters.
+	it('should badge each tracked email with the procedure that attached it', () => {
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'm-synced',   category: 'applied',   date: '2026-02-01', origin: 'synced' },
+				{ messageId: 'm-imported', category: 'interview', date: '2026-03-10', origin: 'imported' },
+				{ messageId: 'm-manual',   category: 'rejected',  date: '2026-04-02', origin: 'manual' },
+			],
+		}} />);
+		const badges = screen.getAllByTestId('email-origin-badge');
+		expect(badges.map(badge => badge.getAttribute('data-origin'))).toEqual(['synced', 'imported', 'manual']);
+		expect(badges.map(badge => badge.textContent)).toEqual(['Synced', 'Imported', 'Manual']);
+	});
+
+	it('should badge a ref stored before origins existed as Unknown rather than leaving it blank', () => {
+		// A blank cell would read as a rendering bug; "Unknown" says the provenance is genuinely unrecoverable.
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [{ messageId: 'm-legacy', category: 'applied', date: '2026-02-01' }],
+		}} />);
+		const badge = screen.getByTestId('email-origin-badge');
+		expect(badge).toHaveAttribute('data-origin', 'unknown');
+		expect(badge).toHaveTextContent('Unknown');
+	});
+
+	it('should badge a freshly attached email as Manual straight away', async () => {
+		const user = userEvent.setup();
+		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
+		fireEvent.change(screen.getByTestId('field-account'), { target: { value: 'me@work.com' } });
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: 'ABC123' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		expect(screen.getByTestId('email-origin-badge')).toHaveTextContent('Manual');
 	});
 
 	it('should require the Gmail account before a tracked email can be attached', async () => {
