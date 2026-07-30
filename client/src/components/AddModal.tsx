@@ -1,6 +1,6 @@
 import { useState, type ReactNode, type SubmitEventHandler } from 'react';
 import type { ApplicationFormData, Status, InterviewStep } from '../types';
-import { STATUS_LABELS, STEP_LABELS, emailOriginBadge } from '../constants';
+import { STATUS_LABELS, STEP_LABELS, emailOriginBadge, emailStageLabel } from '../constants';
 import { extractMessageId } from '../utils/emailRefs';
 import { todayLocalDate } from '../utils/localDate';
 
@@ -187,7 +187,9 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 												}${isDragged ? ' opacity-40' : ''}${isDropTarget ? ' ring-2 ring-blue-400' : ''}`}
 											>
 												{emailsAreReorderable && <span aria-hidden className="text-gray-300 select-none">⠿</span>}
-												<span className="px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{STATUS_LABELS[e.category]}</span>
+												<span data-testid="email-row-stage" data-fast-apply={e.fast_apply ? 'true' : 'false'}
+													className="px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-gray-100 text-gray-600">
+													{emailStageLabel(e)}</span>
 												<span className="flex-1 truncate text-gray-500" title={e.messageId}>{e.messageId}</span>
 												{/* Shown here and nowhere else: the board is for scanning, this is where emails get curated. */}
 												<span data-testid="email-origin-badge" data-origin={e.origin ?? 'unknown'} title={originBadge.title}

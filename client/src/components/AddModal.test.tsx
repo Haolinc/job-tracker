@@ -323,6 +323,21 @@ describe('AddModal', () => {
 
 	// Origin is surfaced HERE and nowhere else: the board and table stay clean, and this is the window where
 	// emails are curated, so it is where knowing "who attached this" actually matters.
+	// A fast-apply notice and a real confirmation are both category 'applied', so the stage label is the only
+	// thing that can tell them apart in a list of message ids.
+	it('should name a fast-apply notice apart from a real application confirmation', () => {
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'm-notice',       category: 'applied', date: '2026-02-01', fast_apply: true },
+				{ messageId: 'm-confirmation', category: 'applied', date: '2026-02-02' },
+			],
+		}} />);
+		const stages = screen.getAllByTestId('email-row-stage');
+		expect(stages.map(stage => stage.textContent)).toEqual(['Fast Applied', 'Applied']);
+		expect(stages.map(stage => stage.getAttribute('data-fast-apply'))).toEqual(['true', 'false']);
+	});
+
 	it('should badge each tracked email with the procedure that attached it', () => {
 		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
 			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',

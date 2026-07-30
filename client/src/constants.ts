@@ -7,6 +7,14 @@ export const STATUS_LABELS: Record<Status, string> = {
 	rejected:  'Rejected',
 };
 
+/**
+ * What one tracked email is called. A LinkedIn/Indeed fast-apply NOTICE shares category 'applied' with a
+ * real company confirmation, so the category alone renders both as "Applied" — this separates them, and
+ * both the card pills and the edit modal read the name from here so the wording can't drift apart.
+ */
+export const emailStageLabel = (emailRef: { category: Status; fast_apply?: boolean }): string =>
+	emailRef.fast_apply ? 'Fast Applied' : STATUS_LABELS[emailRef.category];
+
 export const STATUS_COLORS: Record<Status, string> = {
 	applied:   'bg-blue-100 text-blue-700',
 	interview: 'bg-yellow-100 text-yellow-700',
