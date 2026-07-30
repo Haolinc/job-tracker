@@ -135,7 +135,8 @@ describe('import plan — matching rules', () => {
 		expect(plan.updates).toHaveLength(1);
 		expect(plan.updates[0].id).toBe(local.id);
 		expect(plan.updates[0].changes).toMatchObject({ company: 'Acme', role: 'SWE' });
-		expect(plan.updates[0].changes.emails).toEqual(emails);
+		// The board has never held these ids, so they arrive as new refs — hence origin 'imported'.
+		expect(plan.updates[0].changes.emails).toEqual(emails.map(emailRef => ({ ...emailRef, origin: 'imported' })));
 		expect(plan.updates[0].suspicious).toBe(true);
 	});
 
@@ -323,5 +324,137 @@ describe('import plan — email uniqueness and merging', () => {
 		const second = makeApp({ company: 'Beta', role: 'PM', emails: [emails[1]] });
 		const plan = planFor([first, second], []);
 		expect(plan.syncEmails.map(email => email.messageId).sort()).toEqual(['m-app', 'm-int']);
+	});
+});
+
+// ── Email origin: the import procedure's tagging rule ───────────────────────
+// An import tags a ref 'imported' ONLY when the messageId is new to this database. A ref the board
+// already holds keeps the origin it has there, so 'synced' and 'manual' both survive a re-import — the
+// board is the authority on provenance, never the file's own origin cell.
+describe('import plan — email origin', () => {
+	const syncedRef   = (messageId: string): EmailRef => ({ messageId, category: 'applied',   date: '2026-02-01', origin: 'synced' });
+	const manualRef   = (messageId: string): EmailRef => ({ messageId, category: 'interview', date: '2026-03-10', origin: 'manual' });
+	const untaggedRef = (messageId: string): EmailRef => ({ messageId, category: 'applied',   date: '2026-02-01' });
+	// The origin each message id ends up with, across every ref the plan would write.
+	const plannedOrigins = (plan: ReturnType<typeof buildImportPlan>) => {
+		const refsThePlanWouldWrite = [
+			...plan.creates.flatMap(plannedCreate => plannedCreate.fields.emails),
+			...plan.updates.flatMap(plannedUpdate => plannedUpdate.changes.emails ?? []),
+		];
+		return Object.fromEntries(refsThePlanWouldWrite.map(emailRef => [emailRef.messageId, emailRef.origin]));
+	};
+
+	it('should tag a message id the board has never held as imported', () => {
+		const plan = planFor([makeApp({ company: 'Acme', role: 'SWE', emails: [untaggedRef('19f0000000000001')] })], []);
+		expect(plan.creates).toHaveLength(1);
+		expect(plan.creates[0].fields.emails[0].origin).toBe('imported');
+	});
+
+	it('should NOT relabel a synced ref — an import never overwrites provenance the board already has', () => {
+		const board = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001')] })];
+		// The row also carries a genuinely new id, so the update is not skipped as a no-op.
+		const fileRows = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001'), untaggedRef('19f0000000000002')] })];
+		expect(plannedOrigins(planFor(fileRows, board))).toEqual({ '19f0000000000001': 'synced', '19f0000000000002': 'imported' });
+	});
+
+	it('should NOT relabel a manual ref — manual survives an import that lists it again', () => {
+		const board = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [manualRef('19f0000000000003')] })];
+		const fileRows = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [manualRef('19f0000000000003'), untaggedRef('19f0000000000004')] })];
+		expect(plannedOrigins(planFor(fileRows, board))).toEqual({ '19f0000000000003': 'manual', '19f0000000000004': 'imported' });
+	});
+
+	it('should tag an id EDITED in the file as imported, whatever the ref it replaced was', () => {
+		// Editing an id in the spreadsheet does not edit a ref — it names one the board has never held, so
+		// the result is a new ref, and every new ref an import brings in is 'imported'.
+		const board = [
+			makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001')] }),
+			makeApp({ id: '11', company: 'Beta', role: 'PM',  emails: [manualRef('19f0000000000003')] }),
+		];
+		const fileRows = [
+			makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f00000000000ff')] }),   // was ...0001, synced
+			makeApp({ id: '11', company: 'Beta', role: 'PM',  emails: [manualRef('19f00000000000ee')] }),   // was ...0003, manual
+		];
+		expect(plannedOrigins(planFor(fileRows, board))).toEqual({ '19f00000000000ff': 'imported', '19f00000000000ee': 'imported' });
+	});
+
+	it('should ignore the origin the FILE claims for an id the board does not hold', () => {
+		// A hand-edited cell claiming 'synced'/'manual' must not be able to forge provenance: no sync and no
+		// UI attach ever produced this ref in THIS database, so it is 'imported' either way.
+		const fileRows = [makeApp({ company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000005'), manualRef('19f0000000000006')] })];
+		expect(plannedOrigins(planFor(fileRows, []))).toEqual({ '19f0000000000005': 'imported', '19f0000000000006': 'imported' });
+	});
+
+	it('should leave a legacy untagged ref untagged rather than inventing a provenance for it', () => {
+		const board = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [untaggedRef('19f0000000000007')] })];
+		const fileRows = [makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [untaggedRef('19f0000000000007'), untaggedRef('19f0000000000008')] })];
+		expect(plannedOrigins(planFor(fileRows, board))).toEqual({ '19f0000000000007': undefined, '19f0000000000008': 'imported' });
+	});
+
+	it('should re-import an untouched export as a pure no-op — inheriting origins creates no email diff', () => {
+		// The guard against churn: if inheritance were even slightly off, every re-import would look like an
+		// email change on every row and rewrite the whole board.
+		const board = [
+			makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001'), manualRef('19f0000000000003')] }),
+			makeApp({ id: '11', company: 'Beta', role: 'PM',  emails: [untaggedRef('19f0000000000007')] }),
+		];
+		const plan = planFor(board, board);
+		expect(plan.updates).toEqual([]);
+		expect(plan.creates).toEqual([]);
+		expect(plan.skipped).toBe(2);
+	});
+
+	it('should not touch the email list at all when a row only edits other fields', () => {
+		// A spreadsheet edit to the company/status must not put `emails` in the plan's changes — if it did,
+		// ordinary editing would rewrite every ref (and every origin) on the row for no reason.
+		const board = [makeApp({ id: '10', company: 'Acme', role: 'SWE', status: 'applied', emails: [syncedRef('19f0000000000001'), manualRef('19f0000000000003')] })];
+		const editedRow = [{ ...board[0], company: 'Acme Corp', status: 'rejected' as const }];
+		const plan = planFor(editedRow, board);
+		expect(plan.updates).toHaveLength(1);
+		expect(plan.updates[0].changes).toEqual({ company: 'Acme Corp', status: 'rejected' });
+		expect(plan.updates[0].changes.emails).toBeUndefined();
+	});
+
+	// Merging two applications in the spreadsheet is the case where refs CHANGE APPLICATION. A ref's origin
+	// says how that email entered the database, not which row currently holds it, so moving one leaves its
+	// origin alone — the merge is not a re-discovery. Only ids the board has never held are the import's own
+	// doing, and those become 'imported'.
+	it('should keep every moved ref\'s origin through a merge, and only tag genuinely new ids imported', () => {
+		const board = [
+			makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001')] }),
+			makeApp({ id: '11', company: 'Acme', role: 'SWE', emails: [manualRef('19f0000000000003')] }),
+		];
+		// One row claims both applications' emails and adds a third the board has never seen — the shape of a
+		// hand-merge: row 11 deleted in the spreadsheet, its email folded into row 10.
+		const mergedRow = [{ ...board[0], emails: [syncedRef('19f0000000000001'), manualRef('19f0000000000003'), untaggedRef('19f0000000000009')] }];
+		const plan = planFor(mergedRow, board);
+
+		expect(plannedOrigins(plan)).toEqual({
+			'19f0000000000001': 'synced',     // stayed put, still the sync's find
+			'19f0000000000003': 'manual',     // MOVED off application 11, still hand-attached
+			'19f0000000000009': 'imported',   // never on the board before → the import's own
+		});
+		// …and the merge really happened: the ref left application 11, which is then merged away.
+		expect(plan.moves.map(move => [move.messageId, move.fromId])).toEqual([['19f0000000000003', '11']]);
+		expect(plan.deletes.map(deleted => deleted.id)).toEqual(['11']);
+	});
+
+	it('should keep the origin out of the exported file, and restore it from the board on the way back in', () => {
+		const app = makeApp({ id: '10', company: 'Acme', role: 'SWE', emails: [syncedRef('19f0000000000001'), manualRef('19f0000000000003')] });
+		const exported = applicationsToCsv([app]);
+		expect(exported).not.toContain('synced');    // the export is unchanged by origins existing…
+		expect(exported).not.toContain('manual');
+
+		const parsed = parseApplicationsCsv(exported);
+		expect(parsed.apps[0].emails.map(emailRef => emailRef.origin)).toEqual([undefined, undefined]);
+
+		// …and nothing is lost, because the board — not the file — is what the origins are read from. The row
+		// also carries a new id so the update is not skipped as a no-op, proving the inherited values are what
+		// would actually be written.
+		const rowWithOneNewEmail = [{ ...app, emails: [...app.emails, untaggedRef('19f0000000000009')] }];
+		expect(plannedOrigins(planFor(rowWithOneNewEmail, [app]))).toEqual({
+			'19f0000000000001': 'synced',
+			'19f0000000000003': 'manual',
+			'19f0000000000009': 'imported',
+		});
 	});
 });

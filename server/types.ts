@@ -26,7 +26,18 @@ export interface EmailRef {
 	category: Exclude<Category, 'ignored'>;
 	date: string;            // 'YYYY-MM-DD'
 	fast_apply?: boolean;    // this email is a LinkedIn/Indeed fast-apply NOTICE (drives the email's "Fast Applied" tag)
+	origin?: EmailOrigin;    // which procedure attached it — see EmailOrigin for the precedence rules
 }
+
+/**
+ * Which procedure attached an email ref: the Gmail sync created it (routes/gmail.ts), a CSV import first
+ * introduced its id, or the user attached it by hand. An import never relabels a ref the board already
+ * holds, and nothing relabels 'manual' — updateWithEmail leaves an already-held messageId untouched.
+ *
+ * Optional: refs written before this field existed have no recoverable provenance, so they read back as
+ * undefined. Mirrors EmailOrigin in client/src/types.ts; the bundle split prevents sharing.
+ */
+export type EmailOrigin = 'synced' | 'imported' | 'manual';
 
 export interface Application {
 	id: string;

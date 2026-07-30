@@ -18,7 +18,7 @@ import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
 import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent, isSyncCancelRequested, requestSyncCancel, clearSyncCancel } from '../services/syncState';
 import { debug, guiLine } from '../logger';
-import type { EmailResult, Status } from '../types';
+import type { EmailResult, EmailRef, Status } from '../types';
 
 const router = Router();
 
@@ -351,7 +351,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
 			// email later. `category` is already narrowed to the four non-'ignored' stages by the guard above.
 			// The inbox it lives in is tracked once at the application level (accountEmail), not per ref.
-			const emailRef = { messageId, category, date: email.lastMessageDate, fast_apply: isFastApply };
+			// origin 'synced': this ref is being created BY the sync. updateWithEmail leaves an already-held
+			// messageId completely alone, so a ref the user tagged 'manual' is never relabelled by a re-sync.
+			const emailRef: EmailRef = { messageId, category, date: email.lastMessageDate, fast_apply: isFastApply, origin: 'synced' };
 
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).

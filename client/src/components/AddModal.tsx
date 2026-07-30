@@ -1,6 +1,6 @@
 import { useState, type ReactNode, type SubmitEventHandler } from 'react';
 import type { ApplicationFormData, Status, InterviewStep } from '../types';
-import { STATUS_LABELS, STEP_LABELS } from '../constants';
+import { STATUS_LABELS, STEP_LABELS, emailOriginBadge } from '../constants';
 import { extractMessageId } from '../utils/emailRefs';
 import { todayLocalDate } from '../utils/localDate';
 
@@ -40,9 +40,11 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 	// Reject a duplicate id too — two rows sharing a messageId collide on React's key and make remove ambiguous.
 	const canAddEmail = !!account && draftId !== null && !form.emails.some(e => e.messageId === draftId);
 
+	// Attaching here IS the manual procedure, so origin is stamped at the source. Every other ref passes
+	// through untouched — reordering moves objects, it never edits them — so a save can't relabel one.
 	const addEmail = () => {
 		if (!account || !draftId) return;
-		set('emails', [...form.emails, { messageId: draftId, category: emailDraftCat, date: todayIso() }]);
+		set('emails', [...form.emails, { messageId: draftId, category: emailDraftCat, date: todayIso(), origin: 'manual' }]);
 		setEmailDraft('');
 	};
 	const removeEmail = (messageId: string) => set('emails', form.emails.filter(e => e.messageId !== messageId));
@@ -153,6 +155,7 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 									{form.emails.map((e, emailIndex) => {
 										const isDragged = draggedEmailIndex === emailIndex;
 										const isDropTarget = dropTargetEmailIndex === emailIndex && draggedEmailIndex !== emailIndex;
+										const originBadge = emailOriginBadge(e);
 										return (
 											<div
 												key={e.messageId}
@@ -186,6 +189,9 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 												{emailsAreReorderable && <span aria-hidden className="text-gray-300 select-none">⠿</span>}
 												<span className="px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">{STATUS_LABELS[e.category]}</span>
 												<span className="flex-1 truncate text-gray-500" title={e.messageId}>{e.messageId}</span>
+												{/* Shown here and nowhere else: the board is for scanning, this is where emails get curated. */}
+												<span data-testid="email-origin-badge" data-origin={e.origin ?? 'unknown'} title={originBadge.title}
+													className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${originBadge.cls}`}>{originBadge.label}</span>
 												<button data-testid="email-row-remove" type="button" onClick={() => removeEmail(e.messageId)}
 													className="text-gray-400 hover:text-red-500 px-1" title="Remove">&times;</button>
 											</div>

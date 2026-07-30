@@ -56,3 +56,25 @@ describe('extractMessageId', () => {
 			expect(extractMessageId(input)).toBeNull();
 		});
 });
+
+// ── Email origin is NOT part of the CSV encoding ────────────────────────────
+// The export stays exactly as it always was. `origin` describes how a ref entered THIS database, so it is
+// the board's fact, not the file's: buildImportPlan derives it on the way back in. A file that could
+// declare an origin would just be a way to forge one.
+describe('serializeEmails / parseEmails — origin is not encoded', () => {
+	it('should not write an origin into the cell, whatever the ref carries', () => {
+		expect(serializeEmails([{ messageId: '19f0000000000001', category: 'applied', date: '2026-02-01', origin: 'manual' }]))
+			.toBe('applied|19f0000000000001|2026-02-01');
+		// …and a fast-apply notice still encodes with `fast` as its only 4th field.
+		expect(serializeEmails([{ messageId: '19f0000000000001', category: 'applied', date: '2026-02-01', fast_apply: true, origin: 'synced' }]))
+			.toBe('applied|19f0000000000001|2026-02-01|fast');
+	});
+
+	it('should never read an origin back out of a cell, even one hand-edited to claim it', () => {
+		expect(parseEmails('applied|19f0000000000001|2026-02-01|synced')[0].origin).toBeUndefined();
+		expect(parseEmails('applied|19f0000000000001|2026-02-01|manual')[0].origin).toBeUndefined();
+		// A trailing word that isn't `fast` is ignored, exactly as a legacy account field always was.
+		expect(parseEmails('applied|19f0000000000001|2026-02-01|manual')[0].fast_apply).toBeUndefined();
+		expect(parseEmails('applied|19f0000000000001|2026-02-01|fast')[0].fast_apply).toBe(true);
+	});
+});

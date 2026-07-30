@@ -1,4 +1,4 @@
-import type { Application, NewApplication, Status, InterviewStep, EmailRef } from '../types';
+import type { Application, NewApplication, Status, InterviewStep, EmailRef, EmailOrigin } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 import { parseEmails, serializeEmails } from './emailRefs';
 
@@ -321,9 +321,37 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	// EVERY holder per message id — legacy data can have one email on several applications, and the
 	// claiming row must strip them all.
 	const holdersByMessageId = new Map<string, Application[]>();
-	existing.forEach(app => app.emails.forEach(email =>
-		holdersByMessageId.set(email.messageId, [...(holdersByMessageId.get(email.messageId) ?? []), app]),
-	));
+	// …and the origin each message id ALREADY carries on the board, which is the authority for the tagging
+	// rule below. Built in the same pass: one message id can sit on several applications in legacy data, but
+	// they are the same email, so the first holder's origin is as good as any.
+	const boardOriginByMessageId = new Map<string, EmailOrigin | undefined>();
+	existing.forEach(app => app.emails.forEach(heldRef => {
+		holdersByMessageId.set(heldRef.messageId, [...(holdersByMessageId.get(heldRef.messageId) ?? []), app]);
+		if (!boardOriginByMessageId.has(heldRef.messageId)) boardOriginByMessageId.set(heldRef.messageId, heldRef.origin);
+	}));
+
+	/**
+	 * Tag one row's refs per the import rule: a messageId the board already holds KEEPS the origin it has
+	 * there (an import never relabels 'synced' or 'manual' — nor a legacy untagged ref, which stays
+	 * untagged rather than being handed a provenance it never had), and anything else is new to this
+	 * database and becomes 'imported'. Editing an id in the file therefore produces a ref the board has
+	 * never seen — a new identity, hence 'imported' — while MOVING a ref between rows keeps its origin,
+	 * because an origin says how the email entered the database, not which row holds it today.
+	 *
+	 * Nothing here can be overridden from the file: parseEmails never reads an origin out of a cell, so this
+	 * assigns provenance rather than trusting any, and a hand-edited cell cannot forge one.
+	 */
+	const withOriginsResolvedAgainstBoard = (rowEmails: EmailRef[]): EmailRef[] => rowEmails.map(fileRef => {
+		const boardAlreadyHoldsThisId = boardOriginByMessageId.has(fileRef.messageId);
+		const resolvedOrigin = boardAlreadyHoldsThisId ? boardOriginByMessageId.get(fileRef.messageId) : 'imported';
+		// Spread WITHOUT the key when there is no origin, so a legacy ref stays clean instead of gaining an
+		// `origin: undefined` that reads as a tracked-but-empty provenance.
+		return resolvedOrigin ? { ...fileRef, origin: resolvedOrigin } : { ...fileRef };
+	});
+	// Every rule below reads emails off THESE rows, so the resolved origin reaches matching, the field diff,
+	// and the synced-email list alike — the file's claimed origin never leaks past this point.
+	const rowsWithResolvedOrigins = parsed.apps.map(parsedRow => ({ ...parsedRow, emails: withOriginsResolvedAgainstBoard(parsedRow.emails) }));
+
 	const boardByCompanyRole = new Map<string, Application[]>();
 	existing.forEach(app => {
 		const appKey = companyRoleKey(app.company, app.role);
@@ -331,7 +359,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	});
 	// File-side ambiguity for the company+role fallback: how many id-less, email-less rows share each key.
 	const fallbackRowCountByKey = new Map<string, number>();
-	for (const parsedRow of parsed.apps) {
+	for (const parsedRow of rowsWithResolvedOrigins) {
 		if (parsedRow.id || parsedRow.emails.length > 0) continue;
 		const rowKey = companyRoleKey(parsedRow.company, parsedRow.role);
 		fallbackRowCountByKey.set(rowKey, (fallbackRowCountByKey.get(rowKey) ?? 0) + 1);
@@ -346,7 +374,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	const updates: PlannedUpdate[] = [];
 	let skipped = 0;
 
-	for (const parsedRow of parsed.apps) {
+	for (const parsedRow of rowsWithResolvedOrigins) {
 		// Split the match key off the importable fields — the id is identity, never data.
 		const { id: fileId, ...rowFields } = parsedRow;
 		let target: Application | undefined;
@@ -428,7 +456,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	}
 
 	// Every email id in the file, for the synced-email skip list (ids are file-unique after validation).
-	const syncEmails = parsed.apps.flatMap(parsedRow => parsedRow.emails);
+	const syncEmails = rowsWithResolvedOrigins.flatMap(parsedRow => parsedRow.emails);
 
 	return { creates, updates, moves, deletes, syncEmails, skipped };
 }
