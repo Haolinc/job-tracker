@@ -1,5 +1,5 @@
 import type { EmailRef } from '../types';
-import { STATUS_LABELS, STATUS_COLORS } from '../constants';
+import { STATUS_LABELS, STATUS_COLORS, emailStageLabel } from '../constants';
 import { gmailUrl } from '../utils/gmailUrl';
 
 interface Props {
@@ -30,7 +30,7 @@ export default function EmailLinks({ emails, account }: Props) {
 						: `Open the ${STATUS_LABELS[emailRef.category]} email in Gmail${emailRef.date ? ` (${emailRef.date})` : ''}`}
 					className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full hover:underline ${STATUS_COLORS[emailRef.category]}`}
 				>
-					{emailRef.fast_apply ? `⚡ Fast Applied` : `✉ ${STATUS_LABELS[emailRef.category]}`}
+					{`${emailRef.fast_apply ? '⚡' : '✉'} ${emailStageLabel(emailRef)}`}
 				</a>
 			))}
 		</div>
