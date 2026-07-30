@@ -10,7 +10,7 @@ import { buildBody } from './gmail/body';
 // Cleans an LLM-supplied requisition id. Rule: a label GLUED to the digits is the company's code prefix
 // (keep it); a label separated by a space/colon/# is a label (strip it). ≥5 digits required.
 describe('canonicalReqId', () => {
-    // [given job id, expected job id]
+	// [given job id, expected job id]
 	const cases: [string | null, string | null][] = [
 		['REQ352476', 'REQ352476'],            
 		['REQ 352476', '352476'],              // spaced label, stripped
@@ -42,7 +42,7 @@ describe('canonicalReqId', () => {
 // Deterministic req extraction from subject+body, kept AS WRITTEN. Glued REQ stays whole via the
 // alphanumeric rule; a spaced label is stripped; phones/years are rejected.
 describe('extractJobNumber', () => {
-    // [Subject, Body, Expected job id]
+	// [Subject, Body, Expected job id]
 	const cases: [string, string, string | null][] = [
 		['subject', 'Job Number: 210715977', '210715977'],
 		['subject', 'Req ID: 210705462 for the role', '210705462'],
@@ -70,7 +70,7 @@ describe('extractJobNumber', () => {
 // ── tidyRole ──────────────────────────────────────────────────────────────────
 // Strips leading req tokens, brace ids, and trailing req/location noise; keeps real year-prefixed titles.
 describe('tidyRole', () => {
-     // [Role name with other info, Expected role name]
+	// [Role name with other info, Expected role name]
 	const cases: [string, string][] = [
 		['2026-71968 Space Force - Software Engineer', 'Space Force - Software Engineer'],
 		['R232753 Platform Engineer', 'Platform Engineer'],

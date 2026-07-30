@@ -25,11 +25,11 @@ describe('TableView', () => {
 	});
 
 	it('should show pagination when there are more than 25 rows', () => {
-        // should not show when 5 rows
+		// should not show when 5 rows
 		const { unmount } = render(<TableView applications={rows(5)} {...cfg} />);
 		expect(screen.queryByTestId('table-next')).toBeNull();
 		unmount();
-        // should show when > 25 rows
+		// should show when > 25 rows
 		render(<TableView applications={rows(26)} {...cfg} />);
 		expect(screen.getByTestId('table-next')).toBeInTheDocument();
 	});

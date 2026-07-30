@@ -14,7 +14,7 @@ const ATS_DOMAINS = new Set([
 	'governmentjobs.com', 'clearcompany.com', 'gem.com', 'oracle.com', 'ns2cloud.com', 'applicantemails.com',
 	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
 	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
-    // Generic email providers — almost certainly not the employer's real domain
+	// Generic email providers — almost certainly not the employer's real domain
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
 ]);
 
@@ -22,7 +22,7 @@ const ATS_DOMAINS = new Set([
 // alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
 // even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-export const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
+const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
 
 // Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
 // "Sun West Mortgage" resolve to the same dedup key.

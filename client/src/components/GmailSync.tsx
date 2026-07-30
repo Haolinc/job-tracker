@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { SyncResult, SyncProgress } from '../types';
 import { formatDuration } from '../utils/formatDuration';
 import WarningConfirmDialog from './WarningConfirmDialog';
@@ -20,11 +20,12 @@ interface Props {
 
 export default function GmailSync({ connected, syncing, cancelling, progress, lastResult, error, onConnect, onDisconnect, onSync, onCancel }: Props) {
 	const [days, setDays] = useState(30);
-	// The "Stop this sync?" confirmation is only meaningful while a sync is running.
-	const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-	// Edge case: the sync can finish (on its own, or because the cancel landed) while the dialog is still open.
-	// Once there's no sync to stop, the question is moot — auto-dismiss so the user isn't confirming a no-op.
-	useEffect(() => { if (!syncing) setShowCancelConfirm(false); }, [syncing]);
+	const [cancelConfirmRequested, setCancelConfirmRequested] = useState(false);
+	// The "Stop this sync?" question is only meaningful while a sync is running, so visibility is DERIVED from
+	// `syncing` rather than reset after the fact: a sync that finishes (on its own, or because the cancel landed)
+	// while the dialog is open dismisses it in the same render, so the user never confirms a no-op. The request
+	// flag is cleared when a new sync starts, so a dialog abandoned that way can't reappear over the next one.
+	const showCancelConfirm = syncing && cancelConfirmRequested;
 	return (
 		<div data-testid="gmail-sync" className="flex items-center gap-2 flex-wrap">
 			{connected ? (
@@ -41,7 +42,7 @@ export default function GmailSync({ connected, syncing, cancelling, progress, la
 					</select>
 					<button
 						data-testid="gmail-sync-btn"
-						onClick={() => onSync(days)}
+						onClick={() => { setCancelConfirmRequested(false); onSync(days); }}
 						disabled={syncing}
 						className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
 					>
@@ -53,7 +54,7 @@ export default function GmailSync({ connected, syncing, cancelling, progress, la
 					{syncing && (
 						<button
 							data-testid="gmail-cancel-btn"
-							onClick={() => setShowCancelConfirm(true)}
+							onClick={() => setCancelConfirmRequested(true)}
 							disabled={cancelling}
 							title="Stop this sync — its progress won't be saved; you can sync again later"
 							className="px-3 py-2 border border-red-200 bg-white text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -67,7 +68,7 @@ export default function GmailSync({ connected, syncing, cancelling, progress, la
 							busyLabel="Stopping…"
 							cancelLabel="Keep syncing"
 							busy={cancelling}
-							onCancel={() => setShowCancelConfirm(false)}
+							onCancel={() => setCancelConfirmRequested(false)}
 							onConfirm={onCancel}
 						>
 							Sync results are only saved once the sync finishes. If you stop now, this sync's progress won't be

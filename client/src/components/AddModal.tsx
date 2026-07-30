@@ -116,7 +116,7 @@ export default function AddModal({ initial, onSave, onClose }: Props) {
 					{form.status === 'rejected' && (
 						<label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
 							<input
-                                data-testid="field-reached-interview"
+								data-testid="field-reached-interview"
 								type="checkbox"
 								checked={form.reached_interview}
 								onChange={e => set('reached_interview', e.target.checked)}

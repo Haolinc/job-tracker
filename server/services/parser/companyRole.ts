@@ -134,18 +134,13 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	if (/\b(demographic|survey)\b/i.test(text)) return null;
 	if (/keep track of your application|still working on the application|if you have completed the application/i.test(body)) return null;
 
-	let company: string | null = null;
-	let role:    string | null = null;
-	let untypedSpans: string[] = [];
-
+	// A typed match labels company and role itself. Without one, the untyped patterns yield candidate spans
+	// that are NOT labelled — no role among them, and the first span stands in as the company because
+	// priority order is the first-match-wins answer this has always given.
 	const typed = matchTypedPatterns(text, subject);
-	if (typed) {
-		company = typed.company;
-		role    = typed.role;
-	} else {
-		untypedSpans = collectUntypedCompanySpans(text);
-		company = untypedSpans[0] ?? null;   // priority order = the first-match-wins answer this has always given
-	}
+	const untypedSpans = typed ? [] : collectUntypedCompanySpans(text);
+	const company = typed ? typed.company : (untypedSpans[0] ?? null);
+	const role    = typed ? typed.role    : null;
 	const ambiguous = !typed;
 
 	const cleanCompany = cleanGeneralCompany(company);

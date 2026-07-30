@@ -95,7 +95,7 @@ export interface Classification {
 	company: string | null;
 	role: string | null;
 	req_id?: string | null;   // ATS requisition/job number (digits only) the AI pulled from the email, if any
-    classifier_code?: string; // Optional field to store which parser/classifier was used
+	classifier_code?: string; // Optional field to store which parser/classifier was used
 	// Text spans the parser found but could NOT type: "your interest in X" reads identically whether X is
 	// "Axoni" (a company) or "Software Engineer" (a role), so `company` above is only the parser's best
 	// guess. Present only on that ambiguous path; the sync loop has the LLM label these spans before

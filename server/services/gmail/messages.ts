@@ -120,7 +120,7 @@ function buildJobQuery(days: number): string {
 		// Legitimate emails using those words also contain tighter phrases above.
 		'"moving forward with other"',// rejection phrase variant
 		'"not be moving forward"',
-        '"regret to"',
+		'"regret to"',
 		// Soft rejections (T-Mobile/Workday): negated "fit" — a promo says "find the right fit", never
 		// "wasn't the right fit", so the negation keeps marketing out.
 		'"wasn\'t the right fit"',
@@ -131,7 +131,7 @@ function buildJobQuery(days: number): string {
 		'"welcome aboard"',
 		'"job offer"',
 		'"offer letter"',
-        '"thank you for your interest"',
+		'"thank you for your interest"',
 		'"interview for"',
 		'"schedule your interview"',
 	].join(' ')}}`;
@@ -157,10 +157,10 @@ function buildJobQuery(days: number): string {
 		// any job keyword, making OR filtering impossible. Gmail routes these to "Updates", not
 		// "Social", so -category:social doesn't catch them.
 		'-from:updates-noreply@linkedin.com',
-        '-"Glassdoor Community"',
-        '-"Account Verification"',
-        '-from:noreply@newsletters.nyc.gov',
-        '-"Action Required"',
+		'-"Glassdoor Community"',
+		'-"Account Verification"',
+		'-from:noreply@newsletters.nyc.gov',
+		'-"Action Required"',
 		// Glassdoor "Apply Now / Apply Soon / is still available" job alert emails.
 		// 16 hits confirmed in 60-day audit.
 		'-subject:"Apply Now"',
@@ -174,14 +174,14 @@ function buildJobQuery(days: number): string {
 		// Draft application reminder emails — ATS prompts to complete an unfinished application.
 		// "Continue to apply for the job..." is always about a draft, never a submitted app.
 		'-subject:"continue to apply"',
-        '-subject:"incomplete"',
-        '-subject:"complete your"',
-        '-subject:"your application was viewed"',
-        '-subject:"draft"',
-        // ATS "still reviewing" status pings — no new information, just noise.
-        // Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
-        '-subject:"Quick Update!"',  //TODO: need to verify later
-        '-subject:"Demographic Survey"',
+		'-subject:"incomplete"',
+		'-subject:"complete your"',
+		'-subject:"your application was viewed"',
+		'-subject:"draft"',
+		// ATS "still reviewing" status pings — no new information, just noise.
+		// Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
+		'-subject:"Quick Update!"',  //TODO: need to verify later
+		'-subject:"Demographic Survey"',
 		// Pre-filter the AUTOMATED_SUBJECT patterns that DO match the OR group (so they'd
 		// otherwise be fetched and dropped at runtime). Saves the thread fetch. The runtime
 		// AUTOMATED_SUBJECT check stays as the precise backstop — these Gmail terms are fuzzy
@@ -194,9 +194,9 @@ function buildJobQuery(days: number): string {
 		'-subject:"has been scheduled"',              // "Your interview has been scheduled" — calendar noise, matches OR "your interview"
 		'-subject:"calendar invite"',
 		'-subject:"meeting confirmed"',
-        '-subject:"you have started an application!"',   // Monster job board noise
-        '-subject:"additional information needed"',
-        keywordFilter,
+		'-subject:"you have started an application!"',   // Monster job board noise
+		'-subject:"additional information needed"',
+		keywordFilter,
 	].join(' ');
 }
 

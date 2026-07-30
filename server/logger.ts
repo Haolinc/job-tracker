@@ -14,7 +14,7 @@ import { localDateString, localTimestamp } from './utils';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export interface LoggerOptions {
+interface LoggerOptions {
 	/** Absolute path of the folder the dated log files go in. Defaults to logs/ next to this module. */
 	directory?: string;
 }
@@ -38,9 +38,6 @@ let active = false;
 
 const formatArg = (a: unknown): string =>
 	typeof a === 'object' && a !== null ? JSON.stringify(a, null, 2) : String(a);
-
-// Local date/time formatting lives in ./utils (localDateString, localTimestamp) so every caller — logs,
-// email dates, exports — formats identically. The rotation logic below keys off localDateString().
 
 function closeStreams(): void {
 	debugStream?.end();
@@ -129,18 +126,9 @@ function writeErrorLine(severityTag: string, ...args: unknown[]): void {
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Turn file logging ON.
- *
- * Patches console.log/warn/error so every call is teed to the day's log files.
- * Idempotent — calling enable() twice has no extra effect.
- *
- * Controlled automatically by the LOG_TO_FILE env var:
- *   LOG_TO_FILE=true   → enable on server start
- *   LOG_TO_FILE=false  → skip (useful to silence logging in tests)
- *   (unset)            → defaults to enabled
- *
- * @example Turn on from server entry point
- *   enable(); // reads LOG_TO_FILE from env, LOG_DIR picks the folder
+ * Turn file logging ON: patch console.log/warn/error so every call is teed to the day's log files.
+ * Idempotent — a second call has no extra effect. The caller (index.ts) decides whether to call it,
+ * from LOG_TO_FILE: 'false' silences file logging (used by tests), anything else enables it.
  */
 export function enable(options: LoggerOptions = {}): void {
 	if (active) return;
@@ -167,48 +155,4 @@ export function debug(...args: unknown[]): void {
 /** A machine line for the desktop launcher (e.g. "@sync-progress@ {json}") — stdout only, never the logs. */
 export function guiLine(line: string): void {
 	process.stdout.write(line + '\n');
-}
-
-/**
- * Turn file logging OFF.
- *
- * Restores the original console methods and closes the file streams.
- * Returns a Promise that resolves once both streams are fully flushed.
- *
- * @example Disable after a debug script finishes
- *   await disable();
- */
-export function disable(): Promise<void> {
-	if (!active) return Promise.resolve();
-
-	console.log   = _origLog;
-	console.error = _origError;
-	console.warn  = _origWarn;
-	active = false;
-
-	const streamsToFlush = [debugStream, errorStream].filter((s): s is fs.WriteStream => s !== null);
-	debugStream = null;
-	errorStream = null;
-	logsDirectory = null;
-	openStreamsDate = null;
-
-	return Promise.all(
-		streamsToFlush.map(streamToFlush => new Promise<void>(resolve => streamToFlush.end(() => resolve()))),
-	).then(() => undefined);
-}
-
-/** Whether file logging is currently active. */
-export const isEnabled = (): boolean => active;
-
-/**
- * Write a visible separator directly to the debug log (does not print to terminal).
- * Useful in debug scripts to mark phases without polluting stdout.
- *
- * @example
- *   mark('fetchJobEmails start');
- *   const emails = await fetchJobEmails(tokens);
- *   mark('fetchJobEmails done');
- */
-export function mark(label: string): void {
-	writeDebugLine(`\n=== ${label} — ${localTimestamp()} ===`);
 }
