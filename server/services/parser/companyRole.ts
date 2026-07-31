@@ -24,19 +24,19 @@ const GEN_CO  = '([^.,!?\\n]+?)';                            // capture stays wi
 const GEN_END = '(?=[.,!?\\n]|$)';
 
 /** Trim the capture to its leading proper-noun run, then reject req numbers / bad length. */
-function cleanGeneralCompany(s: string | null | undefined): string | null {
-	if (!s) return null;
+function cleanGeneralCompany(rawCapture: string | null | undefined): string | null {
+	if (!rawCapture) return null;
 	// Drop a leading lowercase article the capture swept in from prose ("at the MTA" → "the MTA" → "MTA").
 	// Case-SENSITIVE on purpose: a capitalized "The" is part of the name itself ("The New York Times",
 	// "The Trade Desk") and must survive, so this must not run under a /i regex.
-	const withoutLeadingArticle = s.trim().replace(/^the\s+/, '');
-	const run = withoutLeadingArticle.match(PROPER_NOUN_RUN);   // didn't start with a capital → not a company name
-	if (!run) return null;
-	s = run[0].trim();
-	if (s.length < 2 || s.length > 50) return null;
-	if (/^(?:req)?\d|^[A-Z]{0,4}\d{3,}/.test(s)) return null;             // an uppercase req number ("REQ346977 …"), not a company
-	if (/^req(?:uisition)?\b/i.test(s)) return null;                     // "Req 93091 …" / "Requisition …" is a job ref, not a company (e.g. "applying to Req 93091 - QA Tester")
-	return s;
+	const withoutLeadingArticle = rawCapture.trim().replace(/^the\s+/, '');
+	const properNounRun = withoutLeadingArticle.match(PROPER_NOUN_RUN);   // didn't start with a capital → not a company name
+	if (!properNounRun) return null;
+	const companyName = properNounRun[0].trim();
+	if (companyName.length < 2 || companyName.length > 50) return null;
+	if (/^(?:req)?\d|^[A-Z]{0,4}\d{3,}/.test(companyName)) return null;   // an uppercase req number ("REQ346977 …"), not a company
+	if (/^req(?:uisition)?\b/i.test(companyName)) return null;            // "Req 93091 …" / "Requisition …" is a job ref, not a company (e.g. "applying to Req 93091 - QA Tester")
+	return companyName;
 }
 
 /**
@@ -49,32 +49,32 @@ function cleanGeneralCompany(s: string | null | undefined): string | null {
  *   "...applying to [Company] - [Role]"                          (subject)
  */
 function matchTypedPatterns(text: string, subject: string): { company: string; role: string | null } | null {
-	let m: RegExpMatchArray | null;
+	let patternMatch: RegExpMatchArray | null;
 
 	// 1. applying for [the] [role|position of] [Role] [position|role] at|with [Company]
-	m = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
-	if (m) return { role: m[1], company: m[2] };
+	patternMatch = text.match(new RegExp(`\\b(?:applying|application|apply) for (?:the\\s+|an?\\s+)?(?:(?:role|position) of\\s+)?([^.!?\\n]+?)(?:\\s+(?:position|role))?\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (patternMatch) return { role: patternMatch[1], company: patternMatch[2] };
 
 	// 2. application to [the] [Role] opening|position|role at|with [Company]
 	// ("...your application to the QA Automation Engineer opening with SS&C Technologies Inc.")
-	m = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
-	if (m) return { role: m[1], company: m[2] };
+	patternMatch = text.match(new RegExp(`\\b(?:applying|application|applied|apply) to (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:opening|position|role|opportunity)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (patternMatch) return { role: patternMatch[1], company: patternMatch[2] };
 
 	// 3. your interest in [the] [Role] position|opportunity|opening|role at|with [Company]
 	// ("...interest in the Software Engineer (NYC) opportunity at PermitFlow", "...the Engineer,
 	// Product Integration (Paisly) opportunity at JetBlue")
-	m = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
-	if (m) return { role: m[1], company: m[2] };
+	patternMatch = text.match(new RegExp(`your interest in (?:the\\s+|an?\\s+)?([^.!?\\n]+?)\\s+(?:position|opportunity|opening|role)\\s+(?:at|with)\\s+${GEN_CO}${GEN_END}`, 'i'));
+	if (patternMatch) return { role: patternMatch[1], company: patternMatch[2] };
 
 	// 4. employment with [Company] in our [Role] position
-	m = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i'));
-	if (m) return { company: m[1], role: m[2] };
+	patternMatch = text.match(new RegExp(`employment with\\s+${GEN_CO}\\s+in our\\s+([^.!?\\n]+?)\\s+position`, 'i'));
+	if (patternMatch) return { company: patternMatch[1], role: patternMatch[2] };
 
 	// 5. "applying to [Company] - [Role]" (subject) — the role trails the company after a SPACED dash and
 	// often holds a comma the sentence-bounded patterns above can't keep ("The New York Times - Software
 	// Engineer, Programming"). Spaces around the dash are required, so hyphenated names ("Coca-Cola") don't split.
-	m = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i);
-	if (m) return { company: m[1], role: m[2] };
+	patternMatch = subject.match(/\b(?:applying to|application to|apply to|your application to)\s+(.+?)\s+[-–]\s+(.+)$/i);
+	if (patternMatch) return { company: patternMatch[1], role: patternMatch[2] };
 
 	return null;
 }
@@ -134,18 +134,13 @@ export function extractGeneralCompanyRole(subject: string, body: string): { comp
 	if (/\b(demographic|survey)\b/i.test(text)) return null;
 	if (/keep track of your application|still working on the application|if you have completed the application/i.test(body)) return null;
 
-	let company: string | null = null;
-	let role:    string | null = null;
-	let untypedSpans: string[] = [];
-
+	// A typed match labels company and role itself. Without one, the untyped patterns yield candidate spans
+	// that are NOT labelled — no role among them, and the first span stands in as the company because
+	// priority order is the first-match-wins answer this has always given.
 	const typed = matchTypedPatterns(text, subject);
-	if (typed) {
-		company = typed.company;
-		role    = typed.role;
-	} else {
-		untypedSpans = collectUntypedCompanySpans(text);
-		company = untypedSpans[0] ?? null;   // priority order = the first-match-wins answer this has always given
-	}
+	const untypedSpans = typed ? [] : collectUntypedCompanySpans(text);
+	const company = typed ? typed.company : (untypedSpans[0] ?? null);
+	const role    = typed ? typed.role    : null;
 	const ambiguous = !typed;
 
 	const cleanCompany = cleanGeneralCompany(company);

@@ -42,8 +42,9 @@ describe('isFastApplyNotice — only the apply NOTICE, never a rejection', () =>
 	});
 	it('is false for fast-apply REJECTIONS (a status update, not an apply event)', () => {
 		// The EarthCam bug: "linkedin_rejected" stamped fast_apply on the record and split the real notice.
+		// LinkedIn is the only board with a rejection template — indeed.ts emits nothing but 'indeed_applied' —
+		// so 'linkedin_rejected' is the whole case, and ClassifierCode no longer admits an 'indeed_rejected'.
 		expect(isFastApplyNotice('linkedin_rejected')).toBe(false);
-		expect(isFastApplyNotice('indeed_rejected')).toBe(false);
 	});
 	it('is false for non-fast / missing codes', () => {
 		expect(isFastApplyNotice('general_template')).toBe(false);

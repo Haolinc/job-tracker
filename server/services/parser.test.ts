@@ -10,7 +10,7 @@ import { buildBody } from './gmail/body';
 // Cleans an LLM-supplied requisition id. Rule: a label GLUED to the digits is the company's code prefix
 // (keep it); a label separated by a space/colon/# is a label (strip it). ≥5 digits required.
 describe('canonicalReqId', () => {
-    // [given job id, expected job id]
+	// [given job id, expected job id]
 	const cases: [string | null, string | null][] = [
 		['REQ352476', 'REQ352476'],            
 		['REQ 352476', '352476'],              // spaced label, stripped
@@ -42,7 +42,7 @@ describe('canonicalReqId', () => {
 // Deterministic req extraction from subject+body, kept AS WRITTEN. Glued REQ stays whole via the
 // alphanumeric rule; a spaced label is stripped; phones/years are rejected.
 describe('extractJobNumber', () => {
-    // [Subject, Body, Expected job id]
+	// [Subject, Body, Expected job id]
 	const cases: [string, string, string | null][] = [
 		['subject', 'Job Number: 210715977', '210715977'],
 		['subject', 'Req ID: 210705462 for the role', '210705462'],
@@ -70,7 +70,7 @@ describe('extractJobNumber', () => {
 // ── tidyRole ──────────────────────────────────────────────────────────────────
 // Strips leading req tokens, brace ids, and trailing req/location noise; keeps real year-prefixed titles.
 describe('tidyRole', () => {
-     // [Role name with other info, Expected role name]
+	// [Role name with other info, Expected role name]
 	const cases: [string, string][] = [
 		['2026-71968 Space Force - Software Engineer', 'Space Force - Software Engineer'],
 		['R232753 Platform Engineer', 'Platform Engineer'],
@@ -283,22 +283,22 @@ describe('buildBody + parseEmail (LinkedIn)', () => {
 // Pulls company (+role when present) from acknowledgement/rejection sentence structures.
 describe('extractGeneralCompanyRole', () => {
 	it('applying for the [Role] position at [Company] (Pomelo)', () => {
-		const r = extractGeneralCompanyRole('Thanks for applying', 'Thank you for applying for the Software Engineer (All Levels) position at Pomelo Care.');
-		expect(r?.company).toContain('Pomelo');
-		expect(tidyRole(r?.role ?? '')).toBe('Software Engineer (All Levels)');
+		const result = extractGeneralCompanyRole('Thanks for applying', 'Thank you for applying for the Software Engineer (All Levels) position at Pomelo Care.');
+		expect(result?.company).toContain('Pomelo');
+		expect(tidyRole(result?.role ?? '')).toBe('Software Engineer (All Levels)');
 	});
 	it('review your application for the [Role] position (Veeva)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Veeva and the opportunity to review your application for the Associate Quality Engineer position.');
-		expect(r?.company).toBe('Veeva');
-		expect(r?.role).toBe('Associate Quality Engineer');
+		const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Veeva and the opportunity to review your application for the Associate Quality Engineer position.');
+		expect(result?.company).toBe('Veeva');
+		expect(result?.role).toBe('Associate Quality Engineer');
 	});
 	it('interest in [Company] (company only, role recovered separately)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
-		expect(r?.company).toContain('Lockheed');
+		const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+		expect(result?.company).toContain('Lockheed');
 	});
 	it('keeps a multi-connector company name (Comptroller)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for applying to Office of the New York State Comptroller. Your application has been received.');
-		expect(r?.company).toBe('Office of the New York State Comptroller');
+		const result = extractGeneralCompanyRole('x', 'Thank you for applying to Office of the New York State Comptroller. Your application has been received.');
+		expect(result?.company).toBe('Office of the New York State Comptroller');
 	});
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
@@ -307,43 +307,43 @@ describe('extractGeneralCompanyRole', () => {
 		// cleanBody now delivers a paragraph break as "\n", so the body capture stops at the greeting instead
 		// of swallowing it ("MTA Dear Hao Lin Thank"). Body-first + the leading-"the" strip give the short form
 		// the body uses — which the subject's "Metropolitan Transportation Authority" no longer overrides.
-		const r = extractGeneralCompanyRole(
+		const result = extractGeneralCompanyRole(
 			'Your Application for Application Developer Levels 1 - 5 at the Metropolitan Transportation Authority',
 			'Your Application for Application Developer Levels 1 - 5 at the MTA\nDear Hao Lin\nThank you for your interest in a career with the MTA. We have received your application for Application Developer Levels 1 - 5.',
 		);
-		expect(r?.company).toBe('MTA');
-		expect(r?.role).toBe('Application Developer Levels 1 - 5');
+		expect(result?.company).toBe('MTA');
+		expect(result?.role).toBe('Application Developer Levels 1 - 5');
 	});
 	it('keeps a capitalized leading "The" that is part of the name ("The New York Times")', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for applying to The New York Times. Your application has been received.');
-		expect(r?.company).toBe('The New York Times');
+		const result = extractGeneralCompanyRole('x', 'Thank you for applying to The New York Times. Your application has been received.');
+		expect(result?.company).toBe('The New York Times');
 	});
 
 	// Patterns that name both slots ("applying for [Role] at [Company]") are self-typing; the bare
 	// "interest in X" patterns are not, and only those need the LLM to say which slot X fills.
 	describe('span typing', () => {
 		it('marks a both-slots sentence unambiguous, with no spans to label', () => {
-			const r = extractGeneralCompanyRole('x', 'Thank you for applying for the Software Engineer position at Pomelo Care.');
-			expect(r?.ambiguous).toBe(false);
-			expect(r?.spans).toEqual([]);
+			const result = extractGeneralCompanyRole('x', 'Thank you for applying for the Software Engineer position at Pomelo Care.');
+			expect(result?.ambiguous).toBe(false);
+			expect(result?.spans).toEqual([]);
 		});
 		it('marks a bare "interest in [X]" ambiguous and offers X for labelling', () => {
-			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
-			expect(r?.ambiguous).toBe(true);
-			expect(r?.spans).toContain('Lockheed Martin');
+			const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+			expect(result?.ambiguous).toBe(true);
+			expect(result?.spans).toContain('Lockheed Martin');
 		});
 		it('still guesses the role as the company when unconfirmed — the case the picker exists to fix', () => {
-			const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Software Engineer. We have received your application.');
+			const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Software Engineer. We have received your application.');
 			// Nothing here says "Software Engineer" is a title, so the regex reads it as the employer and
 			// neither structural guard fires. The flag is what gets the LLM to catch it.
-			expect(r?.company).toBe('Software Engineer');
-			expect(r?.ambiguous).toBe(true);
-			expect(r?.spans).toContain('Software Engineer');
+			expect(result?.company).toBe('Software Engineer');
+			expect(result?.ambiguous).toBe(true);
+			expect(result?.spans).toContain('Software Engineer');
 		});
 		it('collects every untyped candidate, in priority order, not just the first', () => {
-			const r = extractGeneralCompanyRole('x', 'Thank you for applying to Axoni. We appreciate your interest in Blackstone.');
+			const result = extractGeneralCompanyRole('x', 'Thank you for applying to Axoni. We appreciate your interest in Blackstone.');
 			// "applying to" (pattern 8) outranks "interest in" (pattern 9), and both reach the picker.
-			expect(r?.spans.slice(0, 2)).toEqual(['Axoni', 'Blackstone']);
+			expect(result?.spans.slice(0, 2)).toEqual(['Axoni', 'Blackstone']);
 		});
 	});
 	it('returns null for a "keep track of your application" draft reminder', () => {

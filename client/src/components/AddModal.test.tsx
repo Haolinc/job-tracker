@@ -8,9 +8,9 @@ import type { ApplicationFormData, EmailRef } from '../types';
 // are asserted separately. So a wording change to a label/button won't break "find the element".
 
 describe('AddModal', () => {
-    // Fills every field EXCEPT `skip`, so each negative test proves a single missing required field
+	// Fills every field EXCEPT `skip`, so each negative test proves a single missing required field
 	// is enough to block the save even when the rest of the form is complete.
-    // USER SIMULLATION VERSION
+	// USER SIMULLATION VERSION
 	const fillAllExcept = async (user: ReturnType<typeof userEvent.setup>, skip: string) => {
 		const text: [string, string][] = [
 			['field-company', 'CVS Health'], ['field-role', 'Software Engineer'],
@@ -22,19 +22,19 @@ describe('AddModal', () => {
 			if (id !== skip) fireEvent.change(screen.getByTestId(id), { target: { value: v } });
 	};
 
-    // Sets every field EXCEPT `skip`, so each negative test proves a single missing required field
+	// Sets every field EXCEPT `skip`, so each negative test proves a single missing required field
 	// is enough to block the save even when the rest of the form is complete.
-    // FAST VERSION
+	// FAST VERSION
 	const setAllExcept = (skip: string) => {
 		const text: [string, string][] = [
 			['field-company', 'CVS Health'], ['field-role', 'Software Engineer'],
 			['field-job-url', 'https://careers.example.com'], ['field-external-id', 'R0859802'], ['field-notes', 'a note'],
-            ['field-date-applied', '2026-02-01'], ['field-last-activity', '2026-03-15']
+			['field-date-applied', '2026-02-01'], ['field-last-activity', '2026-03-15']
 		];
 		for (const [id, v] of text) if (id !== skip) fireEvent.change(screen.getByTestId(id), { target: { value: v } });
 	};
 
-    // Tests
+	// Tests
 	it('should render an empty form when adding a new application', () => {
 		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
 		expect(screen.getByTestId('modal-title')).toHaveTextContent('Add Application');
@@ -50,7 +50,7 @@ describe('AddModal', () => {
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        await fillAllExcept(user, '');
+		await fillAllExcept(user, '');
 		await user.click(screen.getByTestId('modal-submit'));
 
 		expect(onSave).toHaveBeenCalledTimes(1);
@@ -72,12 +72,12 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default apply', async () => {
+	it('should call onSave with the all the entered values when submitted with default apply', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
+		setAllExcept('');
 		await user.click(screen.getByTestId('modal-submit'));
 
 		expect(onSave).toHaveBeenCalledTimes(1);
@@ -99,17 +99,17 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default interview', async () => {
+	it('should call onSave with the all the entered values when submitted with default interview', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the interview field using select option to verify the select functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'interview');
-        await user.selectOptions(screen.getByTestId('field-interview-step'), 'phone_screen');
+		setAllExcept('');
+		// keep the interview field using select option to verify the select functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'interview');
+		await user.selectOptions(screen.getByTestId('field-interview-step'), 'phone_screen');
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -130,16 +130,16 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default reject', async () => {
+	it('should call onSave with the all the entered values when submitted with default reject', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the reject field using select option to verify the select functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
+		setAllExcept('');
+		// keep the reject field using select option to verify the select functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -160,17 +160,17 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with reached interview reject', async () => {
+	it('should call onSave with the all the entered values when submitted with reached interview reject', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the reject related fields using select option and checkbox to verify functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
-        await user.click(screen.getByTestId('field-reached-interview'));
+		setAllExcept('');
+		// keep the reject related fields using select option and checkbox to verify functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
+		await user.click(screen.getByTestId('field-reached-interview'));
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -191,12 +191,12 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with only company and role fields filled when submitted', async () => {
+	it('should call onSave with only company and role fields filled when submitted', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        fireEvent.change(screen.getByTestId('field-company'), { target: { value: 'CVS Health' } });
+		fireEvent.change(screen.getByTestId('field-company'), { target: { value: 'CVS Health' } });
 		fireEvent.change(screen.getByTestId('field-role'), { target: { value: 'Software Engineer' } });
 		await user.click(screen.getByTestId('modal-submit'));
 

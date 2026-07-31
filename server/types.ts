@@ -17,6 +17,7 @@ export type DetectedBy = 'parser' | 'llm';
 // 'auto' notes are sync-generated and always re-pinned to the oldest (application) email.
 export type NoteSource = 'auto' | 'manual';
 export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
+export type ClassifierCode = 'linkedin_applied' | 'linkedin_rejected' | 'indeed_applied' | 'general_template';
 
 // A Gmail message that drove this application to a given stage — stored so the user can open the
 // actual email. `category` is the email's stage; 'ignored' emails are never recorded here. The inbox
@@ -95,7 +96,7 @@ export interface Classification {
 	company: string | null;
 	role: string | null;
 	req_id?: string | null;   // ATS requisition/job number (digits only) the AI pulled from the email, if any
-    classifier_code?: string; // Optional field to store which parser/classifier was used
+	classifier_code?: ClassifierCode; // which parser template classified this email; absent when the LLM did
 	// Text spans the parser found but could NOT type: "your interest in X" reads identically whether X is
 	// "Axoni" (a company) or "Software Engineer" (a role), so `company` above is only the parser's best
 	// guess. Present only on that ambiguous path; the sync loop has the LLM label these spans before

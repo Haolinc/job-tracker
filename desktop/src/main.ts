@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { DEFAULT_PORT, readConfig, readEnvFile, updateConfigValue, writeConfig } from './config';
 // LauncherConfig/LauncherStatus/PullProgress/SyncProgressEvent are ambient globals (launcher-globals.d.ts).
 import { resolveLauncherPaths } from './paths';
-import { createLog, logToTerminal } from './log';
+import { createLog, errorText, logToTerminal } from './log';
 import { isReachable } from './health';
 import { OllamaService } from './ollamaService';
 import { ServerManager } from './serverManager';
@@ -194,7 +194,7 @@ async function pullModel(modelName: string): Promise<{ ok: boolean; error?: stri
 			logToTerminal('launcher', `Cancelled the download of ${modelName}.`);
 			return { ok: false, cancelled: true };
 		}
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorText(error);
 		sendPullProgress({ modelName, status: `error: ${message}`, completed: 0, total: 0, done: true });
 		logToTerminal('launcher', `Failed to download ${modelName}: ${message}`);
 		return { ok: false, error: message };
@@ -222,7 +222,7 @@ async function deleteModel(modelName: string): Promise<{ ok: boolean; error?: st
 		incompleteStore.remove(modelName);
 		return { ok: true };
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorText(error);
 		log('launcher', `Failed to remove ${modelName}: ${message}`);
 		return { ok: false, error: message };
 	}
@@ -275,50 +275,64 @@ function reclaimIncompleteDownloads(): { freedBytes: number } {
 	return { freedBytes };
 }
 
-/** Confirm before removing a model — deletion frees disk but can only be undone by downloading it again. */
-async function confirmModelDeletion(modelName: string): Promise<boolean> {
+/**
+ * A modal yes/no gating an action that costs disk, bandwidth, or data. Returns true ONLY for the affirmative
+ * button: the second button is always the cancel target, so closing the dialog any other way (Esc, the title
+ * bar) declines. `confirmIsDefault` puts the keyboard default on the affirmative button — right for an action
+ * the user just asked for, wrong for a destructive one, which should need a deliberate click.
+ */
+async function askConfirmation(prompt: {
+	type: 'warning' | 'question';
+	title: string;
+	message: string;
+	detail: string;
+	confirmLabel: string;
+	cancelLabel: string;
+	confirmIsDefault?: boolean;
+}): Promise<boolean> {
 	if (!controlWindow) return false;
 	const { response } = await dialog.showMessageBox(controlWindow, {
-		type: 'warning',
-		title: 'Remove model',
-		message: `Remove the model "${modelName}"?`,
-		detail: 'This deletes it from Ollama and frees its disk space. You can download it again later.',
-		buttons: ['Remove', 'Cancel'],
-		defaultId: 1,
+		type: prompt.type,
+		title: prompt.title,
+		message: prompt.message,
+		detail: prompt.detail,
+		buttons: [prompt.confirmLabel, prompt.cancelLabel],
+		defaultId: prompt.confirmIsDefault ? 0 : 1,
 		cancelId: 1,
 	});
 	return response === 0;
 }
+
+/** Confirm before removing a model — deletion frees disk but can only be undone by downloading it again. */
+const confirmModelDeletion = (modelName: string): Promise<boolean> => askConfirmation({
+	type: 'warning',
+	title: 'Remove model',
+	message: `Remove the model "${modelName}"?`,
+	detail: 'This deletes it from Ollama and frees its disk space. You can download it again later.',
+	confirmLabel: 'Remove',
+	cancelLabel: 'Cancel',
+});
 
 /** Confirm before wiping partial downloads — it frees disk but discards any partially downloaded models. */
-async function confirmReclaimDisk(): Promise<boolean> {
-	if (!controlWindow) return false;
-	const { response } = await dialog.showMessageBox(controlWindow, {
-		type: 'warning',
-		title: 'Reclaim disk',
-		message: 'Delete all incomplete download data?',
-		detail: 'This frees disk space but discards any partially downloaded models — you would start those downloads over.',
-		buttons: ['Delete', 'Cancel'],
-		defaultId: 1,
-		cancelId: 1,
-	});
-	return response === 0;
-}
+const confirmReclaimDisk = (): Promise<boolean> => askConfirmation({
+	type: 'warning',
+	title: 'Reclaim disk',
+	message: 'Delete all incomplete download data?',
+	detail: 'This frees disk space but discards any partially downloaded models — you would start those downloads over.',
+	confirmLabel: 'Delete',
+	cancelLabel: 'Cancel',
+});
 
 /** Ask before a model download starts, so a multi-gigabyte pull is always the user's explicit choice. */
-async function confirmModelDownload(modelName: string): Promise<boolean> {
-	if (!controlWindow) return false;
-	const { response } = await dialog.showMessageBox(controlWindow, {
-		type: 'question',
-		title: 'Download model',
-		message: `Download the classification model "${modelName}"?`,
-		detail: 'Language models are large — this is a one-time download of several gigabytes and can take a while. Progress shows in the log below.',
-		buttons: ['Download', 'Not now'],
-		defaultId: 0,
-		cancelId: 1,
-	});
-	return response === 0;
-}
+const confirmModelDownload = (modelName: string): Promise<boolean> => askConfirmation({
+	type: 'question',
+	title: 'Download model',
+	message: `Download the classification model "${modelName}"?`,
+	detail: 'Language models are large — this is a one-time download of several gigabytes and can take a while. Progress shows in the log below.',
+	confirmLabel: 'Download',
+	cancelLabel: 'Not now',
+	confirmIsDefault: true,   // the user opened this by asking to download; Enter should proceed
+});
 
 /** True when it's safe to kill the server: no sync is running, or the user chose to interrupt it anyway.
  *  Synchronous on purpose — the window's 'close' event must decide preventDefault before returning. */
@@ -459,8 +473,7 @@ async function openLogsFolder(): Promise<void> {
 		const openFailureReason = await shell.openPath(logsDirectory);   // '' on success, a message on failure
 		if (openFailureReason) log('launcher', `Could not open the logs folder (${logsDirectory}): ${openFailureReason}`);
 	} catch (caughtError) {
-		const failureReason = caughtError instanceof Error ? caughtError.message : String(caughtError);
-		log('launcher', `Could not open the logs folder (${logsDirectory}): ${failureReason}`);
+		log('launcher', `Could not open the logs folder (${logsDirectory}): ${errorText(caughtError)}`);
 	}
 }
 

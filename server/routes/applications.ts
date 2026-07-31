@@ -21,20 +21,20 @@ const router = Router();
 function sanitizeEmails(raw: unknown): EmailRef[] {
 	if (!Array.isArray(raw)) return [];
 	const seen = new Set<string>();
-	return raw.flatMap((e): EmailRef[] => {
-		const messageId = typeof e?.messageId === 'string' ? e.messageId.trim() : '';
-		const category  = e?.category;
+	return raw.flatMap((incomingRef): EmailRef[] => {
+		const messageId = typeof incomingRef?.messageId === 'string' ? incomingRef.messageId.trim() : '';
+		const category  = incomingRef?.category;
 		if (!messageId || seen.has(messageId) || !VALID_STATUSES.has(category)) return [];
 		seen.add(messageId);
 		const sanitizedRef: EmailRef = {
 			messageId,
 			category: category as EmailRef['category'],
-			date:    typeof e?.date === 'string' ? e.date : '',
-			fast_apply: e?.fast_apply === true,
+			date:    typeof incomingRef?.date === 'string' ? incomingRef.date : '',
+			fast_apply: incomingRef?.fast_apply === true,
 		};
 		// Known values only. Left OFF when absent or unrecognized, so the ref reads as "origin unknown"
 		// rather than reaching the UI as a tag it can't render.
-		if (VALID_EMAIL_ORIGINS.has(e?.origin)) sanitizedRef.origin = e.origin as EmailOrigin;
+		if (VALID_EMAIL_ORIGINS.has(incomingRef?.origin)) sanitizedRef.origin = incomingRef.origin as EmailOrigin;
 		return [sanitizedRef];
 	});
 }

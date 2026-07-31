@@ -59,10 +59,10 @@ export default function ImportResultModal({ outcome, onClose }: Props) {
 
 					{outcome.stats && outcome.stats.length > 0 && (
 						<div data-testid="import-result-stats" className="mt-4 rounded-xl border border-gray-100 divide-y divide-gray-100 text-left">
-							{outcome.stats.map(s => (
-								<div key={s.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
-									<span className="text-gray-600">{s.label}</span>
-									<span className={`font-semibold tabular-nums ${s.cls ?? 'text-gray-800'}`}>{s.value}</span>
+							{outcome.stats.map(stat => (
+								<div key={stat.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
+									<span className="text-gray-600">{stat.label}</span>
+									<span className={`font-semibold tabular-nums ${stat.cls ?? 'text-gray-800'}`}>{stat.value}</span>
 								</div>
 							))}
 						</div>

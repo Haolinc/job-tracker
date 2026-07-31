@@ -1,4 +1,4 @@
-import type { Status } from './types';
+import type { ClassifierCode, Status } from './types';
 
 // Status only moves FORWARD: applied → interview → offer/rejected. A later email never rolls it back (a
 // stray "we received your application" can't undo an interview), and a terminal state is final — an offer
@@ -11,7 +11,7 @@ export function resolveStatus(current: Status, incoming: Status): Status {
 
 // A LinkedIn/Indeed fast-apply NOTICE ("your application was sent"). Excludes "_rejected" — stamping
 // fast_apply from a rejection wrongly splits the real notice off later (the EarthCam bug).
-export const isFastApplyNotice = (classifierCode: string | undefined): boolean =>
+export const isFastApplyNotice = (classifierCode: ClassifierCode | undefined): boolean =>
 	/^(?:linkedin|indeed)_applied$/.test(classifierCode ?? '');
 
 // Subject reads as a later STATUS PING, not a fresh confirmation. Only DEMOTES — a genuine confirmation
@@ -32,14 +32,14 @@ export const errMsg = (e: unknown, fallback: string): string => {
 
 /** A millisecond duration as compact h/m/s ("5m 41s", "1h 2m", "8s"). Zero-value units are dropped. */
 export function formatDuration(ms: number): string {
-	const total = Math.round(ms / 1000);
-	const h = Math.floor(total / 3600);
-	const m = Math.floor((total % 3600) / 60);
-	const s = total % 60;
+	const totalSeconds = Math.round(ms / 1000);
+	const hours   = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
 	const parts: string[] = [];
-	if (h) parts.push(`${h}h`);
-	if (m) parts.push(`${m}m`);
-	if (s || !parts.length) parts.push(`${s}s`);
+	if (hours) parts.push(`${hours}h`);
+	if (minutes) parts.push(`${minutes}m`);
+	if (seconds || !parts.length) parts.push(`${seconds}s`);
 	return parts.join(' ');
 }
 

@@ -31,8 +31,10 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 	const [error, setError] = useState<string | null>(null);
 
 	// Always invoke the LATEST callback (App recreates it as filters change) without restarting the poll loop.
+	// Refreshed in an effect rather than during render — a render can be discarded, and the only reader is the
+	// poll timer's callback, which never runs until after commit.
 	const onSettledRef = useRef(onBackgroundSyncSettled);
-	onSettledRef.current = onBackgroundSyncSettled;
+	useEffect(() => { onSettledRef.current = onBackgroundSyncSettled; }, [onBackgroundSyncSettled]);
 	const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	const stopPolling = useCallback(() => {

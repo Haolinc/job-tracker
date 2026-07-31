@@ -1,6 +1,7 @@
 import type { Classification } from '../types';
 import { canonicalReqId } from './parser/reqId';
 import { debug } from '../logger';
+import { errMsg } from '../utils';
 import ollama from 'ollama';
 
 const systemPrompt = `You classify and extract data from job-application emails. Given From, Subject, and Body, return ONLY this JSON (no prose, no markdown):
@@ -91,6 +92,23 @@ const responseSchema = {
 const classifierModel = (): string => process.env.OLLAMA_MODEL || 'qwen2.5:7b';
 
 /**
+ * The first JSON object in a model reply. Both calls below need this: the grammar constrains the object's
+ * shape but not what may trail it, and the worked examples show "{json}  (note)", so the model sometimes
+ * appends a parenthetical — take first "{" to last "}" and ignore any commentary tail. Markdown fences are
+ * stripped first for the same reason. Throws when there is no parseable object at all.
+ */
+function parseFirstJsonObject(replyText: string): Record<string, unknown> {
+	const unfenced = replyText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+	const objectStart = unfenced.indexOf('{'), objectEnd = unfenced.lastIndexOf('}');
+	const objectText = objectStart !== -1 && objectEnd !== -1 ? unfenced.slice(objectStart, objectEnd + 1) : unfenced;
+	try {
+		return JSON.parse(objectText) as Record<string, unknown>;
+	} catch {
+		throw new Error(`Unparseable model reply: ${replyText}`);
+	}
+}
+
+/**
  * The ONE chat request this module ever sends — warmup and real classification both go through here so they
  * stay identical (same system prompt + grammar). That identity is what makes the warmup effective: Ollama's
  * prompt-eval cache and compiled grammar carry over to the real emails only because the requests match.
@@ -126,7 +144,7 @@ let warmupInFlight: Promise<boolean> | null = null;
  * Idempotent: kicked off at server boot and AWAITED by the sync, so classification runs only once the model
  * is ready. Best-effort; never throws.
  */
-function warmUpModel(): Promise<boolean> {
+export function warmUpModel(): Promise<boolean> {
 	if (!warmupInFlight) {
 		warmupInFlight = loadModelWithRetry();
 		// If it gave up (Ollama was down), forget it so a later sync can try again once Ollama is up.
@@ -149,7 +167,7 @@ async function loadModelWithRetry(): Promise<boolean> {
 		} catch (error) {
 			if (attempt === WARMUP_MAX_ATTEMPTS) {
 				// console.error, not debug: a model that can't preload means classification will fail too.
-				console.error(`[warmup] gave up preloading ${model}: ${error instanceof Error ? error.message : String(error)}`);
+				console.error(`[warmup] gave up preloading ${model}: ${errMsg(error, 'unknown error')}`);
 				return false;
 			}
 			await new Promise((resolve) => setTimeout(resolve, WARMUP_RETRY_DELAY_MS));   // Ollama likely still starting — retry
@@ -168,7 +186,7 @@ function buildReferenceBlock(hints?: { company?: string | null; role?: string | 
 	return `\n\nReference candidates (from a deterministic parser — adopt when correct, override when the email disagrees):\n${lines.join('\n')}`;
 }
 
-async function classifyEmail(subject: string, from: string, body: string, hints?: { company?: string | null; role?: string | null }): Promise<Classification> {
+export async function classifyEmail(subject: string, from: string, body: string, hints?: { company?: string | null; role?: string | null }): Promise<Classification> {
 	debug(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
 	// Parser candidates ride in the USER turn only — the system prompt stays byte-identical so Ollama's
 	// prompt-eval cache (the thing warmup primes) survives. The model treats them as overridable references.
@@ -181,12 +199,7 @@ async function classifyEmail(subject: string, from: string, body: string, hints?
 	const responseText = chatResponse.message.content.trim();
 	// Collapse the model's pretty-printed JSON to one line so the debug log stays one-line-per-event grep-able.
 	debug(`[classify] result:`, responseText.replace(/\s*\n\s*/g, ' '));
-	// Strip markdown code fences if the model wraps its JSON in ```json ... ```
-	const jsonText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-	// The worked examples show "{json}  (note)", so the model sometimes appends a trailing parenthetical
-	// after its JSON. Take just the first object — first "{" to last "}" — and ignore any commentary tail.
-	const start = jsonText.indexOf('{'), end = jsonText.lastIndexOf('}');
-	const parsed = JSON.parse(start !== -1 && end !== -1 ? jsonText.slice(start, end + 1) : jsonText) as Record<string, unknown>;
+	const parsed = parseFirstJsonObject(responseText);
 	if (!parsed || !VALID_CATEGORIES.has(parsed.category as string)) {
 		throw new Error(`Unexpected classifier response: ${responseText}`);
 	}
@@ -252,7 +265,7 @@ const normalizeForCompare = (text: string) => text.toLowerCase().replace(/\s+/g,
  * verbatim (whitespace/case-insensitive) in the email's own text. Looser than "equals a parser span" — the
  * model may re-cut a mis-glued span — but it still cannot invent a company that isn't in the email.
  */
-function appearsInSource(value: string, groundingSources: string[]): boolean {
+export function appearsInSource(value: string, groundingSources: string[]): boolean {
 	const normalizedValue = normalizeForCompare(value);
 	return normalizedValue.length > 0 && groundingSources.some(source => normalizeForCompare(source).includes(normalizedValue));
 }
@@ -290,7 +303,7 @@ export function pickerContext(body: string, spans: string[]): string {
  * `company === null` is a real "no trustworthy employer in the text" and tells the caller to slide to the
  * full classifier.
  */
-async function pickCompanyRole(spans: string[], subject: string, body: string): Promise<{ company: string | null; role: string | null } | null> {
+export async function pickCompanyRole(spans: string[], subject: string, body: string): Promise<{ company: string | null; role: string | null } | null> {
 	if (spans.length === 0) return null;
 	const bodyExcerpt = pickerContext(body, spans);
 	// Ground the answer against EXACTLY what the model is shown — the excerpt and subject — not the full body or
@@ -302,7 +315,6 @@ async function pickCompanyRole(spans: string[], subject: string, body: string): 
 		{ role: 'system', content: pickerSystemPrompt },
 		{ role: 'user',   content: `Subject: ${subject}\n\nBody excerpt:\n${bodyExcerpt}\n\nParser candidate guesses to judge (rough, may be mis-cut): ${spans.join(' | ')}` },
 	];
-	const nullableString = { type: ['string', 'null'] };
 	const runPickerCall = async () => {
 		const chatResponse = await ollama.chat({
 			model: classifierModel(),
@@ -323,8 +335,7 @@ async function pickCompanyRole(spans: string[], subject: string, body: string): 
 			},
 		});
 		const responseText = chatResponse.message.content.trim();
-		const jsonStart = responseText.indexOf('{'), jsonEnd = responseText.lastIndexOf('}');
-		return { responseText, parsed: JSON.parse(jsonStart !== -1 && jsonEnd !== -1 ? responseText.slice(jsonStart, jsonEnd + 1) : responseText) as Record<string, unknown> };
+		return { responseText, parsed: parseFirstJsonObject(responseText) };
 	};
 	try {
 		let { responseText, parsed } = await runPickerCall();
@@ -352,9 +363,7 @@ async function pickCompanyRole(spans: string[], subject: string, body: string): 
 		}
 		return { company, role };
 	} catch (error) {
-		debug(`[pick] failed: ${error instanceof Error ? error.message : String(error)}`);
+		debug(`[pick] failed: ${errMsg(error, 'unknown error')}`);
 		return null;
 	}
 }
-
-export { classifyEmail, warmUpModel, pickCompanyRole, appearsInSource };

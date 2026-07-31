@@ -15,8 +15,8 @@ describe('Board', () => {
 	it('should place each application in its column when grouped by status', () => {
 		render(<Board applications={[
 			makeApp({ id: 'a1', status: 'applied', role: 'Software Engineer' }),
-            makeApp({ id: 'i1', status: 'interview', role: 'Product Manager' }),
-            makeApp({ id: 'o1', status: 'offer', role: 'Data Scientist' }),
+			makeApp({ id: 'i1', status: 'interview', role: 'Product Manager' }),
+			makeApp({ id: 'o1', status: 'offer', role: 'Data Scientist' }),
 			makeApp({ id: 'r1', status: 'rejected', role: 'UX Designer' }),
 		]} {...cfg} />);
 		expect(within(screen.getByTestId('board-column-applied')).getByTestId('app-card-a1')).toBeInTheDocument();

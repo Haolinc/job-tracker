@@ -12,9 +12,9 @@ const FAST_FLAG = 'fast';
 
 export function serializeEmails(emails: EmailRef[]): string {
 	return emails
-		.map(e => {
-			const fields = [e.category, e.messageId, e.date];
-			if (e.fast_apply) fields.push(FAST_FLAG);   // omitted for normal emails → unchanged encoding
+		.map(emailRef => {
+			const fields = [emailRef.category, emailRef.messageId, emailRef.date];
+			if (emailRef.fast_apply) fields.push(FAST_FLAG);   // omitted for normal emails → unchanged encoding
 			return fields.join(FIELD_SEP);
 		})
 		.join(ENTRY_SEP);
@@ -23,14 +23,14 @@ export function serializeEmails(emails: EmailRef[]): string {
 export function parseEmails(cell: string): EmailRef[] {
 	return cell
 		.split(';')
-		.map(s => s.trim())
+		.map(entry => entry.trim())
 		.filter(Boolean)
 		.flatMap((entry): EmailRef[] => {
-			const [category, messageId, date = '', flag] = entry.split(FIELD_SEP).map(p => p.trim());
+			const [category, messageId, date = '', flag] = entry.split(FIELD_SEP).map(field => field.trim());
 			if (!messageId || !STATUSES.has(category as Status)) return [];   // drop malformed entries
-			const ref: EmailRef = { messageId, category: category as Status, date };
-			if (flag === FAST_FLAG) ref.fast_apply = true;   // a legacy 4th field (account) never equals "fast"
-			return [ref];
+			const emailRef: EmailRef = { messageId, category: category as Status, date };
+			if (flag === FAST_FLAG) emailRef.fast_apply = true;   // a legacy 4th field (account) never equals "fast"
+			return [emailRef];
 		});
 }
 
@@ -40,10 +40,10 @@ export function parseEmails(cell: string): EmailRef[] {
  * user can copy a whole Gmail URL and we extract the id for them.
  */
 export function extractMessageId(input: string): string | null {
-	const s = input.trim();
-	if (!s) return null;
-	const candidate = s.includes('#')
-		? (s.split('#').pop() ?? '').split('/').pop()?.split('?')[0]?.trim() ?? ''
-		: s;
+	const pasted = input.trim();
+	if (!pasted) return null;
+	const candidate = pasted.includes('#')
+		? (pasted.split('#').pop() ?? '').split('/').pop()?.split('?')[0]?.trim() ?? ''
+		: pasted;
 	return /^[A-Za-z0-9_-]+$/.test(candidate) ? candidate : null;
 }

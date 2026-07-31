@@ -203,11 +203,13 @@ export default function App() {
 	const handleSync = async (days: number) => {
 		// Snapshot updated_at per id before syncing; after the refetch, anything new or with a bumped
 		// updated_at was touched by this sync and gets the "new" highlight.
-		const before = new Map(applications.map(a => [a.id, a.updated_at]));
+		const updatedAtBeforeSync = new Map(applications.map(app => [app.id, app.updated_at]));
 		try {
 			await sync(days);
 			const fresh = await fetchAll(filters);
-			setNewlyAdded(new Set((fresh ?? []).filter(a => before.get(a.id) !== a.updated_at).map(a => a.id)));
+			setNewlyAdded(new Set((fresh ?? [])
+				.filter(app => updatedAtBeforeSync.get(app.id) !== app.updated_at)
+				.map(app => app.id)));
 		} catch { /* error shown in GmailSync via syncError */ }
 	};
 

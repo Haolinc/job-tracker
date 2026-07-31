@@ -10,8 +10,8 @@ export default function Filters({ filters, onChange }: Props) {
 	const [search, setSearch] = useState(filters.search);
 
 	useEffect(() => {
-		const id = setTimeout(() => onChange({ search }), 300);
-		return () => clearTimeout(id);
+		const debounceTimer = setTimeout(() => onChange({ search }), 300);
+		return () => clearTimeout(debounceTimer);
 	}, [search, onChange]);
 
 	return (

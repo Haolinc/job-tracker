@@ -219,14 +219,14 @@ launcher.onUpdateProgress(renderUpdateProgress);
 // Exact copy of formatDuration in server/utils.ts and client/src/utils/formatDuration.ts — the no-import
 // boundary again. Keep all copies identical.
 function formatDuration(ms: number): string {
-	const total = Math.round(ms / 1000);
-	const h = Math.floor(total / 3600);
-	const m = Math.floor((total % 3600) / 60);
-	const s = total % 60;
+	const totalSeconds = Math.round(ms / 1000);
+	const hours   = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
 	const parts: string[] = [];
-	if (h) parts.push(`${h}h`);
-	if (m) parts.push(`${m}m`);
-	if (s || !parts.length) parts.push(`${s}s`);
+	if (hours) parts.push(`${hours}h`);
+	if (minutes) parts.push(`${minutes}m`);
+	if (seconds || !parts.length) parts.push(`${seconds}s`);
 	return parts.join(' ');
 }
 

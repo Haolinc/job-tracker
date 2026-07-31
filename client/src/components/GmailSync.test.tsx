@@ -90,6 +90,18 @@ describe('GmailSync', () => {
 		expect(onCancel).not.toHaveBeenCalled();                     // the moot question is dropped, not answered
 	});
 
+	// The dialog's visibility is derived from `syncing`, so an abandoned confirm request outlives the sync it
+	// belonged to. Starting the next sync must clear it, or the user would be greeted by a dialog they never opened.
+	it('should not reopen an abandoned confirm dialog when the next sync starts', async () => {
+		const { rerender } = render(<GmailSync {...base} syncing />);
+		await user.click(screen.getByTestId('gmail-cancel-btn'));
+		expect(screen.getByTestId('gmail-cancel-sync-confirm-modal')).toBeInTheDocument();
+		rerender(<GmailSync {...base} syncing={false} />);            // sync finished with the dialog still open
+		await user.click(screen.getByTestId('gmail-sync-btn'));       // the user starts a fresh sync
+		rerender(<GmailSync {...base} syncing />);
+		expect(screen.queryByTestId('gmail-cancel-sync-confirm-modal')).toBeNull();
+	});
+
 	it('should disable the Cancel button and show "Cancelling…" once a cancel is in flight', () => {
 		render(<GmailSync {...base} syncing cancelling />);
 		const cancelButton = screen.getByTestId('gmail-cancel-btn');

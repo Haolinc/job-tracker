@@ -37,7 +37,7 @@ interface ProvenanceBadge { label: string; cls: string; title: string }
 
 // Auto-detection badges — distinguish the rule-based parser from the AI classifier, for debugging.
 type Detection = 'parser' | 'llm';
-export const DETECTION_BADGE: Record<Detection, ProvenanceBadge> = {
+const DETECTION_BADGE: Record<Detection, ProvenanceBadge> = {
 	parser: { label: '⚙️ Detected by Parser', cls: 'bg-emerald-50 text-emerald-700', title: 'Detected by the rule-based parser' },
 	llm:    { label: '🤖 Detected by AI',     cls: 'bg-violet-50 text-violet-700',   title: 'Detected by the AI classifier' },
 };
@@ -49,7 +49,7 @@ const IMPORT_BADGE: ProvenanceBadge = {
 };
 
 /** Which detection badge to show, or null when there's none (manual entry, or the user has edited it). */
-export const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean }): Detection | null =>
+const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean }): Detection | null =>
 	app.edited ? null : (app.detected_by ?? null);
 
 /**
@@ -62,8 +62,8 @@ export const detectionBadge = (app: { detected_by?: Detection | null; edited?: b
 export const provenanceBadges = (app: { detected_by?: Detection | null; edited?: boolean; source: Source }): ProvenanceBadge[] => {
 	const badges: ProvenanceBadge[] = [];
 	if (app.source === 'csv') badges.push(IMPORT_BADGE);
-	const d = detectionBadge(app);
-	if (d) badges.push({ ...DETECTION_BADGE[d], title: `${DETECTION_BADGE[d].title} — edit to confirm and clear the tag` });
+	const detection = detectionBadge(app);
+	if (detection) badges.push({ ...DETECTION_BADGE[detection], title: `${DETECTION_BADGE[detection].title} — edit to confirm and clear the tag` });
 	return badges;
 };
 
