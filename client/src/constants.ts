@@ -62,8 +62,8 @@ const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean 
 export const provenanceBadges = (app: { detected_by?: Detection | null; edited?: boolean; source: Source }): ProvenanceBadge[] => {
 	const badges: ProvenanceBadge[] = [];
 	if (app.source === 'csv') badges.push(IMPORT_BADGE);
-	const d = detectionBadge(app);
-	if (d) badges.push({ ...DETECTION_BADGE[d], title: `${DETECTION_BADGE[d].title} — edit to confirm and clear the tag` });
+	const detection = detectionBadge(app);
+	if (detection) badges.push({ ...DETECTION_BADGE[detection], title: `${DETECTION_BADGE[detection].title} — edit to confirm and clear the tag` });
 	return badges;
 };
 

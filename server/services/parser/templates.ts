@@ -21,7 +21,7 @@ const GENERAL_APPLIED = /received your application|application (?:has been|was) 
 
 /** Returns a status only when keywords are decisive; null means "ask the LLM". */
 function generalStatus(body: string): 'applied' | 'rejected' | null {
-	if (body.split(/(?<=[.!?])\s+/).some(s => GENERAL_REJECT.test(s) && !/\bif\b/i.test(s))) return 'rejected';
+	if (body.split(/(?<=[.!?])\s+/).some(sentence => GENERAL_REJECT.test(sentence) && !/\bif\b/i.test(sentence))) return 'rejected';
 	if (GENERAL_APPLIED.test(body)) return 'applied';
 	return null;
 }

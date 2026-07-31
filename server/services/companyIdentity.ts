@@ -22,7 +22,7 @@ const ATS_DOMAINS = new Set([
 // alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
 // even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
+const ATS_BRANDS = new Set([...ATS_DOMAINS].map(domain => domain.split('.')[0]));
 
 // Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
 // "Sun West Mortgage" resolve to the same dedup key.
@@ -35,9 +35,9 @@ const LINKEDIN_QUALIFIER_RE = /\s+[-–]\s+(?:Corporate|Corp|HQ|Headquarters|Glo
 
 export function normalizeCompany(name: string): string {
 	// "X dba Y" / "X d/b/a Y" → Y, the trade name people actually use ("CP Payroll, LLC dba ConnectPay" → "ConnectPay").
-	name = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
-	name = name.replace(LINKEDIN_QUALIFIER_RE, '').trim();
-	return name.replace(COMPANY_SUFFIX_RE, '').trim();
+	const tradeName = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
+	const withoutQualifier = tradeName.replace(LINKEDIN_QUALIFIER_RE, '').trim();
+	return withoutQualifier.replace(COMPANY_SUFFIX_RE, '').trim();
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
@@ -84,7 +84,7 @@ export function companyDomainFromSender(from: string): string | null {
 	return registrable;
 }
 
-const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+const companyWords = (name: string) => name.toLowerCase().split(/\s+/).map(word => word.replace(/[^a-z0-9]/g, '')).filter(Boolean);
 
 /**
  * Canonical match key: lowercase, alphanumerics only — spacing, casing, and punctuation collapse away, so
@@ -100,11 +100,11 @@ export const companyKey = (name: string): string => name.toLowerCase().replace(/
  * real employer with the sender domain and companiesSameEntity. Keeps "Morgan Stanley" vs "Morgan
  * Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
  */
-function companiesCompatible(a: string, b: string): boolean {
-	const wa = companyWords(a), wb = companyWords(b);
-	if (!wa.length || !wb.length) return false;
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return short.every((w, i) => w === long[i]);
+function companiesCompatible(firstName: string, secondName: string): boolean {
+	const firstWords = companyWords(firstName), secondWords = companyWords(secondName);
+	if (!firstWords.length || !secondWords.length) return false;
+	const [shorterWords, longerWords] = firstWords.length <= secondWords.length ? [firstWords, secondWords] : [secondWords, firstWords];
+	return shorterWords.every((word, position) => word === longerWords[position]);
 }
 
 /**
@@ -113,10 +113,11 @@ function companiesCompatible(a: string, b: string): boolean {
  * proper noun in the extra words means a DIFFERENT company sharing a first word ("Epic" ✗ "Epic Kids").
  * This is the fallback when the sender domain can't decide (e.g. both records came from ATS senders).
  */
-export function companiesSameEntity(a: string, b: string): boolean {
-	if (companyKey(a) === companyKey(b)) return true;   // identical once spacing/punctuation/case are ignored
-	if (!companiesCompatible(a, b)) return false;
-	const wa = companyWords(a), wb = companyWords(b);
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return long.slice(short.length).every(w => COMPANY_DESCRIPTOR.has(w));
+export function companiesSameEntity(firstName: string, secondName: string): boolean {
+	if (companyKey(firstName) === companyKey(secondName)) return true;   // identical once spacing/punctuation/case are ignored
+	if (!companiesCompatible(firstName, secondName)) return false;
+	const firstWords = companyWords(firstName), secondWords = companyWords(secondName);
+	const [shorterWords, longerWords] = firstWords.length <= secondWords.length ? [firstWords, secondWords] : [secondWords, firstWords];
+	// The longer name is the same employer only if every word it ADDS is a generic descriptor.
+	return longerWords.slice(shorterWords.length).every(extraWord => COMPANY_DESCRIPTOR.has(extraWord));
 }

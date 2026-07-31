@@ -148,13 +148,13 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		try {
 			// Anchor the LLM to the company the parser already nailed so its role read isn't distracted into
 			// re-deciding the employer (whose value we keep regardless).
-			const ai = await classifyEmail(subject, from, body, { company: classification.company });
-			if (ai.role) {
-				classification = { ...classification, role: ai.role };
-				debug(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
+			const roleFill = await classifyEmail(subject, from, body, { company: classification.company });
+			if (roleFill.role) {
+				classification = { ...classification, role: roleFill.role };
+				debug(`[sync] role filled by LLM: "${roleFill.role}" subject="${subject}"`);
 			}
 			// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
-			if (ai.req_id) classification.req_id = ai.req_id;
+			if (roleFill.req_id) classification.req_id = roleFill.req_id;
 		} catch (err) {
 			console.error(`[classify] role-fill error for subject="${subject}":`, err);
 		}
@@ -346,7 +346,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// correct account (u/<address>) even when it isn't the browser's primary (u/0) account.
 		const accountEmail = await getAccountEmail(req.session.tokens!);
 		const syncedIds = await db.getSyncedMessageIds(allIds);
-		const newIds   = allIds.filter(id => !syncedIds.has(id));
+		const newIds   = allIds.filter(messageId => !syncedIds.has(messageId));
 		const failedIds: string[] = [];   // messages that errored on fetch — not synced, retried next run
 		const classifyFailedIds: string[] = [];   // messages the classifier errored on — not synced, retried next run
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length;
@@ -406,7 +406,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// PHASE 1.5 — sort into a DETERMINISTIC merge order: oldest first (the matcher's "predates"/"nearest"
 		// rules are causal, so oldest→newest is their best case), ties broken by messageId so grouping is
 		// reproducible across resyncs regardless of the order Gmail/concurrency produced results in.
-		pending.sort((a, b) => a.internalDate - b.internalDate || (a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0));
+		pending.sort((first, second) =>
+			first.internalDate - second.internalDate
+			|| (first.messageId < second.messageId ? -1 : first.messageId > second.messageId ? 1 : 0));
 
 		// PHASE 2 — sequential, order-sensitive merge, in date order. Each email either merges into a match
 		// (buildMergeUpdates decides which fields a match may touch) or it starts its own application.

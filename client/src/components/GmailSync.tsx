@@ -38,7 +38,7 @@ export default function GmailSync({ connected, syncing, cancelling, progress, la
 						title="How far back to scan Gmail"
 						className="px-2 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 bg-white disabled:opacity-60"
 					>
-						{SCAN_WINDOWS.map(d => <option key={d} value={d}>Last {d} days</option>)}
+						{SCAN_WINDOWS.map(windowDays => <option key={windowDays} value={windowDays}>Last {windowDays} days</option>)}
 					</select>
 					<button
 						data-testid="gmail-sync-btn"

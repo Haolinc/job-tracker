@@ -158,8 +158,8 @@ function cleanLinkedInBody(raw: string): string {
 	text = text.replace(/(?:[*\-=_~+•]\s?){4,}/g, ' ');          // divider runs ("------", glued to the date)
 	return text
 		.split('\n')
-		.map(l => l.replace(/[ \t]+/g, ' ').trim())
-		.filter(l => l && !/^view job:?$/i.test(l))
+		.map(line => line.replace(/[ \t]+/g, ' ').trim())
+		.filter(line => line && !/^view job:?$/i.test(line))
 		.join('\n');
 }
 

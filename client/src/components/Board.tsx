@@ -34,7 +34,7 @@ function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps
 	return (
 		<div data-testid={`board-column-${col.id}`} className={`flex flex-col rounded-xl border ${col.color} min-w-[160px] sm:min-w-[200px] flex-1 self-start`}>
 			<button
-				onClick={() => setCollapsed(c => !c)}
+				onClick={() => setCollapsed(isCollapsed => !isCollapsed)}
 				className="px-4 py-3 flex items-center justify-between w-full text-left rounded-xl hover:bg-black/[0.03] transition-colors"
 				title={collapsed ? 'Expand' : 'Collapse'}
 			>
@@ -52,7 +52,7 @@ function KanbanColumn({ col, apps, highlightIds, onEdit, onDelete }: ColumnProps
 				))}
 				{apps.length > COLLAPSED_PREVIEW && (
 					<button
-						onClick={() => setCollapsed(c => !c)}
+						onClick={() => setCollapsed(isCollapsed => !isCollapsed)}
 						className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg border border-dashed border-gray-300 bg-white/70 text-xs font-semibold text-gray-600 hover:border-blue-400 hover:text-blue-600 hover:bg-white transition-colors"
 					>
 						{collapsed ? `▾  Show ${hidden} more` : '▴  Show less'}
@@ -78,7 +78,7 @@ export default function Board({ applications, highlightIds, onEdit, onDelete }: 
 		}
 		// Order each column by Last Response, most recent first (empty dates sort last).
 		for (const list of Object.values(groups)) {
-			list?.sort((a, b) => String(b.last_activity ?? '').localeCompare(String(a.last_activity ?? '')));
+			list?.sort((firstApp, secondApp) => String(secondApp.last_activity ?? '').localeCompare(String(firstApp.last_activity ?? '')));
 		}
 		return groups;
 	}, [applications]);

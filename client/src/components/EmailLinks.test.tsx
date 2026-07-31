@@ -15,7 +15,7 @@ describe('EmailLinks', () => {
 		const links = screen.getAllByTestId('email-link');
 		expect(links).toHaveLength(3);
 		// Stored order is the display order — it's what the user arranges in the edit modal, so it is never re-sorted.
-		expect(links.map(a => a.textContent?.trim())).toEqual(['✉ Rejected', '✉ Applied', '✉ Interview']);
+		expect(links.map(link => link.textContent?.trim())).toEqual(['✉ Rejected', '✉ Applied', '✉ Interview']);
 	});
 
 	it("should point every link at the application's Gmail account, opening in a new tab", () => {
@@ -49,6 +49,6 @@ describe('EmailLinks', () => {
 			{ messageId: 'm-rej',  category: 'rejected', date: '2026-04-02' },
 		]} account="me@work.com" />);
 		const links = screen.getAllByTestId('email-link');
-		expect(links.map(a => a.textContent?.trim())).toEqual(['⚡ Fast Applied', '✉ Rejected']);
+		expect(links.map(link => link.textContent?.trim())).toEqual(['⚡ Fast Applied', '✉ Rejected']);
 	});
 });

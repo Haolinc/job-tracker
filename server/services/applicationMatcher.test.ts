@@ -134,21 +134,21 @@ describe('findExisting', () => {
 			{ role: 'Engineer', cat: 'rejected', date: '2026-02-20', conf: false },  // reject A (older rejection)
 			{ role: 'Analyst',  cat: 'rejected', date: '2026-02-25', conf: false },  // reject B (newer rejection)
 		];
-		let ts = 0;
-		for (const e of seq) {
-			ts++;
-			const existing = await findExisting('Acme', e.role, null, null, e.conf, false, e.date);
-			const ref = { messageId: `${e.cat}-${e.date}`, category: e.cat, date: e.date };
+		let activityTick = 0;
+		for (const step of seq) {
+			activityTick++;
+			const existing = await findExisting('Acme', step.role, null, null, step.conf, false, step.date);
+			const ref = { messageId: `${step.cat}-${step.date}`, category: step.cat, date: step.date };
 			if (existing) {
-				if (ts >= existing.last_activity_ts) { existing.status = e.cat; existing.last_activity_ts = ts; }
-				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
-				if (existing.role === 'Unknown Role' && e.role) existing.role = e.role;
+				if (activityTick >= existing.last_activity_ts) { existing.status = step.cat; existing.last_activity_ts = activityTick; }
+				if (!existing.date_applied || step.date < existing.date_applied) existing.date_applied = step.date;
+				if (existing.role === 'Unknown Role' && step.role) existing.role = step.role;
 				existing.emails.push(ref);
 			} else {
-				store.push(app({ role: e.role ?? 'Unknown Role', status: e.cat, date_applied: e.date, last_activity_ts: ts, confirmed: e.conf, emails: [ref] }));
+				store.push(app({ role: step.role ?? 'Unknown Role', status: step.cat, date_applied: step.date, last_activity_ts: activityTick, confirmed: step.conf, emails: [ref] }));
 			}
 		}
-		const summary = store.map(a => `${a.role}/${a.status}:[${a.emails.map(x => x.category).join(',')}]`).sort();
+		const summary = store.map(app => `${app.role}/${app.status}:[${app.emails.map(emailRef => emailRef.category).join(',')}]`).sort();
 		expect(store.length).toBe(2);
 		expect(summary).toEqual(['Analyst/rejected:[applied,rejected]', 'Engineer/rejected:[applied,rejected]']);
 	});
@@ -294,19 +294,19 @@ describe('findExisting — full Palantir grouping (order-independent)', () => {
 	async function run(order: Em[]) {
 		const store: Application[] = [];
 		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
-		for (const e of order) {
-			const existing = await findExisting('Palantir', e.role, null, null, e.isConfirmation, false, e.date);
-			const ref = { messageId: `${e.cat}-${e.date}`, category: e.cat, date: e.date };
+		for (const step of order) {
+			const existing = await findExisting('Palantir', step.role, null, null, step.isConfirmation, false, step.date);
+			const ref = { messageId: `${step.cat}-${step.date}`, category: step.cat, date: step.date };
 			if (existing) {
-				if (e.ts >= existing.last_activity_ts) { existing.status = e.cat; existing.last_activity = e.date; existing.last_activity_ts = e.ts; }
-				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
-				if (existing.role === 'Unknown Role' && e.role) existing.role = e.role;
-				if (e.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
-				if (e.isConfirmation && !existing.confirmed) existing.confirmed = true;
+				if (step.ts >= existing.last_activity_ts) { existing.status = step.cat; existing.last_activity = step.date; existing.last_activity_ts = step.ts; }
+				if (!existing.date_applied || step.date < existing.date_applied) existing.date_applied = step.date;
+				if (existing.role === 'Unknown Role' && step.role) existing.role = step.role;
+				if (step.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
+				if (step.isConfirmation && !existing.confirmed) existing.confirmed = true;
 				existing.emails.push(ref);
 			} else {
-				store.push(app({ company: 'Palantir', role: e.role ?? 'Unknown Role', status: e.cat, date_applied: e.date,
-					last_activity: e.date, last_activity_ts: e.ts, awaiting_application: !e.isConfirmation, confirmed: e.isConfirmation, emails: [ref] }));
+				store.push(app({ company: 'Palantir', role: step.role ?? 'Unknown Role', status: step.cat, date_applied: step.date,
+					last_activity: step.date, last_activity_ts: step.ts, awaiting_application: !step.isConfirmation, confirmed: step.isConfirmation, emails: [ref] }));
 			}
 		}
 		return store;
@@ -317,9 +317,9 @@ describe('findExisting — full Palantir grouping (order-independent)', () => {
 		[feb16, feb18, jun07], [jun07, feb16, feb18], [feb16, jun07, feb18],
 	];
 	for (const order of permutations) {
-		it(`→ {Feb} rejected + {Jun} applied for order [${order.map(e => e.date.slice(5)).join(', ')}]`, async () => {
+		it(`→ {Feb} rejected + {Jun} applied for order [${order.map(step => step.date.slice(5)).join(', ')}]`, async () => {
 			const store = await run(order);
-			const summary = store.map(a => `${a.status}:[${a.emails.map(e => e.category).sort().join(',')}]`).sort();
+			const summary = store.map(app => `${app.status}:[${app.emails.map(emailRef => emailRef.category).sort().join(',')}]`).sort();
 			expect(summary).toEqual(['applied:[applied]', 'rejected:[applied,rejected]']);
 		});
 	}
@@ -341,26 +341,26 @@ describe('findExisting — out-of-order rounds collapse into one application', (
 	it('→ one rejected application holding all four emails, reached_interview true', async () => {
 		const store: Application[] = [];
 		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
-		for (const e of emails) {
-			const existing = await findExisting('Acme', e.role, null, null, e.isConfirmation, e.isFastApply, e.date);
-			const ref = { messageId: `${e.cat}-${e.date}`, category: e.cat, date: e.date };
+		for (const step of emails) {
+			const existing = await findExisting('Acme', step.role, null, null, step.isConfirmation, step.isFastApply, step.date);
+			const ref = { messageId: `${step.cat}-${step.date}`, category: step.cat, date: step.date };
 			if (existing) {
-				if (e.ts >= existing.last_activity_ts) { existing.status = e.cat; existing.last_activity_ts = e.ts; }
-				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
-				if (e.cat === 'interview' || e.cat === 'offer') existing.reached_interview = true;
-				if (e.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
-				if (e.isFastApply) existing.fast_apply = true;
-				if (e.isConfirmation && !e.isFastApply && !existing.confirmed) existing.confirmed = true;
+				if (step.ts >= existing.last_activity_ts) { existing.status = step.cat; existing.last_activity_ts = step.ts; }
+				if (!existing.date_applied || step.date < existing.date_applied) existing.date_applied = step.date;
+				if (step.cat === 'interview' || step.cat === 'offer') existing.reached_interview = true;
+				if (step.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
+				if (step.isFastApply) existing.fast_apply = true;
+				if (step.isConfirmation && !step.isFastApply && !existing.confirmed) existing.confirmed = true;
 				existing.emails.push(ref);
 			} else {
-				store.push(app({ role: e.role, status: e.cat, date_applied: e.date, last_activity_ts: e.ts,
-					reached_interview: e.cat === 'interview' || e.cat === 'offer',
-					awaiting_application: !e.isConfirmation, fast_apply: e.isFastApply, confirmed: e.isConfirmation && !e.isFastApply, emails: [ref] }));
+				store.push(app({ role: step.role, status: step.cat, date_applied: step.date, last_activity_ts: step.ts,
+					reached_interview: step.cat === 'interview' || step.cat === 'offer',
+					awaiting_application: !step.isConfirmation, fast_apply: step.isFastApply, confirmed: step.isConfirmation && !step.isFastApply, emails: [ref] }));
 			}
 		}
 		expect(store).toHaveLength(1);
 		expect(store[0]).toMatchObject({ status: 'rejected', reached_interview: true, date_applied: '2026-04-01' });
-		expect(store[0].emails.map(e => e.category).sort()).toEqual(['applied', 'applied', 'interview', 'rejected']);
+		expect(store[0].emails.map(emailRef => emailRef.category).sort()).toEqual(['applied', 'applied', 'interview', 'rejected']);
 	});
 });
 
@@ -382,25 +382,25 @@ describe('findExisting — fast-apply notice + confirmation + rejections collaps
 	it('→ one rejected record holding the notice, the echo, and both rejections', async () => {
 		const store: Application[] = [];
 		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
-		for (const e of emails) {
-			const isFastApply = isFastApplyNotice(e.code);
-			const existing = await findExisting('EarthCam', R, null, null, e.isConfirmation, isFastApply, e.date);
-			const ref = { messageId: `${e.cat}-${e.date}`, category: e.cat, date: e.date };
+		for (const step of emails) {
+			const isFastApply = isFastApplyNotice(step.code);
+			const existing = await findExisting('EarthCam', R, null, null, step.isConfirmation, isFastApply, step.date);
+			const ref = { messageId: `${step.cat}-${step.date}`, category: step.cat, date: step.date };
 			if (existing) {
-				if (e.ts >= existing.last_activity_ts) { existing.status = e.cat; existing.last_activity_ts = e.ts; }
-				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
-				if (e.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
+				if (step.ts >= existing.last_activity_ts) { existing.status = step.cat; existing.last_activity_ts = step.ts; }
+				if (!existing.date_applied || step.date < existing.date_applied) existing.date_applied = step.date;
+				if (step.isConfirmation && existing.awaiting_application) existing.awaiting_application = false;
 				if (isFastApply && !existing.fast_apply) existing.fast_apply = true;
-				if (e.isConfirmation && !isFastApply && !existing.confirmed) existing.confirmed = true;
+				if (step.isConfirmation && !isFastApply && !existing.confirmed) existing.confirmed = true;
 				existing.emails.push(ref);
 			} else {
-				store.push(app({ company: 'EarthCam', role: R, status: e.cat, date_applied: e.date, last_activity_ts: e.ts,
-					awaiting_application: !e.isConfirmation, fast_apply: isFastApply, confirmed: e.isConfirmation && !isFastApply, emails: [ref] }));
+				store.push(app({ company: 'EarthCam', role: R, status: step.cat, date_applied: step.date, last_activity_ts: step.ts,
+					awaiting_application: !step.isConfirmation, fast_apply: isFastApply, confirmed: step.isConfirmation && !isFastApply, emails: [ref] }));
 			}
 		}
 		expect(store).toHaveLength(1);
 		expect(store[0]).toMatchObject({ status: 'rejected', date_applied: '2026-04-01', fast_apply: true });
-		expect(store[0].emails.map(e => e.category).sort()).toEqual(['applied', 'applied', 'rejected', 'rejected']);
+		expect(store[0].emails.map(emailRef => emailRef.category).sort()).toEqual(['applied', 'applied', 'rejected', 'rejected']);
 	});
 });
 
@@ -421,21 +421,21 @@ describe('findExisting — repeated fast-apply cycles stay separate (FanDuel)', 
 	it('→ four records, each holding one notice + one confirmation', async () => {
 		const store: Application[] = [];
 		dbMock.findByCompanyFirstWord.mockImplementation(async () => [...store]);
-		for (const e of emails) {
-			const isFastApply = isFastApplyNotice(e.code);
-			const existing = await findExisting('FanDuel', R, null, null, true, isFastApply, e.date);
-			const ref = { messageId: `${e.code}-${e.date}-${e.ts}`, category: 'applied' as const, date: e.date };
+		for (const step of emails) {
+			const isFastApply = isFastApplyNotice(step.code);
+			const existing = await findExisting('FanDuel', R, null, null, true, isFastApply, step.date);
+			const ref = { messageId: `${step.code}-${step.date}-${step.ts}`, category: 'applied' as const, date: step.date };
 			if (existing) {
-				if (!existing.date_applied || e.date < existing.date_applied) existing.date_applied = e.date;
+				if (!existing.date_applied || step.date < existing.date_applied) existing.date_applied = step.date;
 				if (isFastApply && !existing.fast_apply) existing.fast_apply = true;
 				if (!isFastApply && !existing.confirmed) existing.confirmed = true;
 				existing.emails.push(ref);
 			} else {
-				store.push(app({ company: 'FanDuel', role: R, status: 'applied', date_applied: e.date, last_activity_ts: e.ts,
+				store.push(app({ company: 'FanDuel', role: R, status: 'applied', date_applied: step.date, last_activity_ts: step.ts,
 					fast_apply: isFastApply, confirmed: !isFastApply, emails: [ref] }));
 			}
 		}
 		expect(store).toHaveLength(4);
-		for (const a of store) expect(a.emails.map(e => e.category)).toEqual(['applied', 'applied']);
+		for (const app of store) expect(app.emails.map(emailRef => emailRef.category)).toEqual(['applied', 'applied']);
 	});
 });

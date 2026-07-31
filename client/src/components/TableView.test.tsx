@@ -11,12 +11,12 @@ const rows = (n: number) => Array.from({ length: n }, (_, i) => makeApp({ id: `p
 describe('TableView', () => {
 	it('should render a row per application and call onEdit when a company is clicked', async () => {
 		const onEdit = vi.fn();
-		const a = makeApp({ id: 't1', company: 'Acme' });
-		render(<TableView applications={[a, makeApp({ id: 't2', company: 'Beta' })]} highlightIds={new Set()} onEdit={onEdit} onDelete={vi.fn()} />);
+		const app = makeApp({ id: 't1', company: 'Acme' });
+		render(<TableView applications={[app, makeApp({ id: 't2', company: 'Beta' })]} highlightIds={new Set()} onEdit={onEdit} onDelete={vi.fn()} />);
 		expect(screen.getByTestId('table-row-t1')).toHaveTextContent('Acme');
 		expect(screen.getByTestId('table-row-t2')).toHaveTextContent('Beta');
 		await user.click(within(screen.getByTestId('table-row-t1')).getByText('Acme'));
-		expect(onEdit).toHaveBeenCalledWith(a);
+		expect(onEdit).toHaveBeenCalledWith(app);
 	});
 
 	it('should render an empty state when there are no applications', () => {

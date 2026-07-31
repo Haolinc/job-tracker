@@ -55,13 +55,13 @@ export default function Card({ app, isNew, onEdit, onDelete }: Props) {
 						{STEP_LABELS[app.interview_step]}
 					</span>
 				)}
-				{provenanceBadges(app).map(b => (
+				{provenanceBadges(app).map(badge => (
 					<span
-						key={b.label}
-						className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${b.cls}`}
-						title={b.title}
+						key={badge.label}
+						className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.cls}`}
+						title={badge.title}
 					>
-						{b.label}
+						{badge.label}
 					</span>
 				))}
 			</div>
