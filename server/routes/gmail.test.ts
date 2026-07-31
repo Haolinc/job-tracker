@@ -92,14 +92,14 @@ describe('classifyOne', () => {
 		// candidates, but which is the company is only a guess because "applying to X" doesn't say what X is.
 		const twoSpanParse = {
 			category: 'applied' as const, company: 'Acme', role: 'Software Engineer',
-			classifier_code: 'general_template', ambiguous_spans: ['Acme', 'Software Engineer'],
+			classifier_code: 'general_template' as const, ambiguous_spans: ['Acme', 'Software Engineer'],
 		};
 
 		// What it emits for "…your interest in Software Engineer": a LONE span that is really the role, grabbed
 		// as the company. Unconfirmed, this is the record that reaches the board with a bogus employer.
 		const loneSpanParse = {
 			category: 'applied' as const, company: 'Software Engineer', role: null,
-			classifier_code: 'general_template', ambiguous_spans: ['Software Engineer'],
+			classifier_code: 'general_template' as const, ambiguous_spans: ['Software Engineer'],
 		};
 
 		it('should keep the parser result and never call the LLM when the spans are typed', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Application, Category } from '../types';
+import type { Application, Category, ClassifierCode } from '../types';
 
 // Stub the db so findExisting runs against a controlled set of "existing" applications. Only the two
 // lookup helpers it calls need mocking; companiesSameEntity (real) still does the entity matching.
@@ -370,7 +370,7 @@ describe('findExisting — out-of-order rounds collapse into one application', (
 // apply. If it did, the rejection that CREATES the record stamps fast_apply=true, and the real same-day
 // notice then fails the fast⊕non-fast pairing (fast vs fast) and splits off — the observed two-record bug.
 describe('findExisting — fast-apply notice + confirmation + rejections collapse (EarthCam)', () => {
-	interface Em { cat: Exclude<Category, 'ignored'>; date: string; ts: number; isConfirmation: boolean; code: string }
+	interface Em { cat: Exclude<Category, 'ignored'>; date: string; ts: number; isConfirmation: boolean; code: ClassifierCode }
 	const R = 'QA Automation Engineer';
 	const emails: Em[] = [   // newest-first, as Gmail streams
 		{ cat: 'rejected', date: '2026-04-09', ts: 4, isConfirmation: false, code: 'linkedin_rejected' },
@@ -409,7 +409,7 @@ describe('findExisting — fast-apply notice + confirmation + rejections collaps
 // apart: once a record's notice slot is filled, the next cycle's notice can't pair into it, so it starts a
 // new record and pulls its own echo. This is the headline over-merge the slot model fixes (was 1 record).
 describe('findExisting — repeated fast-apply cycles stay separate (FanDuel)', () => {
-	interface Em { date: string; ts: number; code: string }
+	interface Em { date: string; ts: number; code: ClassifierCode }
 	const R = 'Software Engineer';
 	const emails: Em[] = [   // newest-first; notice + echo per day
 		{ date: '2026-03-07', ts: 8, code: 'linkedin_applied' }, { date: '2026-03-07', ts: 7, code: 'general_template' },

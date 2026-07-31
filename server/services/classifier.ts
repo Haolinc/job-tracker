@@ -95,13 +95,17 @@ const classifierModel = (): string => process.env.OLLAMA_MODEL || 'qwen2.5:7b';
  * The first JSON object in a model reply. Both calls below need this: the grammar constrains the object's
  * shape but not what may trail it, and the worked examples show "{json}  (note)", so the model sometimes
  * appends a parenthetical — take first "{" to last "}" and ignore any commentary tail. Markdown fences are
- * stripped first for the same reason. Throws (like JSON.parse) when there is no parseable object at all.
+ * stripped first for the same reason. Throws when there is no parseable object at all.
  */
 function parseFirstJsonObject(replyText: string): Record<string, unknown> {
 	const unfenced = replyText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
 	const objectStart = unfenced.indexOf('{'), objectEnd = unfenced.lastIndexOf('}');
 	const objectText = objectStart !== -1 && objectEnd !== -1 ? unfenced.slice(objectStart, objectEnd + 1) : unfenced;
-	return JSON.parse(objectText) as Record<string, unknown>;
+	try {
+		return JSON.parse(objectText) as Record<string, unknown>;
+	} catch {
+		throw new Error(`Unparseable model reply: ${replyText}`);
+	}
 }
 
 /**

@@ -18,7 +18,7 @@ import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
 import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent, isSyncCancelRequested, requestSyncCancel, clearSyncCancel } from '../services/syncState';
 import { debug, guiLine } from '../logger';
-import type { Application, EmailResult, EmailRef, Status } from '../types';
+import type { Application, ClassifierCode, EmailResult, EmailRef, Status } from '../types';
 
 const router = Router();
 
@@ -29,7 +29,7 @@ const SYNC_PROGRESS_MARKER = '@sync-progress@';
 // The deterministic-parser templates worth tallying per sync, keyed by the classifier_code each one stamps.
 // Drives both the counting and the summary line, so a new template needs one entry here and nothing else.
 // An LLM-classified email carries no code and is counted by none of them.
-const PARSED_BY_LABEL: Record<string, string> = {
+const PARSED_BY_LABEL: Record<ClassifierCode, string> = {
 	linkedin_applied:  'LinkedIn applied',
 	linkedin_rejected: 'LinkedIn rejected',
 	indeed_applied:    'Indeed',
@@ -48,14 +48,14 @@ function gmailNote(subject: string, hasRole: boolean): string {
 // the parsed-by counters tally the same set of emails as before. No raw body is retained — it's consumed
 // during classification.
 type ClassifyResult =
-	| { kind: 'skip'; threadId: string; messageId: string; classifiedAs: 'ignored'; classifierCode?: string }
+	| { kind: 'skip'; threadId: string; messageId: string; classifiedAs: 'ignored'; classifierCode?: ClassifierCode }
 	| { kind: 'failed'; threadId: string; messageId: string }
 	| {
 		kind: 'merge'; threadId: string; messageId: string; subject: string;
 		category: Status; company: string; role: string | null;
 		externalId: string | null; senderDomain: string | null;
 		isConfirmation: boolean; isFastApply: boolean;
-		detectedBy: 'parser' | 'llm'; classifierCode?: string;
+		detectedBy: 'parser' | 'llm'; classifierCode?: ClassifierCode;
 		internalDate: number; lastMessageDate: string;
 	};
 

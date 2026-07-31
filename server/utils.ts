@@ -1,4 +1,4 @@
-import type { Status } from './types';
+import type { ClassifierCode, Status } from './types';
 
 // Status only moves FORWARD: applied → interview → offer/rejected. A later email never rolls it back (a
 // stray "we received your application" can't undo an interview), and a terminal state is final — an offer
@@ -11,7 +11,7 @@ export function resolveStatus(current: Status, incoming: Status): Status {
 
 // A LinkedIn/Indeed fast-apply NOTICE ("your application was sent"). Excludes "_rejected" — stamping
 // fast_apply from a rejection wrongly splits the real notice off later (the EarthCam bug).
-export const isFastApplyNotice = (classifierCode: string | undefined): boolean =>
+export const isFastApplyNotice = (classifierCode: ClassifierCode | undefined): boolean =>
 	/^(?:linkedin|indeed)_applied$/.test(classifierCode ?? '');
 
 // Subject reads as a later STATUS PING, not a fresh confirmation. Only DEMOTES — a genuine confirmation
