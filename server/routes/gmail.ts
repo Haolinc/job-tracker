@@ -10,7 +10,7 @@ import { recoverRoleFromBody, tidyRole } from '../services/parser/roles';
 import * as db from '../services/db';
 import { isIgnorableEmail } from '../services/filters';
 import {
-	normalizeCompany,
+	companyTradeName,
 	companyDomainFromSender,
 	companiesSameEntity,
 } from '../services/companyIdentity';
@@ -32,7 +32,8 @@ const SYNC_PROGRESS_MARKER = '@sync-progress@';
 const PARSED_BY_LABEL: Record<ClassifierCode, string> = {
 	linkedin_applied:  'LinkedIn applied',
 	linkedin_rejected: 'LinkedIn rejected',
-	indeed_applied:    'Indeed',
+	indeed_applied:    'Indeed applied',
+	indeed_rejected:   'Indeed rejected',
 	general_template:  'General template',
 };
 
@@ -67,6 +68,7 @@ type ClassifyResult =
  */
 export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	const { threadId, messageId, subject, from, body } = email;
+    debug(`[sync] body subject="${subject}" from="${from}" cleaned=${JSON.stringify(body)}`);
 
 	// Hard-filter obvious non-job emails before calling the LLM.
 	if (isIgnorableEmail(subject, from, body)) {
@@ -174,8 +176,10 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// posted title verbatim.
 	if (role && !isFastApplyNotice(classifierCode)) role = tidyRole(role);
 
-	// Normalize legal suffixes for consistent dedup.
-	if (company) company = normalizeCompany(company);
+	// Resolve the name the employer goes by — the trade name behind a "dba", minus a LinkedIn page qualifier.
+	// It no longer truncates legal suffixes: the stored company must be the email's own wording, and
+	// companiesSameEntity already treats "Inc"/"LLC"/"Company" as descriptors when matching two spellings.
+	if (company) company = companyTradeName(company);
 
 	// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an employer
 	// and sometimes names itself as the company. Drop "HackerRank" as a company ONLY when the email is from

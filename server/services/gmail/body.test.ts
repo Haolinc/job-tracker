@@ -72,11 +72,47 @@ describe('buildBody — LinkedIn', () => {
 });
 
 describe('buildBody — Indeed', () => {
+	// The employer line must carry the company EXACTLY as the email writes it — it is the value the Indeed
+	// parser stores, so anything trimmed or tacked on here is a discrepancy the board can never recover.
+	//
+	// The card below is a REAL Indeed confirmation, taken line-for-line from a sync log; each line was its own
+	// block element, which is why they arrive newline-separated. Two details that only real mail revealed:
+	// the sentence is "The following items were sent to …" (NOT "Your application was sent to …", which is
+	// LINKEDIN's wording and what the old fixture wrongly used), and it carries a "Good luck!" tail. A fixture
+	// missing that tail is what let a line-end capture ship "Amentum. Good luck!" as the company for 36 emails.
+	const indeedCard = (role: string, company: string, location: string, reviews?: string) =>
+		[
+			"We'll help you get started", 'Application submitted', role, company, `- ${location}`,
+			...(reviews ? [reviews] : []),                     // some employers have no reviews line
+			`The following items were sent to ${company}. Good luck!`,
+			'&bull;', 'Application', '&bull;', 'Resume', 'Next steps',
+		].map(line => `<div>${line}</div>`).join('');
+
+	const employerLine = (html: string) =>
+		buildBody(msg(part('text/plain', 'Indeed Application'), part('text/html', html)), 'indeedapply@indeed.com')
+			.split('\n')[0];
+
 	it('lifts the employer out of the HTML part and prepends "Employer:"', () => {
-		const out = buildBody(
-			msg(part('text/plain', 'Indeed Application'), part('text/html', '<p>Your application was sent to Initech.</p>')),
-			'indeedapply@indeed.com',
-		);
-		expect(out.startsWith('Employer: Initech')).toBe(true);
+		expect(employerLine(indeedCard('Cleared Junior Software Engineer', 'Amentum', 'Washington, DC 20024', '5,595 reviews')))
+			.toBe('Employer: Amentum');
+	});
+	it('keeps a period INSIDE the company name', () => {
+		// Regression: a "[^.]+" capture stopped at the first period and stored "BuildingReports".
+		expect(employerLine(indeedCard('Quality Assurance Tester', 'BuildingReports.com', 'Remote', '11 reviews')))
+			.toBe('Employer: BuildingReports.com');
+	});
+	it('keeps a period that ENDS the company name, dropping only the template’s own', () => {
+		// "Epic Kids Inc." renders as "…sent to Epic Kids Inc.. Good luck!" — exactly one of those dots is ours.
+		expect(employerLine(indeedCard('Junior Software Engineer, Full-Stack', 'Epic Kids Inc.', 'San Jose, CA', '2 reviews')))
+			.toBe('Employer: Epic Kids Inc.');
+	});
+	it('adds no period to a company that has none, and handles a card with no reviews line', () => {
+		expect(employerLine(indeedCard('Quality Assurance Analyst (onsite)', 'GTM Payroll Services Inc', 'Clifton Park,NY,12065')))
+			.toBe('Employer: GTM Payroll Services Inc');
+	});
+	it('adds no Employer line when the template no longer matches, deferring to the LLM', () => {
+		// Better to lose the deterministic path than to invent a company. The sync summary's
+		// "Indeed applied parsed" count drops and makes a template change visible.
+		expect(employerLine('<div>The following items were delivered to Initech.</div>')).not.toContain('Employer:');
 	});
 });

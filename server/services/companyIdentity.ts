@@ -24,20 +24,22 @@ const ATS_DOMAINS = new Set([
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
 const ATS_BRANDS = new Set([...ATS_DOMAINS].map(domain => domain.split('.')[0]));
 
-// Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
-// "Sun West Mortgage" resolve to the same dedup key.
-// The lookbehind (?<=\w) prevents matching " Co." in "Foo & Co." (which would
-// leave a broken trailing "&") — only strip when preceded by a word character.
-const COMPANY_SUFFIX_RE = /(?<=\w)[,.]?\s+(?:company|incorporated|inc\.?|llc|ltd\.?|corp\.?|corporation|co\.)$/i;
-
 // LinkedIn company-page qualifiers appended after a spaced dash ("CLEAR - Corporate" → "CLEAR").
 const LINKEDIN_QUALIFIER_RE = /\s+[-–]\s+(?:Corporate|Corp|HQ|Headquarters|Global|US|USA|U\.S\.A?\.?|North America|EMEA|APAC|Worldwide)\.?$/i;
 
-export function normalizeCompany(name: string): string {
-	// "X dba Y" / "X d/b/a Y" → Y, the trade name people actually use ("CP Payroll, LLC dba ConnectPay" → "ConnectPay").
+/**
+ * The name an employer actually goes by, as the email itself writes it. Both steps SELECT between names
+ * already present rather than rewriting one: "X dba Y" carries the legal wrapper and the trade name, and a
+ * LinkedIn page qualifier is the board's decoration, not part of the company.
+ *
+ * It deliberately does NOT strip legal suffixes. "Loyola Enterprises Inc." is the employer's own name and
+ * must reach the board unedited, so the parsers' verbatim capture isn't undone one layer down. Two spellings
+ * of one employer still merge: companiesSameEntity counts "Inc"/"LLC"/"Company" as descriptors, so
+ * "Loyola Enterprises Inc." and "Loyola Enterprises" resolve to the same employer at match time instead.
+ */
+export function companyTradeName(name: string): string {
 	const tradeName = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
-	const withoutQualifier = tradeName.replace(LINKEDIN_QUALIFIER_RE, '').trim();
-	return withoutQualifier.replace(COMPANY_SUFFIX_RE, '').trim();
+	return tradeName.replace(LINKEDIN_QUALIFIER_RE, '').trim();
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one

@@ -203,8 +203,18 @@ export function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
 
 	if (from.includes('indeedapply@indeed.com')) {
 		const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
-		const sentTo   = richBody.match(/sent to ([^.]+)\./i);
-		const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
+		// The confirmation renders one fixed sentence: "Your application was sent to [Company]. Good luck!".
+		// Both ends are literal template text, so the name is read between them and no punctuation inside it
+		// has to be guessed at — the lazy (.+?) backtracks until the period is the one the TEMPLATE wrote:
+		//   "…sent to BuildingReports.com. Good luck!"      -> "BuildingReports.com"   (internal period kept)
+		//   "…sent to Epic Kids Inc.. Good luck!"           -> "Epic Kids Inc."        (its own period kept)
+		//   "…sent to GTM Payroll Services Inc. Good luck!" -> "GTM Payroll Services Inc"
+		// Bounding on one side only fails both ways: [^.]+ stopped at the first period ("BuildingReports"),
+		// while capturing to the line end swallowed the tail ("Amentum. Good luck!").
+		// No match -> no Employer line -> parseIndeed bails and the email goes to the LLM, which is the right
+		// failure when the template has changed. The sync summary's "Indeed applied parsed" count shows it.
+		const employer = richBody.match(/sent to (.+?)\.\s*Good luck!/i)?.[1]?.trim();
+		const prefix   = employer ? `Employer: ${employer}\n\n` : '';
 		return prefix + richBody.slice(0, prefix ? 1000 : 3000);
 	}
 

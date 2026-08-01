@@ -17,7 +17,7 @@ export type DetectedBy = 'parser' | 'llm';
 // 'auto' notes are sync-generated and always re-pinned to the oldest (application) email.
 export type NoteSource = 'auto' | 'manual';
 export type Category = 'applied' | 'interview' | 'offer' | 'rejected' | 'ignored';
-export type ClassifierCode = 'linkedin_applied' | 'linkedin_rejected' | 'indeed_applied' | 'general_template';
+export type ClassifierCode = 'linkedin_applied' | 'linkedin_rejected' | 'indeed_applied' | 'indeed_rejected' | 'general_template';
 
 // A Gmail message that drove this application to a given stage — stored so the user can open the
 // actual email. `category` is the email's stage; 'ignored' emails are never recorded here. The inbox

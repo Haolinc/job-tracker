@@ -1,23 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeCompany, companyDomainFromSender, companiesSameEntity } from './companyIdentity';
+import { companyTradeName, companyDomainFromSender, companiesSameEntity } from './companyIdentity';
 
-describe('normalizeCompany', () => {
-	it('strips trailing legal suffixes', () => {
-		expect(normalizeCompany('Sun West Mortgage Company')).toBe('Sun West Mortgage');
-		expect(normalizeCompany('Acme, Inc.')).toBe('Acme');
-		expect(normalizeCompany('Globex LLC')).toBe('Globex');
-		expect(normalizeCompany('Initech Corp.')).toBe('Initech');
-	});
-	it('does NOT strip "Co." when it is part of "& Co." (no word char before it)', () => {
-		expect(normalizeCompany('Foo & Co.')).toBe('Foo & Co.');
+describe('companyTradeName', () => {
+	it('keeps a legal suffix — it is part of the employer’s own name', () => {
+		// The parsers capture the company verbatim from the email; nothing downstream may edit that wording.
+		// Two spellings of one employer are reconciled by companiesSameEntity at match time, not by truncation.
+		expect(companyTradeName('Sun West Mortgage Company')).toBe('Sun West Mortgage Company');
+		expect(companyTradeName('Acme, Inc.')).toBe('Acme, Inc.');
+		expect(companyTradeName('Globex LLC')).toBe('Globex LLC');
+		expect(companyTradeName('Loyola Enterprises Inc.')).toBe('Loyola Enterprises Inc.');
+		expect(companyTradeName('Foo & Co.')).toBe('Foo & Co.');
 	});
 	it('resolves a "dba" trade name', () => {
-		expect(normalizeCompany('CP Payroll, LLC dba ConnectPay')).toBe('ConnectPay');
-		expect(normalizeCompany('Big Box d/b/a Shopwise')).toBe('Shopwise');
+		expect(companyTradeName('CP Payroll, LLC dba ConnectPay')).toBe('ConnectPay');
+		expect(companyTradeName('Big Box d/b/a Shopwise')).toBe('Shopwise');
 	});
 	it('drops a LinkedIn company-page qualifier', () => {
-		expect(normalizeCompany('CLEAR - Corporate')).toBe('CLEAR');
-		expect(normalizeCompany('Acme - North America')).toBe('Acme');
+		expect(companyTradeName('CLEAR - Corporate')).toBe('CLEAR');
+		expect(companyTradeName('Acme - North America')).toBe('Acme');
+	});
+});
+
+// The suffix truncation companyTradeName no longer does now has to hold HERE instead — this is what keeps a
+// confirmation naming the legal entity and a rejection naming the brand on one record.
+describe('companiesSameEntity — absorbs the legal suffix the stored name now keeps', () => {
+	it('matches a suffixed name against its bare form', () => {
+		expect(companiesSameEntity('Loyola Enterprises Inc.', 'Loyola Enterprises')).toBe(true);
+		expect(companiesSameEntity('Acme, Inc.', 'Acme')).toBe(true);
+		expect(companiesSameEntity('Sun West Mortgage Company', 'Sun West Mortgage')).toBe(true);
 	});
 });
 
