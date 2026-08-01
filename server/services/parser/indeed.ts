@@ -21,21 +21,16 @@ function parseApplied(subject: string, body: string): Classification | null {
 	return { category: 'applied', company, role: roleMatch[1].trim(), classifier_code: 'indeed_applied' };
 }
 
-// Rejection: one template with two slots — "An update on your application from [Company]" as the subject,
-// "Thank you for applying to the [Role] position at [Company]." opening the body. Every part must hold:
-// noreply@indeed.com also carries job recommendations and neutral status mail, and bailing here falls
-// through to the general template rather than mislabelling one of those as a rejection.
+// Rejection. Strict on every part: noreply@indeed.com also carries job recommendations and neutral status
+// mail, and bailing falls through to the general template rather than mislabelling one as a rejection.
 function parseRejected(subject: string, body: string): Classification | null {
-	// The subject is the template's own header: it gates the shape, and stands in as the fallback company.
+	// Gates the template shape, and stands in as the fallback company.
 	const subjectCompany = subject.match(/^An update on your application from\s+(.+)$/i)?.[1]?.trim();
 	if (!subjectCompany) return null;
-	// The decision sentence. Without it this is an "update" that never says the application was declined.
-	if (!/\bnot selected\b/i.test(body)) return null;
+	if (!/\bnot selected\b/i.test(body)) return null;   // no decision sentence -> a neutral update, not a rejection
 
-	// Both fields come from the body's prose, with the subject behind them — the precedence the classifier
-	// prompt states (body prose > subject > sender domain). Each capture is bounded by literal template text
-	// on BOTH sides, so nothing has to guess where the name ends: a company that legitimately ends in a period
-	// ("Loyola Enterprises Inc.") survives whole, and the sentence's own period is never swallowed into it.
+	// Body prose first, subject behind it (the precedence the classifier prompt states). Both captures are
+	// bounded by template text on either side, so "Loyola Enterprises Inc." keeps its own trailing period.
 	const bodyCompany = body.match(/unfortunately,\s+(.+?)\s+has moved to the next step/i)?.[1]?.trim();
 	const role        = body.match(/thank you for applying to the\s+(.+?)\s+position at\s/i)?.[1]?.trim();
 	if (!role) return null;
