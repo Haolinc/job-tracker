@@ -148,9 +148,9 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		// LLM for the ROLE ONLY — the parser's company/category stay authoritative. A failed or empty call
 		// just leaves the role null → "Unknown Role", same as before.
 		try {
-			// Anchor the LLM to the company the parser already nailed so its role read isn't distracted into
-			// re-deciding the employer (whose value we keep regardless).
-			const roleFill = await classifyEmail(subject, from, body, { company: classification.company });
+			// NO hints: a company-only block reads as "the parser found no role" and nulls the role on the one
+			// call that exists to find it (8 of 42 suppressed, 0 helped). Its company is discarded below anyway.
+			const roleFill = await classifyEmail(subject, from, body);
 			if (roleFill.role) {
 				classification = { ...classification, role: roleFill.role };
 				debug(`[sync] role filled by LLM: "${roleFill.role}" subject="${subject}"`);

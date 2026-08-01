@@ -154,6 +154,41 @@ describe('classifyOne', () => {
 			expect(result).toMatchObject({ kind: 'merge', company: 'Acme', role: 'Software Engineer', detectedBy: 'parser' });
 		});
 	});
+
+	// Spans typed, company + category nailed, but no title in the template. The LLM is consulted for the ROLE
+	// ONLY — its company answer is discarded, so the parser's stands.
+	describe('when the parser has a company but no role', () => {
+		// Jack Henry: the body names the title, but a leading "Job ID 17182:" label kept the parser from it.
+		const companyOnlyParse = {
+			category: 'applied' as const, company: 'Jack Henry', role: null, classifier_code: 'general_template' as const,
+		};
+
+		it('should ask the LLM for the role WITHOUT hinting the company', async () => {
+			// A company-only block reads as "the parser found no role", nulling the role this call exists to find.
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry & Associates', role: 'Entry Level Quality Assurance Engineer', req_id: '17182' });
+			await classifyOne(email);
+			expect(classifyEmailMock).toHaveBeenCalledWith(email.subject, email.from, email.body);
+		});
+
+		it('should take the role and req id from the LLM but keep the parser company', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			// The fuller legal name the model reads off the subject is dropped on purpose — only role/req_id land.
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry & Associates', role: 'Entry Level Quality Assurance Engineer', req_id: '17182' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({
+				kind: 'merge', company: 'Jack Henry', role: 'Entry Level Quality Assurance Engineer',
+				externalId: '17182', detectedBy: 'parser',
+			});
+		});
+
+		it('should leave the role unset when the LLM finds none either', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Jack Henry', detectedBy: 'parser' });
+		});
+	});
 });
 
 describe('POST /sync concurrency guard', () => {

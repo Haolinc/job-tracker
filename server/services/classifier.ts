@@ -176,12 +176,19 @@ async function loadModelWithRetry(): Promise<boolean> {
 	return false;
 }
 
+// An absent candidate must be STATED: a gap in this list reads as a finding ("there is no role"), and the
+// model returns null instead of reading the email.
+const ABSENT_ROLE_CANDIDATE = '- role: (no candidate — the parser simply had no guess. That is NOT evidence the email lacks a role: read the email and extract the job title yourself, or null if the email genuinely names no job title.)';
+
 /** Render the optional parser hints as a user-turn block, or '' when there is nothing to hint. */
-function buildReferenceBlock(hints?: { company?: string | null; role?: string | null }): string {
+export function buildReferenceBlock(hints?: { company?: string | null; role?: string | null }): string {
 	if (!hints) return '';
 	const lines: string[] = [];
 	if (hints.company) lines.push(`- company: "${hints.company}"`);
-	if (hints.role)    lines.push(`- role: "${hints.role}"`);
+	if (hints.role) lines.push(`- role: "${hints.role}"`);
+	// Only alongside a company: no hints must still yield no block, and the picker-reject path withholds the
+	// company on purpose, so it gets no counterpart line.
+	else if (hints.company) lines.push(ABSENT_ROLE_CANDIDATE);
 	if (lines.length === 0) return '';
 	return `\n\nReference candidates (from a deterministic parser — adopt when correct, override when the email disagrees):\n${lines.join('\n')}`;
 }
