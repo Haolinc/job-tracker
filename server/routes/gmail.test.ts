@@ -84,6 +84,17 @@ describe('classifyOne', () => {
 		expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
 	});
 
+	// Both LLM paths send the email alone. A hint block naming only a company read to the model as proof the
+	// email had no role, nulling it on the very call that exists to find one.
+	it('should never hand the LLM parser candidates, on either path', async () => {
+		classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Acme', role: 'Software Engineer' });
+		await classifyOne(email);   // no parser hit → full classify
+		parseEmailMock.mockReturnValue({ category: 'applied', company: 'Jack Henry', role: null, classifier_code: 'general_template' });
+		await classifyOne(email);   // parser hit without a role → role-fill
+		expect(classifyEmailMock).toHaveBeenCalledTimes(2);
+		for (const call of classifyEmailMock.mock.calls) expect(call).toEqual([email.subject, email.from, email.body]);
+	});
+
 	// The parser can capture a noun phrase without knowing whether it names a company or a job title
 	// ("your interest in X"), so it emits the candidates untyped. These cover how they get resolved: a lone
 	// span goes to the full classifier; ≥2 spans go to the cheap picker, which types them or declines.
@@ -120,6 +131,25 @@ describe('classifyOne', () => {
 			expect(pickCompanyRoleMock).not.toHaveBeenCalled();   // no genuine choice → don't burn a picker call
 			expect(classifyEmailMock).toHaveBeenCalledTimes(1);
 			expect(result).toMatchObject({ kind: 'merge', company: 'Leidos', detectedBy: 'llm' });
+		});
+
+		it('should not resurrect a rejected candidate as the company when the LLM names none', async () => {
+			// The lone span IS the role. The parser still offers "Acme" from the body, but a rejected candidate
+			// must never be re-inserted — without the guard "Software Engineer"/"Acme" reaches the board as an
+			// employer the picker never confirmed.
+			parseEmailMock.mockReturnValue(loneSpanParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: null, role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+		});
+
+		it('should fall back to the role the picker salvaged when the LLM returns none', async () => {
+			// The picker declined to name a company but still typed a role — the only place that role survives.
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue({ company: null, role: 'Staff Software Engineer' });
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Axoni', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Staff Software Engineer' });
 		});
 
 		it('should adopt the company/role the picker assigns to the candidates', async () => {
@@ -162,14 +192,6 @@ describe('classifyOne', () => {
 		const companyOnlyParse = {
 			category: 'applied' as const, company: 'Jack Henry', role: null, classifier_code: 'general_template' as const,
 		};
-
-		it('should ask the LLM for the role WITHOUT hinting the company', async () => {
-			// A company-only block reads as "the parser found no role", nulling the role this call exists to find.
-			parseEmailMock.mockReturnValue(companyOnlyParse);
-			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry & Associates', role: 'Entry Level Quality Assurance Engineer', req_id: '17182' });
-			await classifyOne(email);
-			expect(classifyEmailMock).toHaveBeenCalledWith(email.subject, email.from, email.body);
-		});
 
 		it('should take the role and req id from the LLM but keep the parser company', async () => {
 			parseEmailMock.mockReturnValue(companyOnlyParse);

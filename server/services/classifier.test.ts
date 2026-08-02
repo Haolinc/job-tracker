@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickerContext, appearsInSource, buildReferenceBlock } from './classifier';
+import { pickerContext, appearsInSource } from './classifier';
 
 // pickerContext picks the candidate-bearing sentence(s) the source-grounded picker extracts from. It must
 // surface the text that holds the CORRECT company/role so the model can re-cut a mis-glued parser span.
@@ -43,39 +43,5 @@ describe('appearsInSource', () => {
 	it('rejects a fabricated ATS-suffixed value that is not in the shown excerpt or subject', () => {
 		// The model stitched "@ icims" from the (no-longer-shown) sender; it appears nowhere in what it was given.
 		expect(appearsInSource('Liberty Mutual @ icims', [excerpt, subject])).toBe(false);
-	});
-});
-
-// The block presents the parser's FINDINGS, so an omitted line is itself read as a finding. Dropping the role
-// line told the model "there is no role here" on emails that plainly name one (8 of 42 suppressed, 0 helped).
-describe('buildReferenceBlock', () => {
-	const roleLineOf = (block: string) => block.split('\n').find(line => line.startsWith('- role:'));
-
-	it('lists both candidates when the parser found both', () => {
-		const block = buildReferenceBlock({ company: 'Axoni', role: 'Software Engineer' });
-		expect(block).toContain('- company: "Axoni"');
-		expect(roleLineOf(block)).toBe('- role: "Software Engineer"');
-	});
-
-	it('states an ABSENT role candidate instead of dropping the line', () => {
-		// The regression: a company line alone, which the model read as "there is no role".
-		const block = buildReferenceBlock({ company: 'Jack Henry', role: null });
-		expect(block).toContain('- company: "Jack Henry"');
-		expect(roleLineOf(block)).toBeDefined();
-		expect(block).toMatch(/no candidate/i);
-		expect(block).toMatch(/NOT evidence the email lacks a role/i);
-	});
-
-	it('emits no block at all when there is nothing to hint', () => {
-		// Both "no hints" shapes — caller passed none, and the lone-span branch that clears them.
-		expect(buildReferenceBlock()).toBe('');
-		expect(buildReferenceBlock({})).toBe('');
-	});
-
-	it('invents no company counterpart when only a role is hinted', () => {
-		// The picker-reject path withholds the company ON PURPOSE — it judged no span a real employer.
-		const block = buildReferenceBlock({ role: 'Software Engineer' });
-		expect(roleLineOf(block)).toBe('- role: "Software Engineer"');
-		expect(block).not.toContain('- company:');
 	});
 });
