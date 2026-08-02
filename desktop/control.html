@@ -114,11 +114,13 @@
 		#config-panel input:disabled, #config-panel select:disabled { opacity: 0.45; cursor: default; }
 		#config-panel .field-row { display: flex; gap: 8px; align-items: center; }
 		#config-panel .field-row > select, #config-panel .field-row > input { flex: 1; }
-		/* The text-input rules above make a field-row input a full-width box; a checkbox has to opt out of the
-		   padding, the border and the flex growth. Must come AFTER .field-row — it ties that rule on
-		   specificity, and `flex: 1` with `min-width: 0` collapses the box to zero width when it wins. */
-		#config-panel .field-row > input[type="checkbox"] {
-			flex: none; width: auto; padding: 0; border: none; background: none;
+		/* The rules above style every input as a full-width box, and a grid cell stretches its child by default
+		   — a checkbox has to opt out of both or it renders as a wide empty rectangle. It sits directly in the
+		   value column, so it lines up with the left edge of the inputs above it. */
+		#config-panel input[type="checkbox"] {
+			justify-self: start;
+			width: 15px; height: 15px;
+			padding: 0; border: none; background: none;
 			accent-color: var(--accent); cursor: pointer;
 		}
 		#config-panel button.mini { padding: 5px 11px; font-size: 12px; white-space: nowrap; }
@@ -177,6 +179,8 @@
 			<input id="session-secret" type="password" spellcheck="false" placeholder="leave empty to auto-generate" />
 			<label for="server-port">Port</label>
 			<input id="server-port" spellcheck="false" placeholder="3001" />
+			<label for="debug-logging">Debug mode</label>
+			<input type="checkbox" id="debug-logging" />
 			<label for="ollama-model">Classification model</label>
 			<div class="field-row">
 				<select id="ollama-model"></select>
@@ -200,10 +204,6 @@
 					</div>
 					<ul id="incomplete-list"></ul>
 				</div>
-			<label for="debug-logging">Debug mode</label>
-			<div class="field-row">
-				<input type="checkbox" id="debug-logging" />
-			</div>
 		</div>
 		<div class="config-actions">
 			<button id="save-config-button" class="primary">Save</button>
