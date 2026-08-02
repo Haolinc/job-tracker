@@ -64,8 +64,8 @@ const FOOTER_RE = /please do not reply to this (email|message)|this is an auto(?
  *  7. Truncate at the first footer signal (unsubscribe notices, copyright, social links).
  *  8. Collapse whitespace.
  */
-// HTML entities + Unicode invisible/zero-width characters (email tracking spacers): ZWSP, ZWNJ,
-// ZWJ, LRM, RLM, LSEP, PSEP, SHY, BOM, NBSP. Shared by cleanBody and cleanLinkedInBody.
+// HTML entities + the invisible characters senders pad email with. The last three rules split those by
+// what they ARE: deleting one that occupies width joins the words around it. Shared with cleanLinkedInBody.
 function decodeEntities(text: string): string {
 	return text
 		.replace(/&nbsp;/gi,   ' ')
@@ -84,7 +84,9 @@ function decodeEntities(text: string): string {
 		.replace(/&#x201[cd];/gi, '"')    // hex curly double quotes (&#x201C; &#x201D;)
 		.replace(/&#x[0-9a-f]+;/gi, ' ')  // any other hex entity \u2192 space (mirrors the decimal rule below)
 		.replace(/&#\d+;/g,    ' ')
-		.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
+		.replace(/[\u00AD\u200B-\u200F\uFEFF]/g, '')   // zero-width: renders as nothing, so leave nothing
+		.replace(/\u00A0/g, ' ')                       // NBSP is a SPACE \u2014 deleting it glued "Inc..Unfortunately"
+		.replace(/[\u2028\u2029]/g, '\n');             // line/paragraph separators are breaks, not spacers
 }
 
 function cleanBody(raw: string): string {
@@ -203,8 +205,12 @@ export function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
 
 	if (from.includes('indeedapply@indeed.com')) {
 		const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
-		const sentTo   = richBody.match(/sent to ([^.]+)\./i);
-		const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
+		// Indeed writes "The following items were sent to [Company]. Good luck!" — read the name between the
+		// template's own words so a period inside it survives ("BuildingReports.com", "Epic Kids Inc.").
+		// Bounding one side only failed both ways: [^.]+ cut at the first period, line-end swallowed the tail.
+		// No match means no Employer line, so parseIndeed bails to the LLM rather than invent a company.
+		const employer = richBody.match(/sent to (.+?)\.\s*Good luck!/i)?.[1]?.trim();
+		const prefix   = employer ? `Employer: ${employer}\n\n` : '';
 		return prefix + richBody.slice(0, prefix ? 1000 : 3000);
 	}
 

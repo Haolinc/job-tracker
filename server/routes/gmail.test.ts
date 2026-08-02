@@ -84,6 +84,17 @@ describe('classifyOne', () => {
 		expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
 	});
 
+	// Both LLM paths send the email alone. A hint block naming only a company read to the model as proof the
+	// email had no role, nulling it on the very call that exists to find one.
+	it('should never hand the LLM parser candidates, on either path', async () => {
+		classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Acme', role: 'Software Engineer' });
+		await classifyOne(email);   // no parser hit → full classify
+		parseEmailMock.mockReturnValue({ category: 'applied', company: 'Jack Henry', role: null, classifier_code: 'general_template' });
+		await classifyOne(email);   // parser hit without a role → role-fill
+		expect(classifyEmailMock).toHaveBeenCalledTimes(2);
+		for (const call of classifyEmailMock.mock.calls) expect(call).toEqual([email.subject, email.from, email.body]);
+	});
+
 	// The parser can capture a noun phrase without knowing whether it names a company or a job title
 	// ("your interest in X"), so it emits the candidates untyped. These cover how they get resolved: a lone
 	// span goes to the full classifier; ≥2 spans go to the cheap picker, which types them or declines.
@@ -122,6 +133,25 @@ describe('classifyOne', () => {
 			expect(result).toMatchObject({ kind: 'merge', company: 'Leidos', detectedBy: 'llm' });
 		});
 
+		it('should not resurrect a rejected candidate as the company when the LLM names none', async () => {
+			// The lone span IS the role. The parser still offers "Acme" from the body, but a rejected candidate
+			// must never be re-inserted — without the guard "Software Engineer"/"Acme" reaches the board as an
+			// employer the picker never confirmed.
+			parseEmailMock.mockReturnValue(loneSpanParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: null, role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+		});
+
+		it('should fall back to the role the picker salvaged when the LLM returns none', async () => {
+			// The picker declined to name a company but still typed a role — the only place that role survives.
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue({ company: null, role: 'Staff Software Engineer' });
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Axoni', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Staff Software Engineer' });
+		});
+
 		it('should adopt the company/role the picker assigns to the candidates', async () => {
 			parseEmailMock.mockReturnValue({
 				category: 'applied', company: 'Axoni', role: null,
@@ -152,6 +182,33 @@ describe('classifyOne', () => {
 			// Degrades to the pre-picker behaviour rather than losing the email or burning a full call.
 			expect(classifyEmailMock).not.toHaveBeenCalled();
 			expect(result).toMatchObject({ kind: 'merge', company: 'Acme', role: 'Software Engineer', detectedBy: 'parser' });
+		});
+	});
+
+	// Spans typed, company + category nailed, but no title in the template. The LLM is consulted for the ROLE
+	// ONLY — its company answer is discarded, so the parser's stands.
+	describe('when the parser has a company but no role', () => {
+		// Jack Henry: the body names the title, but a leading "Job ID 17182:" label kept the parser from it.
+		const companyOnlyParse = {
+			category: 'applied' as const, company: 'Jack Henry', role: null, classifier_code: 'general_template' as const,
+		};
+
+		it('should take the role and req id from the LLM but keep the parser company', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			// The fuller legal name the model reads off the subject is dropped on purpose — only role/req_id land.
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry & Associates', role: 'Entry Level Quality Assurance Engineer', req_id: '17182' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({
+				kind: 'merge', company: 'Jack Henry', role: 'Entry Level Quality Assurance Engineer',
+				externalId: '17182', detectedBy: 'parser',
+			});
+		});
+
+		it('should leave the role unset when the LLM finds none either', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Jack Henry', detectedBy: 'parser' });
 		});
 	});
 });

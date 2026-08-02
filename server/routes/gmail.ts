@@ -10,7 +10,7 @@ import { recoverRoleFromBody, tidyRole } from '../services/parser/roles';
 import * as db from '../services/db';
 import { isIgnorableEmail } from '../services/filters';
 import {
-	normalizeCompany,
+	companyTradeName,
 	companyDomainFromSender,
 	companiesSameEntity,
 } from '../services/companyIdentity';
@@ -32,7 +32,8 @@ const SYNC_PROGRESS_MARKER = '@sync-progress@';
 const PARSED_BY_LABEL: Record<ClassifierCode, string> = {
 	linkedin_applied:  'LinkedIn applied',
 	linkedin_rejected: 'LinkedIn rejected',
-	indeed_applied:    'Indeed',
+	indeed_applied:    'Indeed applied',
+	indeed_rejected:   'Indeed rejected',
 	general_template:  'General template',
 };
 
@@ -67,6 +68,7 @@ type ClassifyResult =
  */
 export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	const { threadId, messageId, subject, from, body } = email;
+    debug(`[sync] body subject="${subject}" from="${from}" cleaned=${JSON.stringify(body)}`);
 
 	// Hard-filter obvious non-job emails before calling the LLM.
 	if (isIgnorableEmail(subject, from, body)) {
@@ -78,14 +80,15 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// with zero AI cost. Falls back to the LLM for everything else.
 	let classification = parseEmail(subject, from, body);
 	let detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
-	// Carries a salvaged hint from a picker rejection into the full classifier below (see the reject branch).
-	let classifierHints: { company?: string | null; role?: string | null } | undefined;
+	// The parser's own company was judged NOT an employer, so the fallback below must not re-insert it.
+	let parserCompanyRejected = false;
+	// A role the picker found before declining to name a company — used only if the LLM returns none.
+	let pickerSalvagedRole: string | null = null;
 
 	// The general template can capture a noun phrase without knowing what it IS ("your interest in X" fits
 	// both "…in Axoni" and "…in Software Engineer"), so it emits the candidates untyped. Resolve them:
 	//   • < 2 candidates → there is nothing to choose between, and a lone span is as likely a role as a company
-	//     (the Leidos "Mid-Level Software Engineer" trap). Hand it to the full classifier to read the whole
-	//     email. Pass NO company hint — an untyped lone span is not a company we can trust.
+	//     (the Leidos "Mid-Level Software Engineer" trap). Hand it to the full classifier to read the whole email.
 	//   • ≥ 2 candidates → the cheap picker TYPES them (which is the company, which the role) without re-reading
 	//     the body. If it is not confident any span is a legitimate company, it returns null → slide to full.
 	if (classification?.ambiguous_spans && classification.category !== 'ignored') {
@@ -95,7 +98,7 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		debug(`[sync] ambiguous candidates=${JSON.stringify(spans)} parserGuess="${classification.company}" subject="${subject}"`);
 		if (spans.length < 2) {
 			debug(`[sync] <2 candidates; deferring to full classify subject="${subject}"`);
-			classifierHints = {};   // deliberately no hints — the lone untyped span is not a company we trust
+			parserCompanyRejected = true;   // a lone untyped span is not a company we can trust
 			classification = null;
 			detectedBy = 'llm';
 		} else {
@@ -104,10 +107,10 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 				debug(`[sync] picked: company="${picked.company}" role="${picked.role ?? ''}" subject="${subject}"`);
 				classification = { ...classification, company: picked.company, role: picked.role ?? classification.role };
 			} else if (picked) {
-				// Picker was not confident any span is a legitimate employer. Slide to the full classifier, carrying
-				// the role it DID find as a hint; do NOT hint the company (there is none it trusted).
+				// No span is a legitimate employer. Slide to the full classifier, keeping the role it DID find.
 				debug(`[sync] picker named no employer; deferring to full classify subject="${subject}"`);
-				classifierHints = { role: picked.role };
+				parserCompanyRejected = true;
+				pickerSalvagedRole = picked.role;
 				classification = null;
 				detectedBy = 'llm';
 			}
@@ -116,15 +119,11 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	}
 
 	if (!classification) {
-		// Hand the parser's best guesses to the LLM as reference so its full read can ADOPT the exact company
-		// spelling / recovered role or OVERRIDE them from the whole email, instead of the parser's work being
-		// discarded at this boundary and re-derived from scratch. A picker rejection has already prepared
-		// `classifierHints` (role only, no company); otherwise derive both from the parser. Cache-safe: the
-		// hints ride in the user turn, never the fixed system prompt.
-		const parserCandidates = extractGeneralCompanyRole(subject, body);
-		const hints = classifierHints ?? { company: parserCandidates?.company, role: parserCandidates?.role };
+		// The LLM reads the whole email unaided. Parser candidates used to ride along as reference hints; on the
+		// hand-corrected audit they bought nothing (company 88.6% hinted vs 90.9% unhinted, role tied at 73.5%)
+		// and anchored the model to a trimmed span ("Ametek" for "Ametek, Inc.").
 		try {
-			classification = await classifyEmail(subject, from, body, hints);
+			classification = await classifyEmail(subject, from, body);
 		} catch (err) {
 			// NOT marked synced: a classifier failure (Ollama down, malformed response) must not consume
 			// the email forever — it stays unsynced, counts into the sync's `failed` tally, and is retried
@@ -133,22 +132,19 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 			return { kind: 'failed', threadId, messageId };
 		}
 
-		// Safety net for a field the LLM STILL left null despite the hint. Never OVERRIDE a value the LLM
-		// produced (overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa"). Don't
-		// re-insert the parser's company when a picker rejection already flagged it as NOT an employer
-		// (classifierHints set) — that value is a role, not a company.
+		// Safety net for a field the LLM left null. Never OVERRIDE a value it produced (overriding used to
+		// truncate correct answers, "Sherpa 6" → "Sherpa"), and never re-insert a rejected company — it is a role.
 		if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
-			if (!classification.company && parserCandidates && !classifierHints) classification.company = parserCandidates.company;
-			if (!classification.role) classification.role = (classifierHints?.role ?? parserCandidates?.role) ?? recoverRoleFromBody(body, subject);
+			const parserCandidates = extractGeneralCompanyRole(subject, body);
+			if (!classification.company && parserCandidates && !parserCompanyRejected) classification.company = parserCandidates.company;
+			if (!classification.role) classification.role = (pickerSalvagedRole ?? parserCandidates?.role) ?? recoverRoleFromBody(body, subject);
 		}
 	} else if (classification.category !== 'ignored' && !classification.role) {
 		// The parser nailed company + category but couldn't pull a role from the templated text. Consult the
 		// LLM for the ROLE ONLY — the parser's company/category stay authoritative. A failed or empty call
 		// just leaves the role null → "Unknown Role", same as before.
 		try {
-			// Anchor the LLM to the company the parser already nailed so its role read isn't distracted into
-			// re-deciding the employer (whose value we keep regardless).
-			const roleFill = await classifyEmail(subject, from, body, { company: classification.company });
+			const roleFill = await classifyEmail(subject, from, body);
 			if (roleFill.role) {
 				classification = { ...classification, role: roleFill.role };
 				debug(`[sync] role filled by LLM: "${roleFill.role}" subject="${subject}"`);
@@ -174,8 +170,10 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// posted title verbatim.
 	if (role && !isFastApplyNotice(classifierCode)) role = tidyRole(role);
 
-	// Normalize legal suffixes for consistent dedup.
-	if (company) company = normalizeCompany(company);
+	// Resolve the name the employer goes by — the trade name behind a "dba", minus a LinkedIn page qualifier.
+	// It no longer truncates legal suffixes: the stored company must be the email's own wording, and
+	// companiesSameEntity already treats "Inc"/"LLC"/"Company" as descriptors when matching two spellings.
+	if (company) company = companyTradeName(company);
 
 	// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an employer
 	// and sometimes names itself as the company. Drop "HackerRank" as a company ONLY when the email is from

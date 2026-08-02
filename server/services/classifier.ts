@@ -4,6 +4,8 @@ import { debug } from '../logger';
 import { errMsg } from '../utils';
 import ollama from 'ollama';
 
+// KEEP the REFERENCE CANDIDATES section verbatim. Nothing sends candidates any more, but deleting it drops
+// role accuracy 74.2% → 56.1% on the audit set, and a reworded version scored the same 56.1%.
 const systemPrompt = `You classify and extract data from job-application emails. Given From, Subject, and Body, return ONLY this JSON (no prose, no markdown):
 
 {
@@ -176,23 +178,9 @@ async function loadModelWithRetry(): Promise<boolean> {
 	return false;
 }
 
-/** Render the optional parser hints as a user-turn block, or '' when there is nothing to hint. */
-function buildReferenceBlock(hints?: { company?: string | null; role?: string | null }): string {
-	if (!hints) return '';
-	const lines: string[] = [];
-	if (hints.company) lines.push(`- company: "${hints.company}"`);
-	if (hints.role)    lines.push(`- role: "${hints.role}"`);
-	if (lines.length === 0) return '';
-	return `\n\nReference candidates (from a deterministic parser — adopt when correct, override when the email disagrees):\n${lines.join('\n')}`;
-}
-
-export async function classifyEmail(subject: string, from: string, body: string, hints?: { company?: string | null; role?: string | null }): Promise<Classification> {
+export async function classifyEmail(subject: string, from: string, body: string): Promise<Classification> {
 	debug(`[classify] subject="${subject}" from="${from}" body="${body}..."`);
-	// Parser candidates ride in the USER turn only — the system prompt stays byte-identical so Ollama's
-	// prompt-eval cache (the thing warmup primes) survives. The model treats them as overridable references.
-	const referenceBlock = buildReferenceBlock(hints);
-	if (referenceBlock) debug(`[classify] hints company="${hints?.company ?? ''}" role="${hints?.role ?? ''}"`);
-	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}${referenceBlock}`, {
+	const chatResponse = await requestClassification(`From: ${from}\nSubject: ${subject}\n\nBody:\n${body}`, {
 		maxOutputTokens: 150,   // JSON output is ~40-60 tokens — extra room for longer role names
 	});
 	debug(`[classify] tokens: prompt=${chatResponse.prompt_eval_count ?? 0}`);

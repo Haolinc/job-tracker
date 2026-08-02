@@ -60,6 +60,36 @@ describe('buildBody — generic mail (cleanBody)', () => {
 	});
 });
 
+// Senders pad email (especially the hidden preheader) with invisible characters. Deleting one that occupies
+// width joins the words around it — that is what stored "Loyola Enterprises Inc..Unfortunately, …".
+describe('buildBody — invisible characters', () => {
+	const clean = (text: string) => buildBody(msg(part('text/plain', text)), 'careers@acme.com');
+
+	it('treats a non-breaking space as a space, not as nothing', () => {
+		expect(clean('Applied to Acme Inc.\u00A0Unfortunately, Acme has moved on.'))
+			.toBe('Applied to Acme Inc. Unfortunately, Acme has moved on.');
+	});
+	it('collapses a run of NBSP padding to a single space', () => {
+		expect(clean('Acme Inc.\u00A0\u00A0\u00A0Unfortunately, they moved on.'))
+			.toBe('Acme Inc. Unfortunately, they moved on.');
+	});
+	it('gives the same result for the &nbsp; entity and the literal character', () => {
+		// These two disagreed: the entity became a space, the literal was deleted.
+		expect(clean('Acme&nbsp;Corp')).toBe('Acme Corp');
+		expect(clean('Acme\u00A0Corp')).toBe('Acme Corp');
+	});
+	it('still deletes genuinely zero-width characters, adding no space', () => {
+		// The reader sees nothing there, so the parser must not see a space either.
+		expect(clean('Acme\u200BCorp')).toBe('AcmeCorp');   // ZWSP
+		expect(clean('Acme\u00ADCorp')).toBe('AcmeCorp');   // soft hyphen
+		expect(clean('Acme\uFEFFCorp')).toBe('AcmeCorp');   // BOM
+	});
+	it('treats the line and paragraph separators as breaks rather than joins', () => {
+		expect(clean('Acme Inc.\u2028Unfortunately, they moved on.')).toBe('Acme Inc. Unfortunately, they moved on.');
+		expect(clean('Acme Inc.\u2029Unfortunately, they moved on.')).toBe('Acme Inc. Unfortunately, they moved on.');
+	});
+});
+
 describe('buildBody — LinkedIn', () => {
 	it('keeps the card line structure and drops the "similar jobs" recommendations', () => {
 		const out = buildBody(
@@ -72,11 +102,42 @@ describe('buildBody — LinkedIn', () => {
 });
 
 describe('buildBody — Indeed', () => {
+	// A REAL confirmation card, line-for-line from a sync log (each line was its own block element). The
+	// wording matters: "The following items were sent to …" is Indeed's — "Your application was sent to …"
+	// is LINKEDIN's, and the old fixture used it, missing the "Good luck!" tail that broke 36 companies.
+	const indeedCard = (role: string, company: string, location: string, reviews?: string) =>
+		[
+			"We'll help you get started", 'Application submitted', role, company, `- ${location}`,
+			...(reviews ? [reviews] : []),                     // some employers have no reviews line
+			`The following items were sent to ${company}. Good luck!`,
+			'&bull;', 'Application', '&bull;', 'Resume', 'Next steps',
+		].map(line => `<div>${line}</div>`).join('');
+
+	const employerLine = (html: string) =>
+		buildBody(msg(part('text/plain', 'Indeed Application'), part('text/html', html)), 'indeedapply@indeed.com')
+			.split('\n')[0];
+
 	it('lifts the employer out of the HTML part and prepends "Employer:"', () => {
-		const out = buildBody(
-			msg(part('text/plain', 'Indeed Application'), part('text/html', '<p>Your application was sent to Initech.</p>')),
-			'indeedapply@indeed.com',
-		);
-		expect(out.startsWith('Employer: Initech')).toBe(true);
+		expect(employerLine(indeedCard('Cleared Junior Software Engineer', 'Amentum', 'Washington, DC 20024', '5,595 reviews')))
+			.toBe('Employer: Amentum');
+	});
+	it('keeps a period INSIDE the company name', () => {
+		// Regression: a "[^.]+" capture stopped at the first period and stored "BuildingReports".
+		expect(employerLine(indeedCard('Quality Assurance Tester', 'BuildingReports.com', 'Remote', '11 reviews')))
+			.toBe('Employer: BuildingReports.com');
+	});
+	it('keeps a period that ENDS the company name, dropping only the template’s own', () => {
+		// "Epic Kids Inc." renders as "…sent to Epic Kids Inc.. Good luck!" — exactly one of those dots is ours.
+		expect(employerLine(indeedCard('Junior Software Engineer, Full-Stack', 'Epic Kids Inc.', 'San Jose, CA', '2 reviews')))
+			.toBe('Employer: Epic Kids Inc.');
+	});
+	it('adds no period to a company that has none, and handles a card with no reviews line', () => {
+		expect(employerLine(indeedCard('Quality Assurance Analyst (onsite)', 'GTM Payroll Services Inc', 'Clifton Park,NY,12065')))
+			.toBe('Employer: GTM Payroll Services Inc');
+	});
+	it('adds no Employer line when the template no longer matches, deferring to the LLM', () => {
+		// Better to lose the deterministic path than to invent a company. The sync summary's
+		// "Indeed applied parsed" count drops and makes a template change visible.
+		expect(employerLine('<div>The following items were delivered to Initech.</div>')).not.toContain('Employer:');
 	});
 });
