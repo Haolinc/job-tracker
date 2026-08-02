@@ -26,8 +26,9 @@ const configButton = document.getElementById('config-button') as HTMLButtonEleme
 const configPanel = document.getElementById('config-panel') as HTMLElement;
 const saveConfigButton = document.getElementById('save-config-button') as HTMLButtonElement;
 
-// Every config field is a plain text input EXCEPT the model, which is a dropdown of installed models.
-type TextConfigField = Exclude<keyof LauncherConfig, 'ollamaModel'>;
+// Every config field is a plain text input EXCEPT the model (a dropdown of installed models) and debug
+// logging (a checkbox) — both are read and written on their own below.
+type TextConfigField = Exclude<keyof LauncherConfig, 'ollamaModel' | 'debugLogging'>;
 
 // Record<…> makes the compiler verify an input exists for every text field — and the derived list below
 // keeps load and save in lockstep with the interface.
@@ -39,6 +40,7 @@ const configInputs: Record<TextConfigField, HTMLInputElement> = {
 	port: document.getElementById('server-port') as HTMLInputElement,
 };
 const configFields = Object.keys(configInputs) as TextConfigField[];
+const debugLoggingCheckbox = document.getElementById('debug-logging') as HTMLInputElement;
 const modelSelect = document.getElementById('ollama-model') as HTMLSelectElement;
 const refreshModelsButton = document.getElementById('refresh-models-button') as HTMLButtonElement;
 const pullModelInput = document.getElementById('pull-model-input') as HTMLInputElement;
@@ -310,6 +312,7 @@ openLogsButton.addEventListener('click', () => launcher.openLogsFolder());
 async function loadConfigIntoPanel(): Promise<void> {
 	const config = await launcher.getConfig();
 	for (const configField of configFields) configInputs[configField].value = config[configField];
+	debugLoggingCheckbox.checked = config.debugLogging === 'true';   // any other value, including absent, is off
 	savedOllamaModel = config.ollamaModel;
 	await refreshModelPicker(savedOllamaModel);
 	await refreshIncompleteDownloads();
@@ -470,6 +473,7 @@ saveConfigButton.addEventListener('click', async () => {
 	// When the picker is disabled (Ollama down, or nothing installed) there's no real selection to save —
 	// keep the previously saved model rather than overwriting it with an empty value.
 	config.ollamaModel = modelSelect.disabled ? savedOllamaModel : modelSelect.value;
+	config.debugLogging = debugLoggingCheckbox.checked ? 'true' : 'false';
 	if (!config.port) config.port = DEFAULT_PORT;   // an empty PORT= line would break the server
 	await launcher.saveConfig(config);
 	configPanel.classList.remove('open');

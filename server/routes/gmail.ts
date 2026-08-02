@@ -17,7 +17,7 @@ import {
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
 import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent, isSyncCancelRequested, requestSyncCancel, clearSyncCancel } from '../services/syncState';
-import { debug, guiLine } from '../logger';
+import { debug, info, guiLine } from '../logger';
 import type { Application, ClassifierCode, EmailResult, EmailRef, Status } from '../types';
 
 const router = Router();
@@ -337,7 +337,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const ALLOWED_DAYS = [30, 60, 90, 180];
 		const requested    = Number(req.body?.days ?? req.query?.days);
 		const days         = ALLOWED_DAYS.includes(requested) ? requested : 30;
-		debug(`[sync] scan window: ${days} days`);
+		info(`[sync] scan window: ${days} days`);
 
 		const allIds   = await listJobMessageIds(req.session.tokens!, days);
 		// The mailbox being synced — stamped on each tracked email so its "open in Gmail" link targets the
@@ -349,7 +349,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const classifyFailedIds: string[] = [];   // messages the classifier errored on — not synced, retried next run
 		let added = 0, updated = 0, skipped = allIds.length - newIds.length;
 		const parsedCountByClassifierCode = new Map<string, number>();
-		debug(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
+		info(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
 		res.setHeader('Content-Type', 'application/x-ndjson');
 		res.setHeader('Cache-Control', 'no-cache');
@@ -475,8 +475,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const parsedByBreakdown = Object.entries(PARSED_BY_LABEL)
 			.map(([classifierCode, label]) => `${label} parsed: ${parsedCountByClassifierCode.get(classifierCode) ?? 0}`)
 			.join(', ');
-		debug(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (${parsedByBreakdown})`);
-		debug(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
+		info(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (${parsedByBreakdown})`);
+		info(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
 		// A user cancel ends the run as 'cancelled' (partial counts, not an error) — everything processed so far
 		// is saved; the rest is left for the next sync.

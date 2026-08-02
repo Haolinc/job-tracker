@@ -3,7 +3,10 @@ import dotenv from 'dotenv';
 // unset (dev) falls back to dotenv's default of ./.env.
 dotenv.config(process.env.ENV_FILE ? { path: process.env.ENV_FILE } : undefined);
 
-import { enable } from './logger';
+import { enable, setDebugLogging } from './logger';
+// DEBUG_LOG is the launcher's "Debug logging" checkbox. Off (the default) keeps the per-email trace out of the
+// file, leaving the sync milestones and any warning/error — enough to see what ran without megabytes of email.
+setDebugLogging(process.env.DEBUG_LOG === 'true');
 // LOG_DIR likewise redirects the logs/ folder to a writable location when packaged; unset → next to the module.
 if (process.env.LOG_TO_FILE !== 'false') enable(process.env.LOG_DIR ? { directory: process.env.LOG_DIR } : undefined);
 

@@ -16,6 +16,9 @@ interface LauncherConfig {
 	port: string;
 	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
 	ollamaModel: string;
+	/** 'true' turns on the server's per-email trace logging. Every field here mirrors a .env line, so this is
+	 *  the string the file holds, not a boolean — the panel's checkbox converts. Anything else means off. */
+	debugLogging: string;
 }
 
 /** What the control panel needs to render the status dots and button states. */
