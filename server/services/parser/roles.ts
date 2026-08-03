@@ -14,12 +14,22 @@ export function tidyRole(s: string): string {
 	// keeps a real year-prefixed title ("2026 Emerging Talent Software Engineers") and levels ("3D Designer").
 	const lead = s.match(/^#?[A-Za-z]{0,4}[-_]?[0-9][0-9A-Za-z-]*\s+(?=\S)/);
 	if (lead && (lead[0].match(/[0-9]/g)?.length ?? 0) >= 5) s = s.slice(lead[0].length).trim();
+	// LEADING requisition id joined to the title by a dash or colon ("SOFTW005349 - Software Developer I",
+	// "R2026-1234: Platform Engineer"). The space-separated rule above misses these — its 4-letter prefix cap
+	// can't reach "SOFTW", and the id abuts a dash, not a space. Match one leading token then " - " / " : ",
+	// gated on ≥4 digits so a real level ("3D - Modeler", "L3 - Support") is left intact.
+	const leadReqJoined = s.match(/^#?[A-Za-z0-9][A-Za-z0-9_/-]*\s*[-–:]\s+(?=\S)/);
+	if (leadReqJoined && (leadReqJoined[0].match(/[0-9]/g)?.length ?? 0) >= 4) s = s.slice(leadReqJoined[0].length).trim();
 	// Brace- or bracket-wrapped id token anywhere ("Associate {TS9118550}" → "Associate",
 	// "Development Engineer in Test [208728]" → "…Test"). Bracket form requires a digit so "[Remote]" survives.
 	s = s.replace(/\s*\{[^}]*\}\s*/g, ' ').trim();
 	s = s.replace(/\s*\[\s*#?[A-Za-z]{0,5}[-_: ]?\d[\dA-Za-z._\-/ ]*\]\s*/g, ' ').trim();
 	s = s.replace(/\s*\(\s*(?:ref(?:erence)?|requisition|req|job|id|no)\b[^)]*\)\s*$/i, '').trim();   // "(reference number: 771221)", "(Req ID: …)", "(ID: 3208334)"
 	s = s.replace(/\s*\(\s*#?[A-Za-z]{0,5}[-_: ]?\d[\dA-Za-z._\-/ ]*\)\s*$/, '').trim();               // pure-ID parenthetical "(500544)", "(124432BR)", "(2026-75736)"
+	// trailing SPACE-separated HYPHENATED numeric req id ("Software Test Method Validation (TMV) 26-00635",
+	// "… Engineer 2026-75736"). The dash-prefixed rule below sees only the "-00635" half and leaves the "26",
+	// so strip the whole "26-00635" here first. The internal dash keeps a bare trailing level ("Engineer 3") safe.
+	s = s.replace(/\s+#?\d{1,4}[-_]\d{2,}[A-Za-z]{0,3}$/, '').trim();
 	// trailing DASH-separated requisition id ("… Developer Platform Team - 2026-75736", "… - R28486").
 	// Excludes a bare year ("- 2026") and short levels ("- L3"): needs a hyphenated number, letters+≥2 digits, or ≥5 digits.
 	s = s.replace(/\s*[-–]\s*#?(?:\d{1,4}[-_]\d{2,}|[A-Za-z]{1,6}[-_]?\d{2,}|\d{5,})[A-Za-z]{0,3}$/, '').trim();
@@ -30,6 +40,10 @@ export function tidyRole(s: string): string {
 	s = s.replace(/\s+(?:onsite|hybrid|remote)\b.*$/i, '').trim();                                     // work-mode + everything after ("… Onsite Great River, NY"); "(Remote)" is safe (paren breaks the \s+ anchor)
 	s = s.replace(/\s*[-–,]\s*[A-Z][A-Za-z. ]+?,\s*[A-Z]{2}\b.*$/, '').trim();                         // trailing "- City, ST" / ", City, ST"
 	s = s.replace(/\s+(?:United\s+(?:States|Kingdom)|USA?|UK)\b(?:\s*\([A-Za-z]{2,3}\))?$/i, '').trim();   // trailing "… United States (US)"
+	// trailing role-descriptor noun the sentence patterns leave attached ("Software Development Engineer in
+	// Test opportunity", "… - Campus Hiring - 2026 position", "… Engineer opening"). A real title never ends on
+	// one of these bare nouns; stripping "position" here also salvages titles cleanGeneralRole would reject.
+	s = s.replace(/\s+(?:opportunit(?:y|ies)|openings?|positions?|roles?)$/i, '').trim();
 	return s.replace(/[\s,\-–]+$/, '').trim();   // leftover trailing separators
 }
 
@@ -48,6 +62,11 @@ function cleanGeneralRole(s: string | null | undefined): string | null {
 	if (/^(?:remote|hybrid|on[\s-]?site)\b(?:\s*[/,-]\s*(?:remote|hybrid|on[\s-]?site)\b)*[\s/,-]*$/i.test(s)) return null;
 	if (s.length < 2 || s.length > 80) return null;          // 80 (not 60) so long real titles survive ("(Entry level) Full Stack Software Engineer (LLM application Development)")
 	if (/\bposition\b/i.test(s)) return null;                // "Software Engineer II, Off position here" → overran
+	// "for the" is prose, never part of a title — a recovery pattern anchored on "apply to [Company] for the
+	// [Role] role" swallowed the company ("Astronomer for the Software Engineer…") or a department line
+	// ("Recruiting team for the following"). Rejecting it lets the chain fall through to the pattern that
+	// captures the real title from the "…for the [Role] role" tail instead.
+	if (/\bfor the\b/i.test(s)) return null;
 	// Reject sentence fragments where a recovery pattern over-captured prose — verbs/auxiliaries/pronouns
 	// never appear in a real job title ("Talent Acquisition team will be evaluating applications for this").
 	// Case-SENSITIVE on purpose: it targets lowercase prose words, not Title-Cased role words.

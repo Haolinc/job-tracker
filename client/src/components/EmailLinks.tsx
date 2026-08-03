@@ -1,5 +1,5 @@
 import type { EmailRef } from '../types';
-import { STATUS_LABELS, STATUS_COLORS } from '../constants';
+import { STATUS_LABELS, STATUS_COLORS, emailStageLabel } from '../constants';
 import { gmailUrl } from '../utils/gmailUrl';
 
 interface Props {
@@ -8,31 +8,29 @@ interface Props {
 }
 
 /**
- * Renders one "open in Gmail" link per tracked email, chronological, colour-coded by stage. Lets the
- * user jump straight to the actual message behind each status change. Renders nothing when there are
- * no tracked emails (manual/CSV entries).
+ * Renders one "open in Gmail" link per tracked email, colour-coded by stage, in the order they are STORED
+ * on the application — never re-sorted, because that order is the one the user arranges in the edit modal
+ * (a sync appends new emails to the end, so a hand-picked order survives later syncs). Lets the user jump
+ * straight to the actual message behind each status change. Renders nothing when there are no tracked
+ * emails (manual/CSV entries).
  */
 export default function EmailLinks({ emails, account }: Props) {
 	if (emails.length === 0) return null;
-	const ordered = [...emails].sort((a, b) => a.date.localeCompare(b.date));
-
 	return (
 		<div data-testid="email-links" className="mt-2 flex flex-wrap gap-1">
-			{ordered.map(e => (
+			{emails.map(emailRef => (
 				<a
-					key={e.messageId}
+					key={emailRef.messageId}
 					data-testid="email-link"
-					href={gmailUrl(e.messageId, account)}
+					href={gmailUrl(emailRef.messageId, account)}
 					target="_blank"
 					rel="noopener noreferrer"
-					title={
-						e.fast_apply
-							? `Open the LinkedIn/Indeed fast-apply email in Gmail${e.date ? ` (${e.date})` : ''}`
-							: `Open the ${STATUS_LABELS[e.category]} email in Gmail${e.date ? ` (${e.date})` : ''}`
-					}
-					className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full hover:underline ${STATUS_COLORS[e.category]}`}
+					title={emailRef.fast_apply
+						? `Open the LinkedIn/Indeed fast-apply email in Gmail${emailRef.date ? ` (${emailRef.date})` : ''}`
+						: `Open the ${STATUS_LABELS[emailRef.category]} email in Gmail${emailRef.date ? ` (${emailRef.date})` : ''}`}
+					className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full hover:underline ${STATUS_COLORS[emailRef.category]}`}
 				>
-					{e.fast_apply ? `⚡ Fast Applied` : `✉ ${STATUS_LABELS[e.category]}`}
+					{`${emailRef.fast_apply ? '⚡' : '✉'} ${emailStageLabel(emailRef)}`}
 				</a>
 			))}
 		</div>

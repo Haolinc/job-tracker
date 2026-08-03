@@ -31,13 +31,13 @@ export function useApplications() {
 
 	const update = async (id: string, data: Partial<Application>): Promise<Application> => {
 		const updated = await updateApplication(id, data);
-		setApplications(prev => prev.map(a => a.id === id ? updated : a));
+		setApplications(previous => previous.map(app => app.id === id ? updated : app));
 		return updated;
 	};
 
 	const remove = async (id: string): Promise<void> => {
 		await deleteApplication(id);
-		setApplications(prev => prev.filter(a => a.id !== id));
+		setApplications(previous => previous.filter(app => app.id !== id));
 	};
 
 	return { applications, loading, error, fetchAll, add, update, remove };

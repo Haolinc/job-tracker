@@ -1,4 +1,4 @@
-import type { Application, NewApplication, Status, InterviewStep, EmailRef } from '../types';
+import type { Application, NewApplication, Status, InterviewStep, EmailRef, EmailOrigin } from '../types';
 import { STATUS_LABELS, STEP_LABELS } from '../constants';
 import { parseEmails, serializeEmails } from './emailRefs';
 
@@ -32,20 +32,20 @@ const HEADER_TO_FIELD: Record<string, Field> = {
 
 // Accept either the human label ("Applied") or the raw value ("applied"), case-insensitively.
 const STATUS_BY_LABEL = new Map<string, Status>(
-	(Object.entries(STATUS_LABELS) as [Status, string][]).flatMap(([k, v]) => [[k, k], [v.toLowerCase(), k]]),
+	(Object.entries(STATUS_LABELS) as [Status, string][]).flatMap(([status, label]) => [[status, status], [label.toLowerCase(), status]]),
 );
 const STEP_BY_LABEL = new Map<string, InterviewStep>(
-	(Object.entries(STEP_LABELS) as [InterviewStep, string][]).flatMap(([k, v]) => [[k, k], [v.toLowerCase(), k]]),
+	(Object.entries(STEP_LABELS) as [InterviewStep, string][]).flatMap(([step, label]) => [[step, step], [label.toLowerCase(), step]]),
 );
 
 // Normalize a header for matching: drop the surrounding whitespace, lower-case, and treat
 // underscores/hyphens as spaces so "Date_Applied", "date-applied", "DATE APPLIED" all collapse.
-const normalizeHeader = (h: string) => h.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+const normalizeHeader = (header: string) => header.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 
 // Drop a leading UTF-8 BOM (0xFEFF) — the export prepends one for Excel's sake.
 const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 
-const pad2 = (n: number) => String(n).padStart(2, '0');
+const pad2 = (value: number) => String(value).padStart(2, '0');
 
 // Coerce a date cell to ISO "yyyy-MM-dd" — the format the DB stores and that <input type="date">
 // (the edit window) can display. The app's own export is already ISO, but a spreadsheet round-trip
@@ -53,53 +53,56 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 // input shows as blank. Handles ISO, year-first and day/month-first slash forms, plus a Date.parse
 // fallback for things like "May 1, 2026". Returns null for blank/unparseable cells.
 function toIsoDate(raw: string): string | null {
-	const s = raw.trim();
-	if (!s) return null;
+	const cellText = raw.trim();
+	if (!cellText) return null;
 
-	const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);             // already ISO (drop any time part)
-	if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+	const isoMatch = cellText.match(/^(\d{4})-(\d{2})-(\d{2})/);              // already ISO (drop any time part)
+	if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
 
-	let m = s.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/);      // yyyy/M/d
-	if (m) return `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}`;
+	const yearFirstMatch = cellText.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/);   // yyyy/M/d
+	if (yearFirstMatch) return `${yearFirstMatch[1]}-${pad2(+yearFirstMatch[2])}-${pad2(+yearFirstMatch[3])}`;
 
-	m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);        // M/d/yyyy (or d/M/yyyy)
-	if (m) {
-		const a = +m[1], b = +m[2];
-		const [month, day] = a > 12 ? [b, a] : [a, b];          // first field >12 ⇒ it's the day
-		if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return `${m[3]}-${pad2(month)}-${pad2(day)}`;
+	const yearLastMatch = cellText.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);  // M/d/yyyy (or d/M/yyyy)
+	if (yearLastMatch) {
+		const firstField = +yearLastMatch[1], secondField = +yearLastMatch[2];
+		const [month, day] = firstField > 12 ? [secondField, firstField] : [firstField, secondField];   // first field >12 ⇒ it's the day
+		if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return `${yearLastMatch[3]}-${pad2(month)}-${pad2(day)}`;
 	}
 
-	const d = new Date(s);                                       // last resort: "May 1, 2026", etc.
-	return isNaN(d.getTime()) ? null : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+	const parsedDate = new Date(cellText);                                   // last resort: "May 1, 2026", etc.
+	return isNaN(parsedDate.getTime())
+		? null
+		: `${parsedDate.getFullYear()}-${pad2(parsedDate.getMonth() + 1)}-${pad2(parsedDate.getDate())}`;
 }
 
 // RFC-4180 parser: splits CSV text into rows of cells, honouring quoted fields that contain
 // commas, quotes (escaped as ""), or newlines. Tolerates both \n and \r\n line endings.
 function parseCsv(text: string): string[][] {
 	const rows: string[][] = [];
-	let row: string[] = [];
-	let cell = '';
-	let quoted = false;
-	for (let i = 0; i < text.length; i++) {
-		const c = text[i];
-		if (quoted) {
-			if (c === '"') {
-				if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false;
+	let currentRow: string[] = [];
+	let currentCell = '';
+	let insideQuotes = false;
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index];
+		if (insideQuotes) {
+			// A doubled quote inside a quoted field is one literal quote; a lone one closes the field.
+			if (character === '"') {
+				if (text[index + 1] === '"') { currentCell += '"'; index++; } else insideQuotes = false;
 			} else {
-				cell += c;
+				currentCell += character;
 			}
-		} else if (c === '"') {
-			quoted = true;
-		} else if (c === ',') {
-			row.push(cell); cell = '';
-		} else if (c === '\n') {
-			row.push(cell); cell = ''; rows.push(row); row = [];
-		} else if (c !== '\r') {
-			cell += c;
+		} else if (character === '"') {
+			insideQuotes = true;
+		} else if (character === ',') {
+			currentRow.push(currentCell); currentCell = '';
+		} else if (character === '\n') {
+			currentRow.push(currentCell); currentCell = ''; rows.push(currentRow); currentRow = [];
+		} else if (character !== '\r') {
+			currentCell += character;
 		}
 	}
-	if (cell !== '' || row.length > 0) { row.push(cell); rows.push(row); }
-	return rows.filter(r => r.some(c => c.trim() !== ''));
+	if (currentCell !== '' || currentRow.length > 0) { currentRow.push(currentCell); rows.push(currentRow); }
+	return rows.filter(row => row.some(cell => cell.trim() !== ''));
 }
 
 /** A parsed CSV row: the importable fields plus the exported application id, if the file carried one. */
@@ -321,9 +324,37 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	// EVERY holder per message id — legacy data can have one email on several applications, and the
 	// claiming row must strip them all.
 	const holdersByMessageId = new Map<string, Application[]>();
-	existing.forEach(app => app.emails.forEach(email =>
-		holdersByMessageId.set(email.messageId, [...(holdersByMessageId.get(email.messageId) ?? []), app]),
-	));
+	// …and the origin each message id ALREADY carries on the board, which is the authority for the tagging
+	// rule below. Built in the same pass: one message id can sit on several applications in legacy data, but
+	// they are the same email, so the first holder's origin is as good as any.
+	const boardOriginByMessageId = new Map<string, EmailOrigin | undefined>();
+	existing.forEach(app => app.emails.forEach(heldRef => {
+		holdersByMessageId.set(heldRef.messageId, [...(holdersByMessageId.get(heldRef.messageId) ?? []), app]);
+		if (!boardOriginByMessageId.has(heldRef.messageId)) boardOriginByMessageId.set(heldRef.messageId, heldRef.origin);
+	}));
+
+	/**
+	 * Tag one row's refs per the import rule: a messageId the board already holds KEEPS the origin it has
+	 * there (an import never relabels 'synced' or 'manual' — nor a legacy untagged ref, which stays
+	 * untagged rather than being handed a provenance it never had), and anything else is new to this
+	 * database and becomes 'imported'. Editing an id in the file therefore produces a ref the board has
+	 * never seen — a new identity, hence 'imported' — while MOVING a ref between rows keeps its origin,
+	 * because an origin says how the email entered the database, not which row holds it today.
+	 *
+	 * Nothing here can be overridden from the file: parseEmails never reads an origin out of a cell, so this
+	 * assigns provenance rather than trusting any, and a hand-edited cell cannot forge one.
+	 */
+	const withOriginsResolvedAgainstBoard = (rowEmails: EmailRef[]): EmailRef[] => rowEmails.map(fileRef => {
+		const boardAlreadyHoldsThisId = boardOriginByMessageId.has(fileRef.messageId);
+		const resolvedOrigin = boardAlreadyHoldsThisId ? boardOriginByMessageId.get(fileRef.messageId) : 'imported';
+		// Spread WITHOUT the key when there is no origin, so a legacy ref stays clean instead of gaining an
+		// `origin: undefined` that reads as a tracked-but-empty provenance.
+		return resolvedOrigin ? { ...fileRef, origin: resolvedOrigin } : { ...fileRef };
+	});
+	// Every rule below reads emails off THESE rows, so the resolved origin reaches matching, the field diff,
+	// and the synced-email list alike — the file's claimed origin never leaks past this point.
+	const rowsWithResolvedOrigins = parsed.apps.map(parsedRow => ({ ...parsedRow, emails: withOriginsResolvedAgainstBoard(parsedRow.emails) }));
+
 	const boardByCompanyRole = new Map<string, Application[]>();
 	existing.forEach(app => {
 		const appKey = companyRoleKey(app.company, app.role);
@@ -331,7 +362,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	});
 	// File-side ambiguity for the company+role fallback: how many id-less, email-less rows share each key.
 	const fallbackRowCountByKey = new Map<string, number>();
-	for (const parsedRow of parsed.apps) {
+	for (const parsedRow of rowsWithResolvedOrigins) {
 		if (parsedRow.id || parsedRow.emails.length > 0) continue;
 		const rowKey = companyRoleKey(parsedRow.company, parsedRow.role);
 		fallbackRowCountByKey.set(rowKey, (fallbackRowCountByKey.get(rowKey) ?? 0) + 1);
@@ -346,7 +377,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	const updates: PlannedUpdate[] = [];
 	let skipped = 0;
 
-	for (const parsedRow of parsed.apps) {
+	for (const parsedRow of rowsWithResolvedOrigins) {
 		// Split the match key off the importable fields — the id is identity, never data.
 		const { id: fileId, ...rowFields } = parsedRow;
 		let target: Application | undefined;
@@ -428,7 +459,7 @@ export function buildImportPlan(parsed: ParsedCsv, existing: Application[]): Imp
 	}
 
 	// Every email id in the file, for the synced-email skip list (ids are file-unique after validation).
-	const syncEmails = parsed.apps.flatMap(parsedRow => parsedRow.emails);
+	const syncEmails = rowsWithResolvedOrigins.flatMap(parsedRow => parsedRow.emails);
 
 	return { creates, updates, moves, deletes, syncEmails, skipped };
 }

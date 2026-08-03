@@ -26,12 +26,24 @@ function decodePart(part: gmail_v1.Schema$MessagePart): string {
 	return Buffer.from(part.body!.data!, 'base64url').toString('utf-8');
 }
 
+// Block-level / line-break tags whose boundaries are actual line breaks in the rendered email. HTML has no
+// hard-wraps — the browser wraps visually — so every one of these boundaries is a real break the reader sees,
+// unlike a lone newline in plain text. We turn them into a blank-line paragraph break (not a space) so the
+// downstream whitespace collapse keeps them as "\n" boundaries, and a company name in one block can't run
+// into the text of the next ("…applying to Meta" sits in its own block, ABOVE the "Hi Hao Lin" greeting, so
+// it must not flatten to "applying to Meta Hi Hao Lin"). Everything else — inline tags: span, a, b, strong,
+// em, font, img — is dropped to a single space so words on the same rendered line stay on it.
+const HTML_BLOCK_BOUNDARY = /<\/?(?:p|div|br|hr|tr|li|ul|ol|table|blockquote|h[1-6])\b[^>]*>/gi;
+
 function stripHtml(html: string): string {
 	return html
 		.replace(/<style[\s\S]*?<\/style>/gi, '')
 		.replace(/<script[\s\S]*?<\/script>/gi, '')
-		.replace(/<[^>]+>/g, ' ')
-		.replace(/\s+/g, ' ')
+		.replace(HTML_BLOCK_BOUNDARY, '\n\n')   // block/line-break boundary -> paragraph break (survives the collapse as a boundary)
+		.replace(/<[^>]+>/g, ' ')               // remaining inline tags -> space, keeping same-line words together
+		.replace(/[^\S\n]+/g, ' ')              // collapse runs of spaces/tabs, leaving newlines intact
+		.replace(/ *\n */g, '\n')               // drop spaces hugging a newline
+		.replace(/\n{2,}/g, '\n\n')             // cap consecutive breaks at a single blank line
 		.trim();
 }
 
@@ -52,8 +64,8 @@ const FOOTER_RE = /please do not reply to this (email|message)|this is an auto(?
  *  7. Truncate at the first footer signal (unsubscribe notices, copyright, social links).
  *  8. Collapse whitespace.
  */
-// HTML entities + Unicode invisible/zero-width characters (email tracking spacers): ZWSP, ZWNJ,
-// ZWJ, LRM, RLM, LSEP, PSEP, SHY, BOM, NBSP. Shared by cleanBody and cleanLinkedInBody.
+// HTML entities + the invisible characters senders pad email with. The last three rules split those by
+// what they ARE: deleting one that occupies width joins the words around it. Shared with cleanLinkedInBody.
 function decodeEntities(text: string): string {
 	return text
 		.replace(/&nbsp;/gi,   ' ')
@@ -72,7 +84,9 @@ function decodeEntities(text: string): string {
 		.replace(/&#x201[cd];/gi, '"')    // hex curly double quotes (&#x201C; &#x201D;)
 		.replace(/&#x[0-9a-f]+;/gi, ' ')  // any other hex entity \u2192 space (mirrors the decimal rule below)
 		.replace(/&#\d+;/g,    ' ')
-		.replace(/[\u00A0\u00AD\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
+		.replace(/[\u00AD\u200B-\u200F\uFEFF]/g, '')   // zero-width: renders as nothing, so leave nothing
+		.replace(/\u00A0/g, ' ')                       // NBSP is a SPACE \u2014 deleting it glued "Inc..Unfortunately"
+		.replace(/[\u2028\u2029]/g, '\n');             // line/paragraph separators are breaks, not spacers
 }
 
 function cleanBody(raw: string): string {
@@ -106,8 +120,28 @@ function cleanBody(raw: string): string {
 	const footerIdx = text.search(FOOTER_RE);
 	if (footerIdx > 0) text = text.slice(0, footerIdx);
 
-	// 8. Collapse whitespace.
-	return text.replace(/\s+/g, ' ').trim();
+	// 8. Collapse whitespace, KEEPING paragraph breaks as boundaries.
+	return collapseWhitespaceKeepingParagraphs(text);
+}
+
+/**
+ * Collapse whitespace but preserve a paragraph break as a single "\n" boundary. Plain-text senders separate
+ * paragraphs with a blank line — the reliable boundary between "…at the MTA" and the "Dear Hao Lin" greeting —
+ * but ALSO hard-wrap long sentences with a lone newline ("We have\nreceived your application"). The old
+ * blanket `\s+ -> " "` erased the paragraph boundary, so a company capture ran straight through the greeting
+ * ("MTA Dear Hao Lin Thank"); keeping EVERY newline would instead split hard-wrapped sentences. So: a
+ * blank-line paragraph break becomes one "\n" (which the parser's `[^.!?\n]` patterns stop at), while a lone
+ * hard-wrap newline collapses to a space. HTML bodies have no newlines by this point, so they are unaffected.
+ */
+function collapseWhitespaceKeepingParagraphs(text: string): string {
+	const PARAGRAPH_BOUNDARY = String.fromCharCode(1);   // transient SOH sentinel; never occurs in email text
+	return text
+		.replace(/\r\n?/g, '\n')                           // normalize CRLF / lone CR to LF
+		.replace(/[^\S\n]+/g, ' ')                         // collapse runs of spaces/tabs, leave newlines
+		.replace(/ *\n[ \t]*\n\s*/g, PARAGRAPH_BOUNDARY)   // blank-line paragraph break -> boundary marker
+		.replace(/ *\n */g, ' ')                           // remaining lone (hard-wrap) newline -> space
+		.split(PARAGRAPH_BOUNDARY).join('\n')              // marker -> single boundary newline
+		.trim();
 }
 
 /**
@@ -126,8 +160,8 @@ function cleanLinkedInBody(raw: string): string {
 	text = text.replace(/(?:[*\-=_~+•]\s?){4,}/g, ' ');          // divider runs ("------", glued to the date)
 	return text
 		.split('\n')
-		.map(l => l.replace(/[ \t]+/g, ' ').trim())
-		.filter(l => l && !/^view job:?$/i.test(l))
+		.map(line => line.replace(/[ \t]+/g, ' ').trim())
+		.filter(line => line && !/^view job:?$/i.test(line))
 		.join('\n');
 }
 
@@ -171,8 +205,12 @@ export function buildBody(msg: gmail_v1.Schema$Message, from: string): string {
 
 	if (from.includes('indeedapply@indeed.com')) {
 		const richBody = cleanBody(extractHtmlBody(part) || extractBody(part));
-		const sentTo   = richBody.match(/sent to ([^.]+)\./i);
-		const prefix   = sentTo ? `Employer: ${sentTo[1].trim()}\n\n` : '';
+		// Indeed writes "The following items were sent to [Company]. Good luck!" — read the name between the
+		// template's own words so a period inside it survives ("BuildingReports.com", "Epic Kids Inc.").
+		// Bounding one side only failed both ways: [^.]+ cut at the first period, line-end swallowed the tail.
+		// No match means no Employer line, so parseIndeed bails to the LLM rather than invent a company.
+		const employer = richBody.match(/sent to (.+?)\.\s*Good luck!/i)?.[1]?.trim();
+		const prefix   = employer ? `Employer: ${employer}\n\n` : '';
 		return prefix + richBody.slice(0, prefix ? 1000 : 3000);
 	}
 

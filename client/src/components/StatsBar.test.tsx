@@ -20,7 +20,7 @@ describe('StatsBar', () => {
 	it('should render zeros when the list is empty', () => {
 		render(<StatsBar applications={[]} />);
 		expect(screen.getByTestId('stat-total')).toHaveTextContent('0');
-        expect(screen.getByTestId('stat-active')).toHaveTextContent('0');           // non-rejected
+		expect(screen.getByTestId('stat-active')).toHaveTextContent('0');           // non-rejected
 		expect(screen.getByTestId('stat-offers')).toHaveTextContent('0');
 		expect(screen.getByTestId('stat-interview-rate')).toHaveTextContent('0.0%');
 	});

@@ -4,19 +4,19 @@ import type { Application, NewApplication, EmailRef, Filters, SyncResult, SyncPr
 const api = axios.create({ baseURL: '/api', withCredentials: true });
 
 export const getApplications = (params?: Filters): Promise<Application[]> =>
-	api.get('/applications', { params }).then(r => r.data as Application[]);
+	api.get('/applications', { params }).then(response => response.data as Application[]);
 
 export const createApplication = (data: NewApplication): Promise<Application> =>
-	api.post('/applications', data).then(r => r.data as Application);
+	api.post('/applications', data).then(response => response.data as Application);
 
 export const updateApplication = (id: string, data: Partial<Application>): Promise<Application> =>
-	api.patch(`/applications/${id}`, data).then(r => r.data as Application);
+	api.patch(`/applications/${id}`, data).then(response => response.data as Application);
 
 export const deleteApplication = (id: string): Promise<void> =>
 	api.delete(`/applications/${id}`);
 
 export const resetDatabase = (): Promise<{ applications: number; syncedEmails: number }> =>
-	api.delete('/applications/all').then(r => r.data as { applications: number; syncedEmails: number });
+	api.delete('/applications/all').then(response => response.data as { applications: number; syncedEmails: number });
 
 // A reconciled CSV import plan (see utils/importCsv buildImportPlan) — applied server-side in one transaction.
 export interface ImportApplyPayload {
@@ -37,13 +37,13 @@ export interface ImportApplyResult {
 }
 
 export const importApplications = (payload: ImportApplyPayload): Promise<ImportApplyResult> =>
-	api.post('/applications/import', payload).then(r => r.data as ImportApplyResult);
+	api.post('/applications/import', payload).then(response => response.data as ImportApplyResult);
 
 export const getAuthStatus = (): Promise<{ connected: boolean }> =>
-	api.get('/auth/status').then(r => r.data as { connected: boolean });
+	api.get('/auth/status').then(response => response.data as { connected: boolean });
 
 export const disconnectGmail = (): Promise<{ success: boolean }> =>
-	api.post('/auth/disconnect').then(r => r.data as { success: boolean });
+	api.post('/auth/disconnect').then(response => response.data as { success: boolean });
 
 // A single snapshot of the server-side sync, polled by a reconnecting tab to restore its progress bar (the
 // /sync stream only reaches the tab that started the run). `event` is the latest streamed event of any phase;
@@ -54,43 +54,52 @@ export interface SyncStatus {
 }
 
 export const getSyncStatus = (): Promise<SyncStatus> =>
-	api.get('/gmail/sync/status').then(r => r.data as SyncStatus);
+	api.get('/gmail/sync/status').then(response => response.data as SyncStatus);
+
+// Ask the server to stop the running sync. Resolves once the request is acknowledged; the sync itself ends
+// a moment later as a 'cancelled' event on the progress stream / snapshot.
+export const cancelGmailSync = (): Promise<{ cancelling: boolean }> =>
+	api.post('/gmail/sync/cancel').then(response => response.data as { cancelling: boolean });
 
 // Streams newline-delimited JSON progress events; calls onProgress for each, resolves with the final
 // result. Uses fetch (not axios) so we can read the response body incrementally.
-export async function syncGmail(days?: number, onProgress?: (p: SyncProgress) => void): Promise<SyncResult> {
-	const res = await fetch('/api/gmail/sync', {
+export async function syncGmail(days?: number, onProgress?: (progress: SyncProgress) => void): Promise<SyncResult> {
+	const response = await fetch('/api/gmail/sync', {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(days ? { days } : {}),
 	});
-	if (!res.ok) {
-		let msg = 'Sync failed';
-		try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* non-JSON */ }
-		throw new Error(msg);
+	if (!response.ok) {
+		let failureMessage = 'Sync failed';
+		try { failureMessage = ((await response.json()) as { error?: string }).error ?? failureMessage; } catch { /* non-JSON */ }
+		throw new Error(failureMessage);
 	}
-	if (!res.body) throw new Error('Sync failed: no response stream');
+	if (!response.body) throw new Error('Sync failed: no response stream');
 
-	const reader = res.body.getReader();
+	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
-	let final: SyncResult | undefined;
+	let finalResult: SyncResult | undefined;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		buffer += decoder.decode(value, { stream: true });
-		let nl: number;
-		while ((nl = buffer.indexOf('\n')) >= 0) {
-			const line = buffer.slice(0, nl).trim();
-			buffer = buffer.slice(nl + 1);
+		// Events are newline-delimited, and a chunk can split one mid-line — drain only the COMPLETE lines
+		// and leave the remainder in the buffer for the next chunk to finish.
+		let newlineIndex: number;
+		while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+			const line = buffer.slice(0, newlineIndex).trim();
+			buffer = buffer.slice(newlineIndex + 1);
 			if (!line) continue;
-			const ev = JSON.parse(line) as { phase: string } & SyncResult & SyncProgress & { error?: string };
-			if (ev.phase === 'done') final = { added: ev.added, updated: ev.updated, skipped: ev.skipped, failed: ev.failed, durationMs: ev.durationMs };
-			else if (ev.phase === 'error') throw new Error(ev.error ?? 'Sync failed');
-			else onProgress?.(ev);   // 'start' and 'progress'
+			const progressEvent = JSON.parse(line) as { phase: string } & SyncResult & SyncProgress & { error?: string };
+			if (progressEvent.phase === 'done') finalResult = { added: progressEvent.added, updated: progressEvent.updated, skipped: progressEvent.skipped, failed: progressEvent.failed, durationMs: progressEvent.durationMs };
+			// A user-cancelled sync ends normally (not an error) carrying the partial counts it saved.
+			else if (progressEvent.phase === 'cancelled') finalResult = { added: progressEvent.added, updated: progressEvent.updated, skipped: progressEvent.skipped, failed: progressEvent.failed, durationMs: progressEvent.durationMs, cancelled: true };
+			else if (progressEvent.phase === 'error') throw new Error(progressEvent.error ?? 'Sync failed');
+			else onProgress?.(progressEvent);   // 'start' and 'progress'
 		}
 	}
-	if (!final) throw new Error('Sync ended without a result');
-	return final;
+	if (!finalResult) throw new Error('Sync ended without a result');
+	return finalResult;
 }

@@ -14,7 +14,7 @@ const ATS_DOMAINS = new Set([
 	'governmentjobs.com', 'clearcompany.com', 'gem.com', 'oracle.com', 'ns2cloud.com', 'applicantemails.com',
 	// Coding-assessment platforms — they send "on behalf of" an employer; the platform is never the company.
 	'hackerrank.com', 'hackerrankforwork.com', 'codility.com', 'codesignal.com', 'hackerearth.com',
-    // Generic email providers — almost certainly not the employer's real domain
+	// Generic email providers — almost certainly not the employer's real domain
 	'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
 ]);
 
@@ -22,22 +22,24 @@ const ATS_DOMAINS = new Set([
 // alternate TLDs of the same host that aren't listed explicitly — e.g. "talent.icims.eu" → "icims" → ATS,
 // even though only "icims.com" is in the set. Without this, a shared ATS host would be mistaken for a
 // company domain and wrongly merge different employers (Publicis Re:Sources Global vs Digital Experience).
-const ATS_BRANDS = new Set([...ATS_DOMAINS].map(d => d.split('.')[0]));
-
-// Strips trailing legal suffixes so e.g. "Sun West Mortgage Company" and
-// "Sun West Mortgage" resolve to the same dedup key.
-// The lookbehind (?<=\w) prevents matching " Co." in "Foo & Co." (which would
-// leave a broken trailing "&") — only strip when preceded by a word character.
-const COMPANY_SUFFIX_RE = /(?<=\w)[,.]?\s+(?:company|incorporated|inc\.?|llc|ltd\.?|corp\.?|corporation|co\.)$/i;
+const ATS_BRANDS = new Set([...ATS_DOMAINS].map(domain => domain.split('.')[0]));
 
 // LinkedIn company-page qualifiers appended after a spaced dash ("CLEAR - Corporate" → "CLEAR").
 const LINKEDIN_QUALIFIER_RE = /\s+[-–]\s+(?:Corporate|Corp|HQ|Headquarters|Global|US|USA|U\.S\.A?\.?|North America|EMEA|APAC|Worldwide)\.?$/i;
 
-export function normalizeCompany(name: string): string {
-	// "X dba Y" / "X d/b/a Y" → Y, the trade name people actually use ("CP Payroll, LLC dba ConnectPay" → "ConnectPay").
-	name = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
-	name = name.replace(LINKEDIN_QUALIFIER_RE, '').trim();
-	return name.replace(COMPANY_SUFFIX_RE, '').trim();
+/**
+ * The name an employer actually goes by, as the email itself writes it. Both steps SELECT between names
+ * already present rather than rewriting one: "X dba Y" carries the legal wrapper and the trade name, and a
+ * LinkedIn page qualifier is the board's decoration, not part of the company.
+ *
+ * It deliberately does NOT strip legal suffixes. "Loyola Enterprises Inc." is the employer's own name and
+ * must reach the board unedited, so the parsers' verbatim capture isn't undone one layer down. Two spellings
+ * of one employer still merge: companiesSameEntity counts "Inc"/"LLC"/"Company" as descriptors, so
+ * "Loyola Enterprises Inc." and "Loyola Enterprises" resolve to the same employer at match time instead.
+ */
+export function companyTradeName(name: string): string {
+	const tradeName = name.replace(/^.*?\bd\/?b\/?a\b\s*/i, '').trim();
+	return tradeName.replace(LINKEDIN_QUALIFIER_RE, '').trim();
 }
 
 // Generic corporate/industry descriptors. A longer company name that only ADDS these to a shorter one
@@ -84,7 +86,15 @@ export function companyDomainFromSender(from: string): string | null {
 	return registrable;
 }
 
-const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+const companyWords = (name: string) => name.toLowerCase().split(/\s+/).map(word => word.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+
+/**
+ * Canonical match key: lowercase, alphanumerics only — spacing, casing, and punctuation collapse away, so
+ * "JPMorganChase" ≡ "JPMorgan Chase" and "MITRE" ≡ "mitre" resolve to one employer. This exists because the
+ * deterministic parser and the LLM classifier read a company from different places (body prose vs the sender)
+ * and will not spell it identically; the match layer absorbs that instead of forcing the two to agree.
+ */
+export const companyKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
  * LOOSE name match — one name's words are a leading prefix of the other's ("Epic" ⊂ "Epic Kids",
@@ -92,11 +102,11 @@ const companyWords = (s: string) => s.toLowerCase().split(/\s+/).map(w => w.repl
  * real employer with the sender domain and companiesSameEntity. Keeps "Morgan Stanley" vs "Morgan
  * Lewis" apart (second word differs) and "Lila" vs "Lilac" apart (different first word).
  */
-function companiesCompatible(a: string, b: string): boolean {
-	const wa = companyWords(a), wb = companyWords(b);
-	if (!wa.length || !wb.length) return false;
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return short.every((w, i) => w === long[i]);
+function companiesCompatible(firstName: string, secondName: string): boolean {
+	const firstWords = companyWords(firstName), secondWords = companyWords(secondName);
+	if (!firstWords.length || !secondWords.length) return false;
+	const [shorterWords, longerWords] = firstWords.length <= secondWords.length ? [firstWords, secondWords] : [secondWords, firstWords];
+	return shorterWords.every((word, position) => word === longerWords[position]);
 }
 
 /**
@@ -105,9 +115,11 @@ function companiesCompatible(a: string, b: string): boolean {
  * proper noun in the extra words means a DIFFERENT company sharing a first word ("Epic" ✗ "Epic Kids").
  * This is the fallback when the sender domain can't decide (e.g. both records came from ATS senders).
  */
-export function companiesSameEntity(a: string, b: string): boolean {
-	if (!companiesCompatible(a, b)) return false;
-	const wa = companyWords(a), wb = companyWords(b);
-	const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
-	return long.slice(short.length).every(w => COMPANY_DESCRIPTOR.has(w));
+export function companiesSameEntity(firstName: string, secondName: string): boolean {
+	if (companyKey(firstName) === companyKey(secondName)) return true;   // identical once spacing/punctuation/case are ignored
+	if (!companiesCompatible(firstName, secondName)) return false;
+	const firstWords = companyWords(firstName), secondWords = companyWords(secondName);
+	const [shorterWords, longerWords] = firstWords.length <= secondWords.length ? [firstWords, secondWords] : [secondWords, firstWords];
+	// The longer name is the same employer only if every word it ADDS is a generic descriptor.
+	return longerWords.slice(shorterWords.length).every(extraWord => COMPANY_DESCRIPTOR.has(extraWord));
 }

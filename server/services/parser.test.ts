@@ -10,7 +10,7 @@ import { buildBody } from './gmail/body';
 // Cleans an LLM-supplied requisition id. Rule: a label GLUED to the digits is the company's code prefix
 // (keep it); a label separated by a space/colon/# is a label (strip it). ≥5 digits required.
 describe('canonicalReqId', () => {
-    // [given job id, expected job id]
+	// [given job id, expected job id]
 	const cases: [string | null, string | null][] = [
 		['REQ352476', 'REQ352476'],            
 		['REQ 352476', '352476'],              // spaced label, stripped
@@ -42,7 +42,7 @@ describe('canonicalReqId', () => {
 // Deterministic req extraction from subject+body, kept AS WRITTEN. Glued REQ stays whole via the
 // alphanumeric rule; a spaced label is stripped; phones/years are rejected.
 describe('extractJobNumber', () => {
-    // [Subject, Body, Expected job id]
+	// [Subject, Body, Expected job id]
 	const cases: [string, string, string | null][] = [
 		['subject', 'Job Number: 210715977', '210715977'],
 		['subject', 'Req ID: 210705462 for the role', '210705462'],
@@ -70,7 +70,7 @@ describe('extractJobNumber', () => {
 // ── tidyRole ──────────────────────────────────────────────────────────────────
 // Strips leading req tokens, brace ids, and trailing req/location noise; keeps real year-prefixed titles.
 describe('tidyRole', () => {
-     // [Role name with other info, Expected role name]
+	// [Role name with other info, Expected role name]
 	const cases: [string, string][] = [
 		['2026-71968 Space Force - Software Engineer', 'Space Force - Software Engineer'],
 		['R232753 Platform Engineer', 'Platform Engineer'],
@@ -82,8 +82,16 @@ describe('tidyRole', () => {
 		['R-78284 Software Engineer I', 'Software Engineer I'],            // hyphenated leading req
 		['Development Engineer in Test [208728]', 'Development Engineer in Test'],   // bracket-wrapped id
 		['QA Engineer [Remote]', 'QA Engineer [Remote]'],                 // bracket without a digit kept
+		['Software Development Engineer in Test opportunity', 'Software Development Engineer in Test'],   // trailing descriptor noun
+		['Software Engineer opening', 'Software Engineer'],
+		['NAMR Software Engineering Program - Campus Hiring - 2026 position', 'NAMR Software Engineering Program - Campus Hiring - 2026'],   // trailing " position"
+		['Software Test Method Validation (TMV) 26-00635', 'Software Test Method Validation (TMV)'],   // space+hyphen req, both halves stripped
+		['SOFTW005349 - Software Developer I', 'Software Developer I'],    // leading 5-letter-prefix req joined by " - "
+		['R2026-1234: Platform Engineer', 'Platform Engineer'],           // leading req joined by " : "
 		// regressions — must be left intact:
 		['2026 Emerging Talent Software Engineers - Full time', '2026 Emerging Talent Software Engineers - Full time'],
+		['3D - Modeler', '3D - Modeler'],                                 // leading token has <4 digits → not a req, kept
+		['Software Engineer Opportunities in NJ', 'Software Engineer Opportunities in NJ'],   // "Opportunities" mid-string (not trailing) untouched
 		['3D Designer', '3D Designer'],
 		['Software Engineer III', 'Software Engineer III'],
 		['QA Automation Engineer (All Levels)', 'QA Automation Engineer (All Levels)'],
@@ -101,6 +109,10 @@ describe('parseEmail', () => {
 	interface Case {
 		testName: string; subject: string; from: string; body: string;
 		category: string; company?: string; role?: string | null; code?: string;
+		// Compare company/role by EQUALITY instead of the default substring check. Substring is the right
+		// default for cases that only pin which slot won, but it cannot catch an over-capture — so a case
+		// carrying a real email verbatim sets this to assert the exact string the parser must produce.
+		exact?: boolean;
 	}
 	const cases: Case[] = [
 		{
@@ -163,6 +175,44 @@ describe('parseEmail', () => {
 			category: 'applied', company: 'Acme Robotics', role: 'Backend Engineer', code: 'indeed_applied',
 		},
 		{
+			// Real confirmation, body verbatim from a sync log (only the Employer line reflects the fixed
+			// capture). Pins by equality that the parser passes the company through untouched: the name ends
+			// in its own period, and the card repeats it mid-sentence as "Epic Kids Inc.." — neither may leak
+			// into what is stored. The role likewise keeps its comma-separated qualifier.
+			testName: 'Indeed fast-apply confirmation — real email, company ending in "Inc."',
+			subject: 'Indeed Application: Junior Software Engineer, Full-Stack',
+			from: 'Indeed Apply <indeedapply@indeed.com>',
+			body: 'Employer: Epic Kids Inc.\n\nWe\'ll help you get started\nApplication submitted\nJunior Software Engineer, Full-Stack\nEpic Kids Inc.\n- San Jose, CA\n2 reviews\nThe following items were sent to Epic Kids Inc.. Good luck!\n&bull;\nApplication\n&bull;\nResume\nNext steps\n&bull;\nThe employer or job advertiser may reach out to you about your application.\nNever share financial info or take job offers without an interview. Learn how to avoid scams .\nPlease do not reply directly to this autogenerated email message. If you have any questions or concerns about your application, please contact Indeed .\n©2026 Indeed\nAustin Indeed Tower, 200 West 6th Street, Floor 36, Austin, TX 78701\nIndeed processes and analyzes your activity in this email.\nPrivacy Policy |\nTerms |\nHelp |\nYour Privacy Choices\n|',
+			category: 'applied', company: 'Epic Kids Inc.', role: 'Junior Software Engineer, Full-Stack',
+			code: 'indeed_applied', exact: true,
+		},
+		{
+			// Real rejection, body as buildBody delivers it — HTML stripped and the paragraph breaks collapsed,
+			// which is what the parser actually sees rather than what the mailbox shows. Sent from
+			// noreply@indeed.com, NOT the indeedapply@ apply address, so the sender gate routes on the
+			// address rather than the domain. Asserted by equality — see `exact` on Case.
+			testName: 'Indeed rejection',
+			subject: 'An update on your application from Amentum',
+			from: 'Indeed <noreply@indeed.com>',
+			body: 'An update on your application from Amentum Thank you for applying to the Cleared Junior Software Engineer position at Amentum.Unfortunately, Amentum has moved to the next step in their hiring process, and your application was not selected at this time.',
+			category: 'rejected', company: 'Amentum', role: 'Cleared Junior Software Engineer',
+			code: 'indeed_rejected', exact: true,
+		},
+		{
+			// Same template, second real sample — and the regression that motivated `exact`. The saved company
+			// read "Loyola Enterprises Inc..Unfortunately, Loyola Enterprises Inc": buildBody collapses the
+			// paragraph break to NOTHING, so "Inc.." runs straight into "Unfortunately" and a capture that
+			// ended on "period followed by whitespace" never terminated. Both captures are now bounded by
+			// literal template text on either side, so the layout can collapse however it likes.
+			testName: 'Indeed rejection — parenthetical role, "Inc." company',
+			subject: 'An update on your application from Loyola Enterprises Inc.',
+			from: 'Indeed <noreply@indeed.com>',
+			body: 'An update on your application from Loyola Enterprises Inc.Thank you for applying to the Junior Software Engineer (Remote, DC, Capital Region) position at Loyola Enterprises Inc..Unfortunately, Loyola Enterprises Inc. has moved to the next step in their hiring process, and your application was not selected at this time.',
+			category: 'rejected', company: 'Loyola Enterprises Inc.',
+			role: 'Junior Software Engineer (Remote, DC, Capital Region)',
+			code: 'indeed_rejected', exact: true,
+		},
+		{
 			testName: 'general template — application for: [req] [Role] (CVS, colon form)',
 			subject: 'Thank you for your application',
 			from: 'CVS Health <noreply@cvshealth.com>',
@@ -219,15 +269,23 @@ describe('parseEmail', () => {
 			if (c.category === '__null__') { expect(res).toBeNull(); return; }
 			expect(res).not.toBeNull();
 			expect(res!.category).toBe(c.category);
-			if (c.company) expect(res!.company?.toLowerCase()).toContain(c.company.toLowerCase());
+			if (c.company) {
+				if (c.exact) expect(res!.company).toBe(c.company);
+				else expect(res!.company?.toLowerCase()).toContain(c.company.toLowerCase());
+			}
 			if (c.role === null) expect(res!.role).toBeNull();
-			else if (c.role) expect(tidyRole(res!.role ?? '').toLowerCase()).toContain(c.role.toLowerCase());
+			else if (c.role) {
+				if (c.exact) expect(res!.role).toBe(c.role);
+				else expect(tidyRole(res!.role ?? '').toLowerCase()).toContain(c.role.toLowerCase());
+			}
 			if (c.code) expect(res!.classifier_code).toBe(c.code);
 		});
 	}
 
-	// Workday emails are per-company customised; the general template mis-reads them (here it would grab the
-	// role "Mid-Level Software Engineer" as the company), so a @myworkday.com sender must defer to the LLM.
+	// Workday emails are no longer blanket-deferred (legitimate employers use Workday heavily). This one still
+	// defers — but via the company==role structural guard, not a sender special-case: "applying to [Role]" grabs
+	// "Mid-Level Software Engineer" as the company AND recoverRoleFromBody reads it as the role, so the two match
+	// and the parser bows out. The full classifier / refiner then reads "working at Leidos" for the real employer.
 	it('defers a Workday (@myworkday.com) email to the LLM instead of mis-parsing (Leidos)', () => {
 		const res = parseEmail(
 			'Leidos -Thank You For Applying to Mid-Level Software Engineer',
@@ -273,25 +331,68 @@ describe('buildBody + parseEmail (LinkedIn)', () => {
 // Pulls company (+role when present) from acknowledgement/rejection sentence structures.
 describe('extractGeneralCompanyRole', () => {
 	it('applying for the [Role] position at [Company] (Pomelo)', () => {
-		const r = extractGeneralCompanyRole('Thanks for applying', 'Thank you for applying for the Software Engineer (All Levels) position at Pomelo Care.');
-		expect(r?.company).toContain('Pomelo');
-		expect(tidyRole(r?.role ?? '')).toBe('Software Engineer (All Levels)');
+		const result = extractGeneralCompanyRole('Thanks for applying', 'Thank you for applying for the Software Engineer (All Levels) position at Pomelo Care.');
+		expect(result?.company).toContain('Pomelo');
+		expect(tidyRole(result?.role ?? '')).toBe('Software Engineer (All Levels)');
 	});
 	it('review your application for the [Role] position (Veeva)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Veeva and the opportunity to review your application for the Associate Quality Engineer position.');
-		expect(r?.company).toBe('Veeva');
-		expect(r?.role).toBe('Associate Quality Engineer');
+		const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Veeva and the opportunity to review your application for the Associate Quality Engineer position.');
+		expect(result?.company).toBe('Veeva');
+		expect(result?.role).toBe('Associate Quality Engineer');
 	});
 	it('interest in [Company] (company only, role recovered separately)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
-		expect(r?.company).toContain('Lockheed');
+		const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+		expect(result?.company).toContain('Lockheed');
 	});
 	it('keeps a multi-connector company name (Comptroller)', () => {
-		const r = extractGeneralCompanyRole('x', 'Thank you for applying to Office of the New York State Comptroller. Your application has been received.');
-		expect(r?.company).toBe('Office of the New York State Comptroller');
+		const result = extractGeneralCompanyRole('x', 'Thank you for applying to Office of the New York State Comptroller. Your application has been received.');
+		expect(result?.company).toBe('Office of the New York State Comptroller');
 	});
 	it('returns null for a demographic survey', () => {
 		expect(extractGeneralCompanyRole('Survey', 'Please complete this voluntary demographic survey.')).toBeNull();
+	});
+	it('reads the company from the BODY before the subject, stopping at the paragraph boundary ("MTA")', () => {
+		// cleanBody now delivers a paragraph break as "\n", so the body capture stops at the greeting instead
+		// of swallowing it ("MTA Dear Hao Lin Thank"). Body-first + the leading-"the" strip give the short form
+		// the body uses — which the subject's "Metropolitan Transportation Authority" no longer overrides.
+		const result = extractGeneralCompanyRole(
+			'Your Application for Application Developer Levels 1 - 5 at the Metropolitan Transportation Authority',
+			'Your Application for Application Developer Levels 1 - 5 at the MTA\nDear Hao Lin\nThank you for your interest in a career with the MTA. We have received your application for Application Developer Levels 1 - 5.',
+		);
+		expect(result?.company).toBe('MTA');
+		expect(result?.role).toBe('Application Developer Levels 1 - 5');
+	});
+	it('keeps a capitalized leading "The" that is part of the name ("The New York Times")', () => {
+		const result = extractGeneralCompanyRole('x', 'Thank you for applying to The New York Times. Your application has been received.');
+		expect(result?.company).toBe('The New York Times');
+	});
+
+	// Patterns that name both slots ("applying for [Role] at [Company]") are self-typing; the bare
+	// "interest in X" patterns are not, and only those need the LLM to say which slot X fills.
+	describe('span typing', () => {
+		it('marks a both-slots sentence unambiguous, with no spans to label', () => {
+			const result = extractGeneralCompanyRole('x', 'Thank you for applying for the Software Engineer position at Pomelo Care.');
+			expect(result?.ambiguous).toBe(false);
+			expect(result?.spans).toEqual([]);
+		});
+		it('marks a bare "interest in [X]" ambiguous and offers X for labelling', () => {
+			const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Lockheed Martin. Your application has been received.');
+			expect(result?.ambiguous).toBe(true);
+			expect(result?.spans).toContain('Lockheed Martin');
+		});
+		it('still guesses the role as the company when unconfirmed — the case the picker exists to fix', () => {
+			const result = extractGeneralCompanyRole('x', 'Thank you for your interest in Software Engineer. We have received your application.');
+			// Nothing here says "Software Engineer" is a title, so the regex reads it as the employer and
+			// neither structural guard fires. The flag is what gets the LLM to catch it.
+			expect(result?.company).toBe('Software Engineer');
+			expect(result?.ambiguous).toBe(true);
+			expect(result?.spans).toContain('Software Engineer');
+		});
+		it('collects every untyped candidate, in priority order, not just the first', () => {
+			const result = extractGeneralCompanyRole('x', 'Thank you for applying to Axoni. We appreciate your interest in Blackstone.');
+			// "applying to" (pattern 8) outranks "interest in" (pattern 9), and both reach the picker.
+			expect(result?.spans.slice(0, 2)).toEqual(['Axoni', 'Blackstone']);
+		});
 	});
 	it('returns null for a "keep track of your application" draft reminder', () => {
 		expect(extractGeneralCompanyRole('Keep track', 'Keep track of your application. If you are still working on the application, finish it here.')).toBeNull();
@@ -314,6 +415,12 @@ describe('recoverRoleFromBody', () => {
 		// False-positive guard: a bare "applying to [Company]" (no "[Company] -" prefix) must NOT become a role.
 		['Thank you for applying. Your application has been received.', 'Thank you for applying to Amazon', null],
 		['Just a plain confirmation with no recognizable title anywhere.', 'None', null],
+		// "apply to [Company] for the [Role] role" — the "for the" guard rejects the company-swallowing capture
+		// ("Astronomer for the Software Engineer…") so the lower-priority "the [Role] role" pattern recovers it.
+		['Thank you for taking the time to apply to Astronomer for the Software Engineer, Astro Core Services role.', 'None', 'Software Engineer, Astro Core Services'],
+		// department line "our [Dept] team for the following position: [Role]" — the prose is rejected, the
+		// colon-listed title after "following position:" wins.
+		['Your resume will be reviewed by our Recruiting team for the following position: Entry-Level Full Stack Software Developer', 'None', 'Entry-Level Full Stack Software Developer'],
 	];
 	it.each(cases)('body=%j subject=%j -> %j', (body, subject, expected) => {
 		expect(recoverRoleFromBody(body, subject)).toBe(expected);

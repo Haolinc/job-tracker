@@ -8,6 +8,7 @@ import type { EmailResult } from '../../types';
 import { getOAuthClient } from './oauth';
 import { buildBody } from './body';
 import { debug } from '../../logger';
+import { localDateString } from '../../utils';
 
 const BATCH_SIZE = 10;
 // Minimum spacing between batch *starts* (not a flat post-batch sleep). messages.get costs 20
@@ -16,14 +17,14 @@ const BATCH_SIZE = 10;
 // batch consumes the interval itself, so we don't sleep on top of it — we run at the ceiling.
 const MIN_BATCH_INTERVAL_MS = 450;
 
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** True for Gmail rate-limit responses (403 rateLimitExceeded / 429) — which gaxios does NOT auto-retry. */
 function isRateLimitError(err: unknown): boolean {
-	const e = err as { code?: number; status?: number; errors?: { reason?: string }[]; response?: { status?: number; data?: { error?: { errors?: { reason?: string }[] } } } };
-	const code = e?.code ?? e?.status ?? e?.response?.status;
-	const reason = e?.errors?.[0]?.reason ?? e?.response?.data?.error?.errors?.[0]?.reason ?? '';
-	return code === 429 || (code === 403 && /rate.?limit|userRateLimitExceeded/i.test(reason));
+	const gaxiosError = err as { code?: number; status?: number; errors?: { reason?: string }[]; response?: { status?: number; data?: { error?: { errors?: { reason?: string }[] } } } };
+	const statusCode = gaxiosError?.code ?? gaxiosError?.status ?? gaxiosError?.response?.status;
+	const reason = gaxiosError?.errors?.[0]?.reason ?? gaxiosError?.response?.data?.error?.errors?.[0]?.reason ?? '';
+	return statusCode === 429 || (statusCode === 403 && /rate.?limit|userRateLimitExceeded/i.test(reason));
 }
 
 /** Retry a Gmail call with exponential backoff when rate-limited. */
@@ -64,12 +65,12 @@ export async function getAccountEmail(tokens: Credentials): Promise<string | nul
 /** Build one EmailResult from a single message using its own headers (each email stands alone). */
 function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 	const headers      = msg.payload?.headers ?? [];
-	const subject      = headers.find(h => h.name === 'Subject')?.value ?? '';
-	const from         = headers.find(h => h.name === 'From')?.value    ?? '';
+	const subject      = headers.find(header => header.name === 'Subject')?.value ?? '';
+	const from         = headers.find(header => header.name === 'From')?.value    ?? '';
 	// internalDate (epoch ms) is Gmail's canonical receipt time and is effectively always present. Fall
 	// back to the Date header, then to now, so a freak missing value still yields a real-ish timestamp
 	// instead of skewing date_applied/ordering.
-	const dateHeader   = headers.find(h => h.name === 'Date')?.value;
+	const dateHeader   = headers.find(header => header.name === 'Date')?.value;
 	const internalDate = msg.internalDate
 		? parseInt(msg.internalDate)
 		: (dateHeader && Date.parse(dateHeader)) || Date.now();
@@ -80,7 +81,7 @@ function messageToEmailResult(msg: gmail_v1.Schema$Message): EmailResult {
 		from,
 		body:            buildBody(msg, from),
 		internalDate,
-		lastMessageDate: new Date(internalDate).toISOString().split('T')[0],
+		lastMessageDate: localDateString(new Date(internalDate)),
 	};
 }
 
@@ -119,7 +120,7 @@ function buildJobQuery(days: number): string {
 		// Legitimate emails using those words also contain tighter phrases above.
 		'"moving forward with other"',// rejection phrase variant
 		'"not be moving forward"',
-        '"regret to"',
+		'"regret to"',
 		// Soft rejections (T-Mobile/Workday): negated "fit" — a promo says "find the right fit", never
 		// "wasn't the right fit", so the negation keeps marketing out.
 		'"wasn\'t the right fit"',
@@ -130,7 +131,7 @@ function buildJobQuery(days: number): string {
 		'"welcome aboard"',
 		'"job offer"',
 		'"offer letter"',
-        '"thank you for your interest"',
+		'"thank you for your interest"',
 		'"interview for"',
 		'"schedule your interview"',
 	].join(' ')}}`;
@@ -156,10 +157,10 @@ function buildJobQuery(days: number): string {
 		// any job keyword, making OR filtering impossible. Gmail routes these to "Updates", not
 		// "Social", so -category:social doesn't catch them.
 		'-from:updates-noreply@linkedin.com',
-        '-"Glassdoor Community"',
-        '-"Account Verification"',
-        '-from:noreply@newsletters.nyc.gov',
-        '-"Action Required"',
+		'-"Glassdoor Community"',
+		'-"Account Verification"',
+		'-from:noreply@newsletters.nyc.gov',
+		'-"Action Required"',
 		// Glassdoor "Apply Now / Apply Soon / is still available" job alert emails.
 		// 16 hits confirmed in 60-day audit.
 		'-subject:"Apply Now"',
@@ -173,14 +174,14 @@ function buildJobQuery(days: number): string {
 		// Draft application reminder emails — ATS prompts to complete an unfinished application.
 		// "Continue to apply for the job..." is always about a draft, never a submitted app.
 		'-subject:"continue to apply"',
-        '-subject:"incomplete"',
-        '-subject:"complete your"',
-        '-subject:"your application was viewed"',
-        '-subject:"draft"',
-        // ATS "still reviewing" status pings — no new information, just noise.
-        // Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
-        '-subject:"Quick Update!"',  //TODO: need to verify later
-        '-subject:"Demographic Survey"',
+		'-subject:"incomplete"',
+		'-subject:"complete your"',
+		'-subject:"your application was viewed"',
+		'-subject:"draft"',
+		// ATS "still reviewing" status pings — no new information, just noise.
+		// Aquent | Skill sends these as "Quick Update!" emails while reviewing candidates.
+		'-subject:"Quick Update!"',  //TODO: need to verify later
+		'-subject:"Demographic Survey"',
 		// Pre-filter the AUTOMATED_SUBJECT patterns that DO match the OR group (so they'd
 		// otherwise be fetched and dropped at runtime). Saves the thread fetch. The runtime
 		// AUTOMATED_SUBJECT check stays as the precise backstop — these Gmail terms are fuzzy
@@ -193,9 +194,9 @@ function buildJobQuery(days: number): string {
 		'-subject:"has been scheduled"',              // "Your interview has been scheduled" — calendar noise, matches OR "your interview"
 		'-subject:"calendar invite"',
 		'-subject:"meeting confirmed"',
-        '-subject:"you have started an application!"',   // Monster job board noise
-        '-subject:"additional information needed"',
-        keywordFilter,
+		'-subject:"you have started an application!"',   // Monster job board noise
+		'-subject:"additional information needed"',
+		keywordFilter,
 	].join(' ');
 }
 
@@ -231,24 +232,24 @@ export async function listJobMessageIds(tokens: Credentials, days: number): Prom
  */
 export async function* streamJobMessages(tokens: Credentials, ids: string[], failedIds: string[]): AsyncGenerator<EmailResult> {
 	const gmail = getGmail(tokens);
-	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+	for (let batchOffset = 0; batchOffset < ids.length; batchOffset += BATCH_SIZE) {
 		const batchStart = Date.now();
-		const batch      = ids.slice(i, i + BATCH_SIZE);
-		const results    = await Promise.all(batch.map(async id => {
+		const batchIds   = ids.slice(batchOffset, batchOffset + BATCH_SIZE);
+		const results    = await Promise.all(batchIds.map(async messageId => {
 			try {
-				return await fetchMessage(gmail, id);
+				return await fetchMessage(gmail, messageId);
 			} catch (err) {
 				// Don't let one unfetchable message (e.g. 400 failedPrecondition) abort the whole sync.
 				// Record it instead: it is NOT marked synced, so the next sync retries it, and the
 				// caller surfaces the count so the user knows some emails still need reading.
-				const e = err as { code?: number; status?: number; message?: string };
-				console.warn(`[sync] failed to fetch message ${id}: ${e.code ?? e.status ?? ''} ${e.message ?? 'error'}`);
-				failedIds.push(id);
+				const fetchError = err as { code?: number; status?: number; message?: string };
+				console.warn(`[sync] failed to fetch message ${messageId}: ${fetchError.code ?? fetchError.status ?? ''} ${fetchError.message ?? 'error'}`);
+				failedIds.push(messageId);
 				return null;
 			}
 		}));
-		for (const r of results) if (r) yield r;
-		if (i + BATCH_SIZE < ids.length) {
+		for (const emailResult of results) if (emailResult) yield emailResult;
+		if (batchOffset + BATCH_SIZE < ids.length) {
 			await sleep(Math.max(0, MIN_BATCH_INTERVAL_MS - (Date.now() - batchStart)));
 		}
 	}

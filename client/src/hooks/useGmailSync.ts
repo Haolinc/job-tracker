@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { getAuthStatus, disconnectGmail, syncGmail, getSyncStatus, type SyncStatus } from '../api';
+import { getAuthStatus, disconnectGmail, syncGmail, getSyncStatus, cancelGmailSync, type SyncStatus } from '../api';
 import type { SyncResult, SyncProgress } from '../types';
 
 // How often a tab that didn't start the sync re-polls the server-side snapshot to follow it to the end.
@@ -23,13 +23,18 @@ function progressFromEvent(event: NonNullable<SyncStatus['event']>): SyncProgres
 export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 	const [connected, setConnected] = useState(false);
 	const [syncing, setSyncing] = useState(false);
+	// True from the moment the user asks to cancel until the sync actually ends — drives the "Cancelling…" label
+	// and stops a second cancel click. Reset whenever a sync starts or settles.
+	const [cancelling, setCancelling] = useState(false);
 	const [progress, setProgress] = useState<SyncProgress | null>(null);
 	const [lastResult, setLastResult] = useState<SyncResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	// Always invoke the LATEST callback (App recreates it as filters change) without restarting the poll loop.
+	// Refreshed in an effect rather than during render — a render can be discarded, and the only reader is the
+	// poll timer's callback, which never runs until after commit.
 	const onSettledRef = useRef(onBackgroundSyncSettled);
-	onSettledRef.current = onBackgroundSyncSettled;
+	useEffect(() => { onSettledRef.current = onBackgroundSyncSettled; }, [onBackgroundSyncSettled]);
 	const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	const stopPolling = useCallback(() => {
@@ -49,17 +54,19 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 			}
 			stopPolling();   // finished (perhaps while this tab was away) — settle and stop polling
 			setSyncing(false);
+			setCancelling(false);
 			setProgress(null);
 			const event = status.event;
 			if (event?.phase === 'error') {
 				setError(event.error ?? 'Sync failed');
-			} else if (event?.phase === 'done') {
+			} else if (event?.phase === 'done' || event?.phase === 'cancelled') {
 				setLastResult({
 					added: event.added ?? 0,
 					updated: event.updated ?? 0,
 					skipped: event.skipped ?? 0,
 					failed: event.failed ?? 0,
 					durationMs: event.durationMs ?? 0,
+					cancelled: event.phase === 'cancelled',
 				});
 			}
 			onSettledRef.current?.();
@@ -99,6 +106,7 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 
 	const sync = useCallback(async (days?: number): Promise<SyncResult> => {
 		setSyncing(true);
+		setCancelling(false);
 		setError(null);
 		setProgress(null);
 		try {
@@ -112,9 +120,18 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 			throw caughtError;
 		} finally {
 			setSyncing(false);
+			setCancelling(false);
 			setProgress(null);
 		}
 	}, []);
 
-	return { connected, syncing, progress, lastResult, error, checkStatus, disconnect, sync };
+	// Ask the server to stop the running sync. The sync ends cooperatively a moment later — the stream (this
+	// tab) or the poll (a reopened tab) delivers the 'cancelled' result, which flips syncing off. A failure
+	// here (e.g. the sync just finished on its own) is ignored: that same terminal event still settles the UI.
+	const cancel = useCallback(async () => {
+		setCancelling(true);
+		try { await cancelGmailSync(); } catch { /* already ending — the terminal event settles it */ }
+	}, []);
+
+	return { connected, syncing, cancelling, progress, lastResult, error, checkStatus, disconnect, sync, cancel };
 }

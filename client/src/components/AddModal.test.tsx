@@ -2,15 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddModal from './AddModal';
-import type { ApplicationFormData } from '../types';
+import type { ApplicationFormData, EmailRef } from '../types';
 
 // Elements are located by stable data-testid (decoupled from copy/placeholder/styling); text and values
 // are asserted separately. So a wording change to a label/button won't break "find the element".
 
 describe('AddModal', () => {
-    // Fills every field EXCEPT `skip`, so each negative test proves a single missing required field
+	// Fills every field EXCEPT `skip`, so each negative test proves a single missing required field
 	// is enough to block the save even when the rest of the form is complete.
-    // USER SIMULLATION VERSION
+	// USER SIMULLATION VERSION
 	const fillAllExcept = async (user: ReturnType<typeof userEvent.setup>, skip: string) => {
 		const text: [string, string][] = [
 			['field-company', 'CVS Health'], ['field-role', 'Software Engineer'],
@@ -22,19 +22,19 @@ describe('AddModal', () => {
 			if (id !== skip) fireEvent.change(screen.getByTestId(id), { target: { value: v } });
 	};
 
-    // Sets every field EXCEPT `skip`, so each negative test proves a single missing required field
+	// Sets every field EXCEPT `skip`, so each negative test proves a single missing required field
 	// is enough to block the save even when the rest of the form is complete.
-    // FAST VERSION
+	// FAST VERSION
 	const setAllExcept = (skip: string) => {
 		const text: [string, string][] = [
 			['field-company', 'CVS Health'], ['field-role', 'Software Engineer'],
 			['field-job-url', 'https://careers.example.com'], ['field-external-id', 'R0859802'], ['field-notes', 'a note'],
-            ['field-date-applied', '2026-02-01'], ['field-last-activity', '2026-03-15']
+			['field-date-applied', '2026-02-01'], ['field-last-activity', '2026-03-15']
 		];
 		for (const [id, v] of text) if (id !== skip) fireEvent.change(screen.getByTestId(id), { target: { value: v } });
 	};
 
-    // Tests
+	// Tests
 	it('should render an empty form when adding a new application', () => {
 		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
 		expect(screen.getByTestId('modal-title')).toHaveTextContent('Add Application');
@@ -50,7 +50,7 @@ describe('AddModal', () => {
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        await fillAllExcept(user, '');
+		await fillAllExcept(user, '');
 		await user.click(screen.getByTestId('modal-submit'));
 
 		expect(onSave).toHaveBeenCalledTimes(1);
@@ -72,12 +72,12 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default apply', async () => {
+	it('should call onSave with the all the entered values when submitted with default apply', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
+		setAllExcept('');
 		await user.click(screen.getByTestId('modal-submit'));
 
 		expect(onSave).toHaveBeenCalledTimes(1);
@@ -99,17 +99,17 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default interview', async () => {
+	it('should call onSave with the all the entered values when submitted with default interview', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the interview field using select option to verify the select functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'interview');
-        await user.selectOptions(screen.getByTestId('field-interview-step'), 'phone_screen');
+		setAllExcept('');
+		// keep the interview field using select option to verify the select functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'interview');
+		await user.selectOptions(screen.getByTestId('field-interview-step'), 'phone_screen');
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -130,16 +130,16 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with default reject', async () => {
+	it('should call onSave with the all the entered values when submitted with default reject', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the reject field using select option to verify the select functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
+		setAllExcept('');
+		// keep the reject field using select option to verify the select functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -160,17 +160,17 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with the all the entered values when submitted with reached interview reject', async () => {
+	it('should call onSave with the all the entered values when submitted with reached interview reject', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        setAllExcept('');
-        // keep the reject related fields using select option and checkbox to verify functionality
-        await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
-        await user.click(screen.getByTestId('field-reached-interview'));
+		setAllExcept('');
+		// keep the reject related fields using select option and checkbox to verify functionality
+		await user.selectOptions(screen.getByTestId('field-status'), 'rejected');
+		await user.click(screen.getByTestId('field-reached-interview'));
 		await user.click(screen.getByTestId('modal-submit'));
-        
+		
 
 		expect(onSave).toHaveBeenCalledTimes(1);
 		// Exact match (not toMatchObject): the three typed fields carry their values and EVERY untouched
@@ -191,12 +191,12 @@ describe('AddModal', () => {
 		});
 	});
 
-    it('should call onSave with only company and role fields filled when submitted', async () => {
+	it('should call onSave with only company and role fields filled when submitted', async () => {
 		const user = userEvent.setup();
 		const onSave = vi.fn();
 		render(<AddModal initial={{}} onSave={onSave} onClose={vi.fn()} />);
 
-        fireEvent.change(screen.getByTestId('field-company'), { target: { value: 'CVS Health' } });
+		fireEvent.change(screen.getByTestId('field-company'), { target: { value: 'CVS Health' } });
 		fireEvent.change(screen.getByTestId('field-role'), { target: { value: 'Software Engineer' } });
 		await user.click(screen.getByTestId('modal-submit'));
 
@@ -293,7 +293,83 @@ describe('AddModal', () => {
 		const saved = onSave.mock.calls[0][0];
 		// the application carries the Gmail account; each ref carries just its stage + id (date defaults to today)
 		expect(saved.account).toBe('me@work.com');
-		expect(saved.emails).toEqual([{ messageId: 'ABC123', category: 'interview', date: expect.any(String) }]);
+		// Attaching in the UI IS the manual procedure, so the ref is tagged 'manual' at its origin.
+		expect(saved.emails).toEqual([{ messageId: 'ABC123', category: 'interview', date: expect.any(String), origin: 'manual' }]);
+	});
+
+	it('should leave the origin of an untouched ref alone when the user edits an application', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn();
+		// A synced ref and an imported one already on the application; the user only adds a third.
+		render(<AddModal onSave={onSave} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: '19f2f3cdc380bf18', category: 'applied', date: '2026-02-01', origin: 'synced' },
+				{ messageId: '19fa39ea58dd4af9', category: 'interview', date: '2026-03-10', origin: 'imported' },
+			],
+		}} />);
+
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: '19fa89aa994dd02e' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		await user.click(screen.getByTestId('modal-submit'));
+
+		// Only the newly attached ref is 'manual' — saving does not relabel what the user never touched.
+		expect(onSave.mock.calls[0][0].emails.map((emailRef: EmailRef) => [emailRef.messageId, emailRef.origin])).toEqual([
+			['19f2f3cdc380bf18', 'synced'],
+			['19fa39ea58dd4af9', 'imported'],
+			['19fa89aa994dd02e', 'manual'],
+		]);
+	});
+
+	// Origin is surfaced HERE and nowhere else: the board and table stay clean, and this is the window where
+	// emails are curated, so it is where knowing "who attached this" actually matters.
+	// A fast-apply notice and a real confirmation are both category 'applied', so the stage label is the only
+	// thing that can tell them apart in a list of message ids.
+	it('should name a fast-apply notice apart from a real application confirmation', () => {
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'm-notice',       category: 'applied', date: '2026-02-01', fast_apply: true },
+				{ messageId: 'm-confirmation', category: 'applied', date: '2026-02-02' },
+			],
+		}} />);
+		const stages = screen.getAllByTestId('email-row-stage');
+		expect(stages.map(stage => stage.textContent)).toEqual(['Fast Applied', 'Applied']);
+		expect(stages.map(stage => stage.getAttribute('data-fast-apply'))).toEqual(['true', 'false']);
+	});
+
+	it('should badge each tracked email with the procedure that attached it', () => {
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'm-synced',   category: 'applied',   date: '2026-02-01', origin: 'synced' },
+				{ messageId: 'm-imported', category: 'interview', date: '2026-03-10', origin: 'imported' },
+				{ messageId: 'm-manual',   category: 'rejected',  date: '2026-04-02', origin: 'manual' },
+			],
+		}} />);
+		const badges = screen.getAllByTestId('email-origin-badge');
+		expect(badges.map(badge => badge.getAttribute('data-origin'))).toEqual(['synced', 'imported', 'manual']);
+		expect(badges.map(badge => badge.textContent)).toEqual(['Synced', 'Imported', 'Manual']);
+	});
+
+	it('should badge a ref stored before origins existed as Unknown rather than leaving it blank', () => {
+		// A blank cell would read as a rendering bug; "Unknown" says the provenance is genuinely unrecoverable.
+		render(<AddModal onSave={vi.fn()} onClose={vi.fn()} initial={{
+			id: '7', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [{ messageId: 'm-legacy', category: 'applied', date: '2026-02-01' }],
+		}} />);
+		const badge = screen.getByTestId('email-origin-badge');
+		expect(badge).toHaveAttribute('data-origin', 'unknown');
+		expect(badge).toHaveTextContent('Unknown');
+	});
+
+	it('should badge a freshly attached email as Manual straight away', async () => {
+		const user = userEvent.setup();
+		render(<AddModal initial={{}} onSave={vi.fn()} onClose={vi.fn()} />);
+		fireEvent.change(screen.getByTestId('field-account'), { target: { value: 'me@work.com' } });
+		fireEvent.change(screen.getByTestId('email-draft-input'), { target: { value: 'ABC123' } });
+		await user.click(screen.getByTestId('email-draft-add'));
+		expect(screen.getByTestId('email-origin-badge')).toHaveTextContent('Manual');
 	});
 
 	it('should require the Gmail account before a tracked email can be attached', async () => {
@@ -330,5 +406,71 @@ describe('AddModal', () => {
 		expect(screen.getByTestId('email-row')).toHaveTextContent('M1');
 		await user.click(screen.getByTestId('email-row-remove'));
 		expect(screen.queryByTestId('email-row')).toBeNull();
+	});
+
+	describe('reordering tracked emails', () => {
+		// jsdom doesn't build a DataTransfer for synthetic drag events, so supply the bits the handlers touch.
+		const dragPayload = () => ({ dataTransfer: { setData: vi.fn(), effectAllowed: '', dropEffect: '' } });
+
+		const threeEmails = {
+			id: 'x', company: 'Acme', role: 'SWE', account: 'me@work.com',
+			emails: [
+				{ messageId: 'M1', category: 'applied',   date: '2026-01-01' },
+				{ messageId: 'M2', category: 'interview', date: '2026-02-01' },
+				{ messageId: 'M3', category: 'rejected',  date: '2026-03-01' },
+			],
+		} as unknown as Partial<ApplicationFormData>;
+
+		const rowIds = () => screen.getAllByTestId('email-row').map(row => row.textContent?.match(/M\d/)?.[0]);
+
+		it('should not offer dragging for a single email — there is nothing to reorder', () => {
+			const initial = {
+				id: 'x', company: 'Acme', role: 'SWE',
+				emails: [{ messageId: 'M1', category: 'applied', date: '2026-01-01' }],
+			} as unknown as Partial<ApplicationFormData>;
+			render(<AddModal initial={initial} onSave={vi.fn()} onClose={vi.fn()} />);
+			expect(screen.getByTestId('email-row')).not.toHaveAttribute('draggable');
+			expect(screen.queryByTestId('email-reorder-hint')).toBeNull();
+		});
+
+		it('should move an email to the dropped-on position without saving until Save is clicked', async () => {
+			const user = userEvent.setup();
+			const onSave = vi.fn();
+			render(<AddModal initial={threeEmails} onSave={onSave} onClose={vi.fn()} />);
+			expect(screen.getByTestId('email-reorder-hint')).toBeInTheDocument();
+
+			const rows = screen.getAllByTestId('email-row');
+			expect(rows[0]).toHaveAttribute('draggable', 'true');
+			fireEvent.dragStart(rows[2], dragPayload());   // grab the last one
+			fireEvent.dragOver(rows[0], dragPayload());
+			fireEvent.drop(rows[0], dragPayload());        // drop it on the first
+
+			// the draft form shows the new order immediately, but nothing has been persisted yet
+			expect(rowIds()).toEqual(['M3', 'M1', 'M2']);
+			expect(onSave).not.toHaveBeenCalled();
+
+			await user.click(screen.getByTestId('modal-submit'));
+			expect(onSave.mock.calls[0][0].emails.map((e: { messageId: string }) => e.messageId)).toEqual(['M3', 'M1', 'M2']);
+		});
+
+		it('should discard a reorder when the modal is closed instead of saved', async () => {
+			const user = userEvent.setup();
+			const onSave = vi.fn();
+			render(<AddModal initial={threeEmails} onSave={onSave} onClose={vi.fn()} />);
+			const rows = screen.getAllByTestId('email-row');
+			fireEvent.dragStart(rows[0], dragPayload());
+			fireEvent.drop(rows[2], dragPayload());
+			expect(rowIds()).toEqual(['M2', 'M3', 'M1']);
+			await user.click(screen.getByTestId('modal-cancel'));
+			expect(onSave).not.toHaveBeenCalled();   // the stored order is untouched
+		});
+
+		it('should leave the order alone when an email is dropped back on itself', () => {
+			render(<AddModal initial={threeEmails} onSave={vi.fn()} onClose={vi.fn()} />);
+			const rows = screen.getAllByTestId('email-row');
+			fireEvent.dragStart(rows[1], dragPayload());
+			fireEvent.drop(rows[1], dragPayload());
+			expect(rowIds()).toEqual(['M1', 'M2', 'M3']);
+		});
 	});
 });

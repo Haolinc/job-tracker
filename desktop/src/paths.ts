@@ -38,7 +38,7 @@ export interface LauncherPaths {
  *    and Velopack's own packages/ download dir. The whole app lives and dies with its folder.
  */
 /** Under Velopack the exe runs from <root>\current\; the root above it holds Update.exe and the markers. */
-export function velopackRootDirectory(): string {
+function velopackRootDirectory(): string {
 	return path.dirname(path.dirname(process.execPath));
 }
 

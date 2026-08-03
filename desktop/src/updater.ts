@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { copyFileSync, existsSync, readFileSync } from 'node:fs';
-import { logToTerminal, type LogFn } from './log';
+import { errorText, logToTerminal, type LogFn } from './log';
 import { isPortableFlavour } from './paths';
 
 /**
@@ -160,8 +160,7 @@ export class Updater {
 			await this.promptRestartToInstall(updateManager, updateInfo);
 		} catch (caughtError) {
 			// An unreachable GitHub (offline, rate-limited) is routine — log it and move on; the app runs regardless.
-			const failureReason = caughtError instanceof Error ? caughtError.message : String(caughtError);
-			this.log('launcher', `Update check failed: ${failureReason}`);
+			this.log('launcher', `Update check failed: ${errorText(caughtError)}`);
 			this.startServerAfterUpdateSettled('Update did not complete — starting the server.');
 		}
 	}

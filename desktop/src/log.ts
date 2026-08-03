@@ -33,3 +33,7 @@ export function createLog(getWindow: () => BrowserWindow | null): LogFn {
 export function logToTerminal(source: string, chunk: string): void {
 	for (const taggedLine of taggedLines(source, chunk)) console.log(taggedLine);
 }
+
+/** A caught value as a loggable string. `catch` binds `unknown`, and every launcher failure path ends up in
+ *  a log line, so the widening lives here once instead of at each call site. */
+export const errorText = (caught: unknown): string => (caught instanceof Error ? caught.message : String(caught));

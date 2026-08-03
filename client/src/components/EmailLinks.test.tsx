@@ -10,12 +10,12 @@ const refs: EmailRef[] = [
 ];
 
 describe('EmailLinks', () => {
-	it('should render one Gmail link per email, ordered chronologically by date', () => {
+	it('should render one Gmail link per email in the order they are stored', () => {
 		render(<EmailLinks emails={refs} account="me@work.com" />);
 		const links = screen.getAllByTestId('email-link');
 		expect(links).toHaveLength(3);
-		// sorted by date asc → applied, interview, rejected (regardless of input order)
-		expect(links.map(a => a.textContent?.trim())).toEqual(['✉ Applied', '✉ Interview', '✉ Rejected']);
+		// Stored order is the display order — it's what the user arranges in the edit modal, so it is never re-sorted.
+		expect(links.map(link => link.textContent?.trim())).toEqual(['✉ Rejected', '✉ Applied', '✉ Interview']);
 	});
 
 	it("should point every link at the application's Gmail account, opening in a new tab", () => {
@@ -38,12 +38,17 @@ describe('EmailLinks', () => {
 		expect(screen.queryByTestId('email-link')).toBeNull();
 	});
 
+	it('should keep the pills as plain links — reordering lives in the edit modal, not on the card', () => {
+		render(<EmailLinks emails={refs} account="me@work.com" />);
+		for (const link of screen.getAllByTestId('email-link')) expect(link).not.toHaveAttribute('draggable');
+	});
+
 	it('labels a fast-apply notice "⚡ Fast Applied" while other emails keep their stage label', () => {
 		render(<EmailLinks emails={[
 			{ messageId: 'm-fast', category: 'applied',  date: '2026-02-01', fast_apply: true },
 			{ messageId: 'm-rej',  category: 'rejected', date: '2026-04-02' },
 		]} account="me@work.com" />);
 		const links = screen.getAllByTestId('email-link');
-		expect(links.map(a => a.textContent?.trim())).toEqual(['⚡ Fast Applied', '✉ Rejected']);
+		expect(links.map(link => link.textContent?.trim())).toEqual(['⚡ Fast Applied', '✉ Rejected']);
 	});
 });

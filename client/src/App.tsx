@@ -23,7 +23,7 @@ export default function App() {
 
 	// When a sync this tab RECONNECTED to (reopened mid-sync) finishes, refetch so the board shows its results.
 	// The normal, tab-initiated sync refetches in handleSync instead (it also computes the "new" highlight).
-	const { connected, syncing, progress, lastResult, error: syncError, checkStatus, disconnect, sync } =
+	const { connected, syncing, cancelling, progress, lastResult, error: syncError, checkStatus, disconnect, sync, cancel } =
 		useGmailSync(() => { void fetchAll(filters); });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
@@ -203,11 +203,13 @@ export default function App() {
 	const handleSync = async (days: number) => {
 		// Snapshot updated_at per id before syncing; after the refetch, anything new or with a bumped
 		// updated_at was touched by this sync and gets the "new" highlight.
-		const before = new Map(applications.map(a => [a.id, a.updated_at]));
+		const updatedAtBeforeSync = new Map(applications.map(app => [app.id, app.updated_at]));
 		try {
 			await sync(days);
 			const fresh = await fetchAll(filters);
-			setNewlyAdded(new Set((fresh ?? []).filter(a => before.get(a.id) !== a.updated_at).map(a => a.id)));
+			setNewlyAdded(new Set((fresh ?? [])
+				.filter(app => updatedAtBeforeSync.get(app.id) !== app.updated_at)
+				.map(app => app.id)));
 		} catch { /* error shown in GmailSync via syncError */ }
 	};
 
@@ -219,12 +221,14 @@ export default function App() {
 					<GmailSync
 						connected={connected}
 						syncing={syncing}
+						cancelling={cancelling}
 						progress={progress}
 						lastResult={lastResult}
 						error={syncError}
 						onConnect={() => { window.location.href = '/api/auth/google'; }}
 						onDisconnect={disconnect}
 						onSync={handleSync}
+						onCancel={cancel}
 					/>
 				</div>
 			</header>

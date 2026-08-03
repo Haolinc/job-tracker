@@ -26,8 +26,9 @@ const configButton = document.getElementById('config-button') as HTMLButtonEleme
 const configPanel = document.getElementById('config-panel') as HTMLElement;
 const saveConfigButton = document.getElementById('save-config-button') as HTMLButtonElement;
 
-// Every config field is a plain text input EXCEPT the model, which is a dropdown of installed models.
-type TextConfigField = Exclude<keyof LauncherConfig, 'ollamaModel'>;
+// Every config field is a plain text input EXCEPT the model (a dropdown of installed models) and debug
+// logging (a checkbox) — both are read and written on their own below.
+type TextConfigField = Exclude<keyof LauncherConfig, 'ollamaModel' | 'debugLogging'>;
 
 // Record<…> makes the compiler verify an input exists for every text field — and the derived list below
 // keeps load and save in lockstep with the interface.
@@ -39,6 +40,7 @@ const configInputs: Record<TextConfigField, HTMLInputElement> = {
 	port: document.getElementById('server-port') as HTMLInputElement,
 };
 const configFields = Object.keys(configInputs) as TextConfigField[];
+const debugLoggingCheckbox = document.getElementById('debug-logging') as HTMLInputElement;
 const modelSelect = document.getElementById('ollama-model') as HTMLSelectElement;
 const refreshModelsButton = document.getElementById('refresh-models-button') as HTMLButtonElement;
 const pullModelInput = document.getElementById('pull-model-input') as HTMLInputElement;
@@ -219,14 +221,14 @@ launcher.onUpdateProgress(renderUpdateProgress);
 // Exact copy of formatDuration in server/utils.ts and client/src/utils/formatDuration.ts — the no-import
 // boundary again. Keep all copies identical.
 function formatDuration(ms: number): string {
-	const total = Math.round(ms / 1000);
-	const h = Math.floor(total / 3600);
-	const m = Math.floor((total % 3600) / 60);
-	const s = total % 60;
+	const totalSeconds = Math.round(ms / 1000);
+	const hours   = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
 	const parts: string[] = [];
-	if (h) parts.push(`${h}h`);
-	if (m) parts.push(`${m}m`);
-	if (s || !parts.length) parts.push(`${s}s`);
+	if (hours) parts.push(`${hours}h`);
+	if (minutes) parts.push(`${minutes}m`);
+	if (seconds || !parts.length) parts.push(`${seconds}s`);
 	return parts.join(' ');
 }
 
@@ -237,7 +239,7 @@ const renderSyncLine = createLiveLine(logConsole);
 // ever arrives — so track the sync ourselves and close the line out when the server goes away.
 let syncInProgress = false;
 function renderSyncProgress(event: SyncProgressEvent): void {
-	syncInProgress = event.phase !== 'done' && event.phase !== 'error';
+	syncInProgress = event.phase !== 'done' && event.phase !== 'cancelled' && event.phase !== 'error';
 	const countsText = `${event.added ?? 0} added, ${event.updated ?? 0} updated, ${event.skipped ?? 0} skipped`;
 	if (event.phase === 'start') {
 		const totalEmails = event.total ?? 0;
@@ -251,6 +253,9 @@ function renderSyncProgress(event: SyncProgressEvent): void {
 		const failedNote = event.failed ? `, ${event.failed} failed (will retry)` : '';
 		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
 		renderSyncLine(`✓ Sync finished: ${countsText}${failedNote}${durationText}`, { finalize: true, tone: 'success' });
+	} else if (event.phase === 'cancelled') {
+		const durationText = event.durationMs ? ` — ${formatDuration(event.durationMs)}` : '';
+		renderSyncLine(`⊘ Sync cancelled: ${countsText} saved${durationText}`, { finalize: true, tone: 'warning' });
 	} else if (event.phase === 'error') {
 		renderSyncLine(`✗ Sync failed: ${event.error ?? 'unknown error'}`, { finalize: true, tone: 'error' });
 	}
@@ -307,6 +312,7 @@ openLogsButton.addEventListener('click', () => launcher.openLogsFolder());
 async function loadConfigIntoPanel(): Promise<void> {
 	const config = await launcher.getConfig();
 	for (const configField of configFields) configInputs[configField].value = config[configField];
+	debugLoggingCheckbox.checked = config.debugLogging === 'true';   // any other value, including absent, is off
 	savedOllamaModel = config.ollamaModel;
 	await refreshModelPicker(savedOllamaModel);
 	await refreshIncompleteDownloads();
@@ -467,6 +473,7 @@ saveConfigButton.addEventListener('click', async () => {
 	// When the picker is disabled (Ollama down, or nothing installed) there's no real selection to save —
 	// keep the previously saved model rather than overwriting it with an empty value.
 	config.ollamaModel = modelSelect.disabled ? savedOllamaModel : modelSelect.value;
+	config.debugLogging = debugLoggingCheckbox.checked ? 'true' : 'false';
 	if (!config.port) config.port = DEFAULT_PORT;   // an empty PORT= line would break the server
 	await launcher.saveConfig(config);
 	configPanel.classList.remove('open');

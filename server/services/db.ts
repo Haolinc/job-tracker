@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Application, CreateApplicationData, MarkSyncedData, EmailRef } from '../types';
+import { companyKey } from './companyIdentity';
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 // Embedded SQLite (better-sqlite3, synchronous) — one file, no server process. The exported API keeps the
@@ -284,6 +285,19 @@ export const findByCompanyFirstWord = async (firstWord: string): Promise<Applica
 	return rows.filter(row => boundedFirstWord.test(row.company)).map(toApplication);
 };
 
+/**
+ * All applications whose company matches `company` once spacing, punctuation, and case are stripped
+ * ("JPMorgan Chase" ↔ "JPMorganChase", "MITRE" ↔ "mitre"). A full scan — negligible at this app's scale —
+ * because a collapsed-key equality can't be expressed as a SQL prefix (the space that splits them is the very
+ * thing we ignore). Complements findByCompanyFirstWord, which handles descriptor variants ("Fora" ↔ "Fora Travel").
+ */
+export const findByCompanyKey = async (company: string): Promise<Application[]> => {
+	const collapsedKey = companyKey(company);
+	if (!collapsedKey) return [];
+	const rows = getDatabase().prepare('SELECT * FROM applications').all() as ApplicationRow[];
+	return rows.map(toApplication).filter(app => companyKey(app.company) === collapsedKey);
+};
+
 /** All applications from the same real company domain — the strongest dedup key (one domain = one employer). */
 export const findByCompanyDomain = async (domain: string): Promise<Application[]> => {
 	const rows = getDatabase().prepare('SELECT * FROM applications WHERE company_domain = ?').all(domain) as ApplicationRow[];
@@ -303,23 +317,36 @@ export const getSyncedMessageIds = async (messageIds: string[]): Promise<Set<str
 	return synced;
 };
 
+// The synced-email log's ONE insert, shared by all three writers below so the column list and the conflict
+// behaviour can't drift between them. OR IGNORE preserves the FIRST record for a message id (same as the
+// previous $setOnInsert upsert), so re-recording an email never overwrites a genuine sync's row.
+const INSERT_SYNCED_EMAIL_SQL = 'INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)';
+
 export const markEmailSynced = async (data: MarkSyncedData): Promise<void> => {
-	// OR IGNORE preserves the first record for a message (same as the previous $setOnInsert upsert).
-	getDatabase().prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)')
+	getDatabase().prepare(INSERT_SYNCED_EMAIL_SQL)
 		.run(data.message_id, data.thread_id, data.classified_as, new Date().toISOString());
 };
 
+/**
+ * Record a batch of email refs in the synced-email log. Takes the connection explicitly so the same code
+ * serves both callers: markEmailRefsSynced wraps it in its own transaction, while applyImportPlan calls it
+ * from INSIDE the plan's transaction (where opening a nested one is neither possible nor wanted).
+ * The refs carry no thread id, so the message id stands in — for a thread's first message the two are the
+ * same value anyway.
+ */
+function recordEmailRefsAsSynced(connection: Database.Database, emailRefs: EmailRef[]): void {
+	const insertSyncedEmail = connection.prepare(INSERT_SYNCED_EMAIL_SQL);
+	const syncedAt = new Date().toISOString();
+	for (const emailRef of emailRefs) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
+}
+
 /** Mark an application's imported/attached email refs as already synced, so the next Gmail sync skips
  *  them instead of re-fetching and re-classifying messages the board already tracks (a CSV import would
- *  otherwise cause a full re-sync). The refs carry no thread id, so the message id stands in — for a
- *  thread's first message the two are the same value — and OR IGNORE keeps any genuine sync record intact. */
+ *  otherwise cause a full re-sync). */
 export const markEmailRefsSynced = async (emailRefs: EmailRef[]): Promise<void> => {
 	if (emailRefs.length === 0) return;
-	const insertSyncedEmail = getDatabase().prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)');
-	const syncedAt = new Date().toISOString();
-	getDatabase().transaction(() => {
-		for (const emailRef of emailRefs) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
-	})();
+	const database = getDatabase();
+	database.transaction(() => recordEmailRefsAsSynced(database, emailRefs))();
 };
 
 // ── CSV import plan ─────────────────────────────────────────────────────────
@@ -419,10 +446,8 @@ export const applyImportPlan = async (plan: ImportPlanPayload): Promise<ImportPl
 			createdIds.push(String(insertResult.lastInsertRowid));
 		}
 
-		// 5. Every email id in the file is now board-tracked → synced. OR IGNORE keeps genuine sync records.
-		const insertSyncedEmail = database.prepare('INSERT OR IGNORE INTO synced_emails (message_id, thread_id, classified_as, synced_at) VALUES (?, ?, ?, ?)');
-		const syncedAt = new Date().toISOString();
-		for (const emailRef of plan.syncEmails) insertSyncedEmail.run(emailRef.messageId, emailRef.messageId, emailRef.category, syncedAt);
+		// 5. Every email id in the file is now board-tracked → synced.
+		recordEmailRefsAsSynced(database, plan.syncEmails);
 
 		return { added: createdIds.length, updated: updatedIds.length, deleted, staleSkipped, createdIds, updatedIds };
 	})();

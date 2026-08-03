@@ -43,26 +43,26 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 	const [sortDir, setSortDir] = useState<SortDir>('desc');
 	const [page, setPage] = useState(0);
 
-	const handleSort = (col: SortKey) => {
-		if (col === sortKey) {
-			setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+	const handleSort = (column: SortKey) => {
+		if (column === sortKey) {
+			setSortDir(currentDirection => currentDirection === 'asc' ? 'desc' : 'asc');
 		} else {
-			setSortKey(col);
+			setSortKey(column);
 			setSortDir('asc');
 		}
 		setPage(0);
 	};
 
-	const sorted = useMemo(() => [...applications].sort((a, b) => {
+	const sorted = useMemo(() => [...applications].sort((firstApp, secondApp) => {
 		// When sorting by Role, applications with no detected role have nothing to sort on, so they go
 		// last (lowest priority) regardless of direction. Other sorts — including the default Last
 		// Response — don't special-case them.
 		if (sortKey === 'role') {
-			const au = isUnknownRole(a.role), bu = isUnknownRole(b.role);
-			if (au !== bu) return au ? 1 : -1;
+			const firstRoleUnknown = isUnknownRole(firstApp.role), secondRoleUnknown = isUnknownRole(secondApp.role);
+			if (firstRoleUnknown !== secondRoleUnknown) return firstRoleUnknown ? 1 : -1;
 		}
-		const cmp = String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''));
-		return sortDir === 'asc' ? cmp : -cmp;
+		const comparison = String(firstApp[sortKey] ?? '').localeCompare(String(secondApp[sortKey] ?? ''));
+		return sortDir === 'asc' ? comparison : -comparison;
 	}), [applications, sortKey, sortDir]);
 
 	const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
@@ -101,13 +101,13 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 										<button onClick={() => onEdit(app)} className="hover:text-blue-600 text-left truncate">
 											{app.company}
 										</button>
-										{provenanceBadges(app).map(b => (
+										{provenanceBadges(app).map(badge => (
 											<span
-												key={b.label}
-												className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${b.cls}`}
-												title={b.title}
+												key={badge.label}
+												className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.cls}`}
+												title={badge.title}
 											>
-												{b.label}
+												{badge.label}
 											</span>
 										))}
 									</div>
@@ -166,13 +166,13 @@ export default function TableView({ applications, highlightIds, onEdit, onDelete
 					<div className="flex gap-1">
 						<button
 							data-testid="table-prev"
-							onClick={() => setPage(p => Math.max(0, p - 1))}
+							onClick={() => setPage(currentPage => Math.max(0, currentPage - 1))}
 							disabled={effectivePage === 0}
 							className="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
 						>← Prev</button>
 						<button
 							data-testid="table-next"
-							onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+							onClick={() => setPage(currentPage => Math.min(totalPages - 1, currentPage + 1))}
 							disabled={effectivePage === totalPages - 1}
 							className="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
 						>Next →</button>

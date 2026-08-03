@@ -17,6 +17,7 @@ const ENV_KEYS_BY_CONFIG_FIELD: Record<keyof LauncherConfig, string> = {
 	sessionSecret: 'SESSION_SECRET',
 	port: 'PORT',
 	ollamaModel: 'OLLAMA_MODEL',
+	debugLogging: 'DEBUG_LOG',
 };
 
 const CONFIG_FIELDS = Object.keys(ENV_KEYS_BY_CONFIG_FIELD) as (keyof LauncherConfig)[];
@@ -28,6 +29,7 @@ const DEFAULT_CONFIG_VALUES: Record<keyof LauncherConfig, string> = {
 	sessionSecret: '',
 	port: DEFAULT_PORT,
 	ollamaModel: '',
+	debugLogging: 'false',
 };
 
 export function readEnvFile(envPath: string): Map<string, string> {

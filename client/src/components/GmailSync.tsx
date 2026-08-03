@@ -1,22 +1,31 @@
 import { useState } from 'react';
 import type { SyncResult, SyncProgress } from '../types';
 import { formatDuration } from '../utils/formatDuration';
+import WarningConfirmDialog from './WarningConfirmDialog';
 
 const SCAN_WINDOWS = [30, 60, 90, 180];
 
 interface Props {
 	connected: boolean;
 	syncing: boolean;
+	cancelling: boolean;
 	progress: SyncProgress | null;
 	lastResult: SyncResult | null;
 	error: string | null;
 	onConnect: () => void;
 	onDisconnect: () => void;
 	onSync: (days: number) => void;
+	onCancel: () => void;
 }
 
-export default function GmailSync({ connected, syncing, progress, lastResult, error, onConnect, onDisconnect, onSync }: Props) {
+export default function GmailSync({ connected, syncing, cancelling, progress, lastResult, error, onConnect, onDisconnect, onSync, onCancel }: Props) {
 	const [days, setDays] = useState(30);
+	const [cancelConfirmRequested, setCancelConfirmRequested] = useState(false);
+	// The "Stop this sync?" question is only meaningful while a sync is running, so visibility is DERIVED from
+	// `syncing` rather than reset after the fact: a sync that finishes (on its own, or because the cancel landed)
+	// while the dialog is open dismisses it in the same render, so the user never confirms a no-op. The request
+	// flag is cleared when a new sync starts, so a dialog abandoned that way can't reappear over the next one.
+	const showCancelConfirm = syncing && cancelConfirmRequested;
 	return (
 		<div data-testid="gmail-sync" className="flex items-center gap-2 flex-wrap">
 			{connected ? (
@@ -29,11 +38,11 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 						title="How far back to scan Gmail"
 						className="px-2 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 bg-white disabled:opacity-60"
 					>
-						{SCAN_WINDOWS.map(d => <option key={d} value={d}>Last {d} days</option>)}
+						{SCAN_WINDOWS.map(windowDays => <option key={windowDays} value={windowDays}>Last {windowDays} days</option>)}
 					</select>
 					<button
 						data-testid="gmail-sync-btn"
-						onClick={() => onSync(days)}
+						onClick={() => { setCancelConfirmRequested(false); onSync(days); }}
 						disabled={syncing}
 						className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
 					>
@@ -42,6 +51,30 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 							: '\u{1F4E7}'}
 						{syncing ? 'Syncing...' : 'Sync Gmail'}
 					</button>
+					{syncing && (
+						<button
+							data-testid="gmail-cancel-btn"
+							onClick={() => setCancelConfirmRequested(true)}
+							disabled={cancelling}
+							title="Stop this sync — its progress won't be saved; you can sync again later"
+							className="px-3 py-2 border border-red-200 bg-white text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+						>{cancelling ? 'Cancelling…' : 'Cancel'}</button>
+					)}
+					{showCancelConfirm && (
+						<WarningConfirmDialog
+							testIdPrefix="gmail-cancel-sync"
+							title="Stop syncing?"
+							confirmLabel="Stop sync"
+							busyLabel="Stopping…"
+							cancelLabel="Keep syncing"
+							busy={cancelling}
+							onCancel={() => setCancelConfirmRequested(false)}
+							onConfirm={onCancel}
+						>
+							Sync results are only saved once the sync finishes. If you stop now, this sync's progress won't be
+							saved and you'll need to sync again.
+						</WarningConfirmDialog>
+					)}
 					<button
 						data-testid="gmail-disconnect-btn"
 						onClick={onDisconnect}
@@ -70,6 +103,7 @@ export default function GmailSync({ connected, syncing, progress, lastResult, er
 					)}
 					{!syncing && lastResult && (
 						<span data-testid="gmail-sync-result" className="text-xs text-gray-400 w-full sm:w-auto">
+							{lastResult.cancelled && <span className="font-semibold text-amber-600">Sync cancelled &middot; </span>}
 							<span className="font-semibold text-emerald-600">+{lastResult.added} added</span>
 							{' '}&middot;{' '}
 							<span className="font-semibold text-blue-600">{lastResult.updated} updated</span>

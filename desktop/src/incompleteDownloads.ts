@@ -3,7 +3,7 @@
 // so this is our own record, letting the launcher offer Resume / Reclaim across restarts.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import type { LogFn } from './log';
+import { errorText, type LogFn } from './log';
 
 export class IncompleteDownloadStore {
 	private readonly names: Set<string>;
@@ -45,7 +45,7 @@ export class IncompleteDownloadStore {
 			return Array.isArray(parsed) ? parsed.filter((name): name is string => typeof name === 'string') : [];
 		} catch (error) {
 			// A corrupt/unreadable record isn't fatal — the partial blobs still exist, we just lose the list.
-			this.log('launcher', `Could not read the incomplete-downloads record: ${error instanceof Error ? error.message : String(error)}`);
+			this.log('launcher', `Could not read the incomplete-downloads record: ${errorText(error)}`);
 			return [];
 		}
 	}
@@ -55,7 +55,7 @@ export class IncompleteDownloadStore {
 			writeFileSync(this.filePath, JSON.stringify([...this.names], null, 2));
 		} catch (error) {
 			// Best-effort persistence; the in-memory set stays correct for this session even if the write fails.
-			this.log('launcher', `Could not save the incomplete-downloads record: ${error instanceof Error ? error.message : String(error)}`);
+			this.log('launcher', `Could not save the incomplete-downloads record: ${errorText(error)}`);
 		}
 	}
 }

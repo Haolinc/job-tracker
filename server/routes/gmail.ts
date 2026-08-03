@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmail/messages';
-import { classifyEmail, warmUpModel } from '../services/classifier';
+import { classifyEmail, warmUpModel, pickCompanyRole } from '../services/classifier';
 import { parseEmail } from '../services/parser/templates';
 import { extractGeneralCompanyRole } from '../services/parser/companyRole';
 import { extractJobNumber } from '../services/parser/reqId';
@@ -10,21 +10,32 @@ import { recoverRoleFromBody, tidyRole } from '../services/parser/roles';
 import * as db from '../services/db';
 import { isIgnorableEmail } from '../services/filters';
 import {
-	normalizeCompany,
+	companyTradeName,
 	companyDomainFromSender,
 	companiesSameEntity,
 } from '../services/companyIdentity';
 import { findExisting } from '../services/applicationMatcher';
 import { errMsg, formatDuration, resolveStatus, isFastApplyNotice, looksLikeStatusUpdate, looksLikeConfirmation } from '../utils';
-import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent } from '../services/syncState';
-import { debug, guiLine } from '../logger';
-import type { EmailResult, Status } from '../types';
+import { isSyncRunning, setSyncRunning, isImportRunning, setLastSyncEvent, getLastSyncEvent, isSyncCancelRequested, requestSyncCancel, clearSyncCancel } from '../services/syncState';
+import { debug, info, guiLine } from '../logger';
+import type { Application, ClassifierCode, EmailResult, EmailRef, Status } from '../types';
 
 const router = Router();
 
 // Each sync progress event is mirrored to stdout as "@sync-progress@ {json}" so the desktop launcher can
 // render a live sync line in its panel. Keep in sync with the same constant in desktop/src/serverManager.ts.
 const SYNC_PROGRESS_MARKER = '@sync-progress@';
+
+// The deterministic-parser templates worth tallying per sync, keyed by the classifier_code each one stamps.
+// Drives both the counting and the summary line, so a new template needs one entry here and nothing else.
+// An LLM-classified email carries no code and is counted by none of them.
+const PARSED_BY_LABEL: Record<ClassifierCode, string> = {
+	linkedin_applied:  'LinkedIn applied',
+	linkedin_rejected: 'LinkedIn rejected',
+	indeed_applied:    'Indeed applied',
+	indeed_rejected:   'Indeed rejected',
+	general_template:  'General template',
+};
 
 /** The auto-detection note for an application, flagging when the role still needs manual entry. */
 function gmailNote(subject: string, hasRole: boolean): string {
@@ -38,14 +49,14 @@ function gmailNote(subject: string, hasRole: boolean): string {
 // the parsed-by counters tally the same set of emails as before. No raw body is retained — it's consumed
 // during classification.
 type ClassifyResult =
-	| { kind: 'skip'; threadId: string; messageId: string; classifiedAs: 'ignored'; classifierCode?: string }
+	| { kind: 'skip'; threadId: string; messageId: string; classifiedAs: 'ignored'; classifierCode?: ClassifierCode }
 	| { kind: 'failed'; threadId: string; messageId: string }
 	| {
 		kind: 'merge'; threadId: string; messageId: string; subject: string;
 		category: Status; company: string; role: string | null;
 		externalId: string | null; senderDomain: string | null;
 		isConfirmation: boolean; isFastApply: boolean;
-		detectedBy: 'parser' | 'llm'; classifierCode?: string;
+		detectedBy: 'parser' | 'llm'; classifierCode?: ClassifierCode;
 		internalDate: number; lastMessageDate: string;
 	};
 
@@ -57,6 +68,7 @@ type ClassifyResult =
  */
 export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	const { threadId, messageId, subject, from, body } = email;
+    debug(`[sync] body subject="${subject}" from="${from}" cleaned=${JSON.stringify(body)}`);
 
 	// Hard-filter obvious non-job emails before calling the LLM.
 	if (isIgnorableEmail(subject, from, body)) {
@@ -67,9 +79,49 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 	// Try deterministic parser first — covers ~50-60% of emails (LinkedIn, Indeed, Workday)
 	// with zero AI cost. Falls back to the LLM for everything else.
 	let classification = parseEmail(subject, from, body);
-	const detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+	let detectedBy: 'parser' | 'llm' = classification ? 'parser' : 'llm';   // which path handled this email
+	// The parser's own company was judged NOT an employer, so the fallback below must not re-insert it.
+	let parserCompanyRejected = false;
+	// A role the picker found before declining to name a company — used only if the LLM returns none.
+	let pickerSalvagedRole: string | null = null;
+
+	// The general template can capture a noun phrase without knowing what it IS ("your interest in X" fits
+	// both "…in Axoni" and "…in Software Engineer"), so it emits the candidates untyped. Resolve them:
+	//   • < 2 candidates → there is nothing to choose between, and a lone span is as likely a role as a company
+	//     (the Leidos "Mid-Level Software Engineer" trap). Hand it to the full classifier to read the whole email.
+	//   • ≥ 2 candidates → the cheap picker TYPES them (which is the company, which the role) without re-reading
+	//     the body. If it is not confident any span is a legitimate company, it returns null → slide to full.
+	if (classification?.ambiguous_spans && classification.category !== 'ignored') {
+		const spans = classification.ambiguous_spans;
+		// Log the candidate list + the parser's own first-match guess, so a wrong company stays traceable to
+		// which candidates were (and weren't) on offer.
+		debug(`[sync] ambiguous candidates=${JSON.stringify(spans)} parserGuess="${classification.company}" subject="${subject}"`);
+		if (spans.length < 2) {
+			debug(`[sync] <2 candidates; deferring to full classify subject="${subject}"`);
+			parserCompanyRejected = true;   // a lone untyped span is not a company we can trust
+			classification = null;
+			detectedBy = 'llm';
+		} else {
+			const picked = await pickCompanyRole(spans, subject, body);
+			if (picked?.company) {
+				debug(`[sync] picked: company="${picked.company}" role="${picked.role ?? ''}" subject="${subject}"`);
+				classification = { ...classification, company: picked.company, role: picked.role ?? classification.role };
+			} else if (picked) {
+				// No span is a legitimate employer. Slide to the full classifier, keeping the role it DID find.
+				debug(`[sync] picker named no employer; deferring to full classify subject="${subject}"`);
+				parserCompanyRejected = true;
+				pickerSalvagedRole = picked.role;
+				classification = null;
+				detectedBy = 'llm';
+			}
+			// picked === null (Ollama down / bad response) → keep the parser's guess, exactly as before.
+		}
+	}
 
 	if (!classification) {
+		// The LLM reads the whole email unaided. Parser candidates used to ride along as reference hints; on the
+		// hand-corrected audit they bought nothing (company 88.6% hinted vs 90.9% unhinted, role tied at 73.5%)
+		// and anchored the model to a trimmed span ("Ametek" for "Ametek, Inc.").
 		try {
 			classification = await classifyEmail(subject, from, body);
 		} catch (err) {
@@ -80,40 +132,48 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 			return { kind: 'failed', threadId, messageId };
 		}
 
-		// The LLM is the SOURCE OF TRUTH for company/role on this path. The deterministic regex only
-		// FILLS GAPS — when the LLM returned null — and never overrides a value the LLM produced.
-		// (Overriding used to corrupt correct answers, e.g. truncate "Sherpa 6" → "Sherpa".)
+		// Safety net for a field the LLM left null. Never OVERRIDE a value it produced (overriding used to
+		// truncate correct answers, "Sherpa 6" → "Sherpa"), and never re-insert a rejected company — it is a role.
 		if (classification.category !== 'ignored' && (!classification.company || !classification.role)) {
-			const ext = extractGeneralCompanyRole(subject, body);
-			if (!classification.company && ext) classification.company = ext.company;
-			if (!classification.role) classification.role = ext?.role ?? recoverRoleFromBody(body, subject);
+			const parserCandidates = extractGeneralCompanyRole(subject, body);
+			if (!classification.company && parserCandidates && !parserCompanyRejected) classification.company = parserCandidates.company;
+			if (!classification.role) classification.role = (pickerSalvagedRole ?? parserCandidates?.role) ?? recoverRoleFromBody(body, subject);
 		}
 	} else if (classification.category !== 'ignored' && !classification.role) {
 		// The parser nailed company + category but couldn't pull a role from the templated text. Consult the
 		// LLM for the ROLE ONLY — the parser's company/category stay authoritative. A failed or empty call
 		// just leaves the role null → "Unknown Role", same as before.
 		try {
-			const ai = await classifyEmail(subject, from, body);
-			if (ai.role) {
-				classification = { ...classification, role: ai.role };
-				debug(`[sync] role filled by LLM: "${ai.role}" subject="${subject}"`);
+			const roleFill = await classifyEmail(subject, from, body);
+			if (roleFill.role) {
+				classification = { ...classification, role: roleFill.role };
+				debug(`[sync] role filled by LLM: "${roleFill.role}" subject="${subject}"`);
 			}
 			// Also adopt a req number the AI found — the parser may have missed it even when it got the role.
-			if (ai.req_id) classification.req_id = ai.req_id;
+			if (roleFill.req_id) classification.req_id = roleFill.req_id;
 		} catch (err) {
 			console.error(`[classify] role-fill error for subject="${subject}":`, err);
 		}
 	}
 
-	// Tidy the final role (parser- or LLM-sourced) so an AI-included req/ID or location tail
-	// ("Integration Services Developer (reference number: 771221)") doesn't reach the record.
-	if (classification.role) classification.role = tidyRole(classification.role) || null;
-	const { category, role } = classification;
+	const { category } = classification;
 	const classifierCode = classification.classifier_code;
-	let { company } = classification;
+	let { company, role } = classification;
 
-	// Normalize legal suffixes for consistent dedup.
-	if (company) company = normalizeCompany(company);
+	// Deterministic mechanical net (the symbolic half of the pipeline). The picker and full classifier JUDGE the
+	// semantics — which span is the company, which the role, when to abstain — and are told to keep the WHOLE
+	// title (levels, departments, specializations) rather than mechanically trim, because that is where the LLM
+	// over-reaches (dropping a real "- Stores & Supply Chain", or nulling a title because a req-id is glued on).
+	// tidyRole is the precise, list-based pass that strips ONLY mechanical noise the model leaves — a trailing
+	// requisition id, a city/state, a work-mode word — and never touches a real title part, so it cleans an
+	// un-stripped id without re-introducing the over-trim. Skipped for fast-apply, which stores the board's
+	// posted title verbatim.
+	if (role && !isFastApplyNotice(classifierCode)) role = tidyRole(role);
+
+	// Resolve the name the employer goes by — the trade name behind a "dba", minus a LinkedIn page qualifier.
+	// It no longer truncates legal suffixes: the stored company must be the email's own wording, and
+	// companiesSameEntity already treats "Inc"/"LLC"/"Company" as descriptors when matching two spellings.
+	if (company) company = companyTradeName(company);
 
 	// HackerRank's assessment product (hackerrankforwork.com) sends coding tests ON BEHALF OF an employer
 	// and sometimes names itself as the company. Drop "HackerRank" as a company ONLY when the email is from
@@ -144,6 +204,66 @@ export async function classifyOne(email: EmailResult): Promise<ClassifyResult> {
 		category, company, role, externalId, senderDomain,
 		isConfirmation, isFastApply, detectedBy, classifierCode,
 		internalDate: email.internalDate, lastMessageDate: email.lastMessageDate,
+	};
+}
+
+type MergeCandidate = Extract<ClassifyResult, { kind: 'merge' }>;
+
+/**
+ * The field updates one classified email contributes to the application it merges into — every rule that
+ * decides what an incoming email may and may not overwrite, in one place. PURE: it reads `existing` and the
+ * classified result and returns the update record; the caller writes it (together with the email ref) in a
+ * single transaction. An empty-ish record is fine — each rule contributes nothing when it doesn't apply.
+ */
+function buildMergeUpdates(existing: Application, classified: MergeCandidate, accountEmail: string | null): Record<string, unknown> {
+	const { subject, category, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy, internalDate, lastMessageDate } = classified;
+
+	// Activity fields (last_activity, auto note, detected_by) track the NEWEST email by precise internalDate,
+	// and date_applied the EARLIEST. ts 0 means "no recorded activity yet", so any email counts as newer.
+	const isNewer   = internalDate >= existing.last_activity_ts;
+	const isEarlier = !existing.date_applied || lastMessageDate < existing.date_applied;
+	// Upgrade "Unknown Role" when this email provides a specific role
+	// (e.g. a BAE Systems status update naming the role after a generic confirmation).
+	const upgradedRole = existing.role === 'Unknown Role' && role ? role : null;
+	const effectiveRole = upgradedRole ?? existing.role;
+	// Status moves FORWARD only (resolveStatus) — a later email never rolls it back.
+	const resolvedStatus = resolveStatus(existing.status, category);
+
+	return {
+		...(resolvedStatus !== existing.status ? { status: resolvedStatus } : {}),
+		// The newest email owns last_activity and the auto note (a 'manual' note is never overwritten).
+		...(isNewer
+			? {
+				last_activity: lastMessageDate,
+				last_activity_ts: internalDate,
+				detected_by: detectedBy,   // record how the newest (status-driving) email was classified
+				...(existing.notes_source !== 'manual' ? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') } : {}),
+			}
+			: {}),
+		...(isEarlier ? { date_applied: lastMessageDate } : {}),
+		...(upgradedRole ? { role: upgradedRole } : {}),
+		// Sticky: any interview/offer email marks the app as having reached interview — even if a later
+		// rejection becomes the current status. Only ever set true.
+		...((category === 'interview' || category === 'offer') && !existing.reached_interview ? { reached_interview: true } : {}),
+		// Backfill the req/job number if this email has one and the record doesn't yet.
+		...(externalId && !existing.external_id ? { external_id: externalId } : {}),
+		// Backfill the company domain once a real company email arrives for a record first created from an
+		// ATS/job-board sender (so later syncs can match by domain).
+		...(senderDomain && !existing.company_domain ? { company_domain: senderDomain } : {}),
+		// A confirmation arriving for an "awaiting" record (one created by an earlier update) supplies the
+		// original application and closes the wait — clear the flag so nothing else claims it.
+		...(isConfirmation && existing.awaiting_application ? { awaiting_application: false } : {}),
+		// A LinkedIn/Indeed fast-apply that merges in MARKS the record fast_apply — it's only the job board's
+		// "application sent" notice, not the company's own confirmation. The mark lets the REAL company
+		// confirmation (a regular email) still pair with this record by title later, instead of being split
+		// off as a separate record.
+		...(isFastApply && !existing.fast_apply ? { fast_apply: true } : {}),
+		// Fill the CONFIRMATION slot when a company (non-fast) confirmation merges in; once set, a second
+		// confirmation can't pair into this record.
+		...(isConfirmation && !isFastApply && !existing.confirmed ? { confirmed: true } : {}),
+		// Backfill the application's Gmail account if it doesn't have one yet (e.g. a record created before
+		// this account was known) — one account per application drives all its email links.
+		...(accountEmail && !existing.account ? { account: accountEmail } : {}),
 	};
 }
 
@@ -187,6 +307,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 	// Drop any snapshot from the previous run so a reconnecting browser can't briefly read a stale 'done'
 	// as if it belonged to this sync (see /sync/status below).
 	setLastSyncEvent(null);
+	// Clear any cancel left set from a prior run so this sync starts fresh (also cleared in finally).
+	clearSyncCancel();
 	// Progress streams to the client as newline-delimited JSON: a 'start' event (with the total), a
 	// 'progress' event per email, and a final 'done' event. Once streaming begins the HTTP status is
 	// already 200, so a later error is reported as an 'error' event instead of a 500.
@@ -203,7 +325,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		try { res.write(JSON.stringify(event) + '\n'); } catch { /* socket died between the check and the write */ }
 	};
 	try {
-        const start = Date.now();
+		const start = Date.now();
 		// 1. List matching message IDs (cheap — stubs only). 2. Drop already-synced ones BEFORE
 		// fetching any bodies, so a routine sync downloads only what's new. 3. Stream bodies one batch
 		// at a time and discard each after use — peak memory is one batch. Processing order is
@@ -215,18 +337,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		const ALLOWED_DAYS = [30, 60, 90, 180];
 		const requested    = Number(req.body?.days ?? req.query?.days);
 		const days         = ALLOWED_DAYS.includes(requested) ? requested : 30;
-		debug(`[sync] scan window: ${days} days`);
+		info(`[sync] scan window: ${days} days`);
 
 		const allIds   = await listJobMessageIds(req.session.tokens!, days);
 		// The mailbox being synced — stamped on each tracked email so its "open in Gmail" link targets the
 		// correct account (u/<address>) even when it isn't the browser's primary (u/0) account.
 		const accountEmail = await getAccountEmail(req.session.tokens!);
 		const syncedIds = await db.getSyncedMessageIds(allIds);
-		const newIds   = allIds.filter(id => !syncedIds.has(id));
+		const newIds   = allIds.filter(messageId => !syncedIds.has(messageId));
 		const failedIds: string[] = [];   // messages that errored on fetch — not synced, retried next run
 		const classifyFailedIds: string[] = [];   // messages the classifier errored on — not synced, retried next run
-		let added = 0, updated = 0, skipped = allIds.length - newIds.length, linkedinApplyParsed = 0, linkedinRejectParsed = 0, indeedParsed = 0, generalParsed = 0;
-		debug(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
+		let added = 0, updated = 0, skipped = allIds.length - newIds.length;
+		const parsedCountByClassifierCode = new Map<string, number>();
+		info(`[sync] ${newIds.length} new of ${allIds.length} (skipped ${skipped} already-synced before fetch)`);
 
 		res.setHeader('Content-Type', 'application/x-ndjson');
 		res.setHeader('Cache-Control', 'no-cache');
@@ -250,19 +373,23 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// across emails (needs OLLAMA_NUM_PARALLEL for an actual speedup). Skips are finalized as they arrive;
 		// merge-eligible results are COLLECTED. Completion order is irrelevant here — phase 2 re-sorts by date.
 		const concurrency = Number(process.env.SYNC_CONCURRENCY) || 3;
-		const pending: Extract<ClassifyResult, { kind: 'merge' }>[] = [];
+		const pending: MergeCandidate[] = [];
 		for await (const classified of mapAhead(streamJobMessages(req.session.tokens!, newIds, failedIds), concurrency, classifyOne)) {
+			// Cancel checkpoint: stop consuming new results the moment the user cancels. Whatever was already
+			// classified into `pending` is simply dropped (never applied, so not marked synced) — the next sync
+			// re-fetches it. In-flight classify calls do no DB writes, so abandoning them is safe.
+			if (isSyncCancelRequested()) break;
 			processed++;
 			if (classified.kind === 'failed') {
 				classifyFailedIds.push(classified.messageId);
 				emitProgress();
 				continue;
 			}
-			// Parsed-by counters: tallied for every email the parser classified (classifier_code present).
-			if (classified.classifierCode === 'linkedin_applied') linkedinApplyParsed++;
-			if (classified.classifierCode === 'linkedin_rejected') linkedinRejectParsed++;
-			if (classified.classifierCode === 'indeed_applied') indeedParsed++;
-			if (classified.classifierCode === 'general_template') generalParsed++;
+			// Parsed-by tally: counted for every email a tracked parser template classified.
+			const { classifierCode } = classified;
+			if (classifierCode && classifierCode in PARSED_BY_LABEL) {
+				parsedCountByClassifierCode.set(classifierCode, (parsedCountByClassifierCode.get(classifierCode) ?? 0) + 1);
+			}
 
 			if (classified.kind === 'skip') {
 				await db.markEmailSynced({ thread_id: classified.threadId, message_id: classified.messageId, classified_as: classified.classifiedAs });
@@ -277,20 +404,26 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// PHASE 1.5 — sort into a DETERMINISTIC merge order: oldest first (the matcher's "predates"/"nearest"
 		// rules are causal, so oldest→newest is their best case), ties broken by messageId so grouping is
 		// reproducible across resyncs regardless of the order Gmail/concurrency produced results in.
-		pending.sort((a, b) => a.internalDate - b.internalDate || (a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0));
+		pending.sort((first, second) =>
+			first.internalDate - second.internalDate
+			|| (first.messageId < second.messageId ? -1 : first.messageId > second.messageId ? 1 : 0));
 
-		// PHASE 2 — sequential, order-sensitive merge, in date order. Re-bind the classified result's fields
-		// under the names the logic below uses; `email` is a thin stand-in for the two date fields it reads.
+		// PHASE 2 — sequential, order-sensitive merge, in date order. Each email either merges into a match
+		// (buildMergeUpdates decides which fields a match may touch) or it starts its own application.
 		for (const classified of pending) {
-			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy } = classified;
-			const email = { internalDate: classified.internalDate, lastMessageDate: classified.lastMessageDate };
+			// Cancel checkpoint between merges: each email is committed atomically, so stopping here keeps every
+			// application already written and leaves the remaining ones for the next sync.
+			if (isSyncCancelRequested()) break;
+			const { threadId, messageId, subject, category, company, role, externalId, senderDomain, isConfirmation, isFastApply, detectedBy, internalDate, lastMessageDate } = classified;
 
-			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, email.lastMessageDate);
+			const existing = await findExisting(company, role, externalId, senderDomain, isConfirmation, isFastApply, lastMessageDate);
 
 			// The Gmail message that drove this email's stage — recorded so the user can open the actual
 			// email later. `category` is already narrowed to the four non-'ignored' stages by the guard above.
 			// The inbox it lives in is tracked once at the application level (accountEmail), not per ref.
-			const emailRef = { messageId, category, date: email.lastMessageDate, fast_apply: isFastApply };
+			// origin 'synced': this ref is being created BY the sync. updateWithEmail leaves an already-held
+			// messageId completely alone, so a ref the user tagged 'manual' is never relabelled by a re-sync.
+			const emailRef: EmailRef = { messageId, category, date: lastMessageDate, fast_apply: isFastApply, origin: 'synced' };
 
 			// Surface merges where only the DOMAIN matched while the NAMES differ — these are the ones to
 			// audit (a shared host wrongly merging two employers vs. correctly bridging a name variant).
@@ -299,68 +432,8 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			}
 
 			if (existing) {
-				// Status moves FORWARD only (resolveStatus) — a later email never rolls it back. Activity fields
-				// (last_activity, auto note, detected_by) track the NEWEST email by precise internalDate, and
-				// date_applied the EARLIEST. ts 0 means "no recorded activity yet", so any email counts as newer.
-				const isNewer   = email.internalDate >= existing.last_activity_ts;
-				const isEarlier = !existing.date_applied || email.lastMessageDate < existing.date_applied;
-				// Upgrade "Unknown Role" when this email provides a specific role
-				// (e.g. a BAE Systems status update naming the role after a generic confirmation).
-				const upgradedRole = existing.role === 'Unknown Role' && role ? role : null;
-				const roleUpgrade = upgradedRole ? { role: upgradedRole } : {};
-				const effectiveRole = upgradedRole ?? existing.role;
-				const resolved = resolveStatus(existing.status, category);
-				const statusUpdate = resolved !== existing.status ? { status: resolved } : {};
-				// The newest email owns last_activity and the auto note (a 'manual' note is never overwritten).
-				const activityUpdate = isNewer
-					? {
-						last_activity: email.lastMessageDate,
-						last_activity_ts: email.internalDate,
-						detected_by: detectedBy,   // record how the newest (status-driving) email was classified
-						...(existing.notes_source !== 'manual'
-							? { notes: gmailNote(subject, effectiveRole !== 'Unknown Role') }
-							: {}),
-					}
-					: {};
-				// Sticky: any interview/offer email marks the app as having reached interview — even if
-				// a later rejection becomes the current status. Only ever set true.
-				const reachedUpdate = (category === 'interview' || category === 'offer') && !existing.reached_interview
-					? { reached_interview: true }
-					: {};
-				// Backfill the req/job number if this email has one and the record doesn't yet.
-				const externalIdUpdate = externalId && !existing.external_id ? { external_id: externalId } : {};
-				// Backfill the company domain once a real company email arrives for a record first created
-				// from an ATS/job-board sender (so later syncs can match by domain).
-				const domainUpdate = senderDomain && !existing.company_domain ? { company_domain: senderDomain } : {};
-				// A confirmation arriving for an "awaiting" record (one created by an earlier update) supplies
-				// the original application and closes the wait — clear the flag so nothing else claims it.
-				const awaitingClear = isConfirmation && existing.awaiting_application ? { awaiting_application: false } : {};
-				// A LinkedIn/Indeed fast-apply that merges in MARKS the record fast_apply — it's only the job
-				// board's "application sent" notice, not the company's own confirmation. The mark lets the REAL
-				// company confirmation (a regular email) still pair with this record by title later, instead of
-				// being split off as a separate record.
-				const fastApplyMark = isFastApply && !existing.fast_apply ? { fast_apply: true } : {};
-				// Fill the CONFIRMATION slot when a company (non-fast) confirmation merges in; once set, a
-				// second confirmation can't pair into this record.
-				const confirmedMark = isConfirmation && !isFastApply && !existing.confirmed ? { confirmed: true } : {};
-				// Backfill the application's Gmail account if it doesn't have one yet (e.g. a record created
-				// before this account was known) — one account per application drives all its email links.
-				const accountBackfill = accountEmail && !existing.account ? { account: accountEmail } : {};
-				const merged = {
-					...statusUpdate,
-					...activityUpdate,
-					...(isEarlier ? { date_applied: email.lastMessageDate } : {}),
-					...roleUpgrade,
-					...reachedUpdate,
-					...externalIdUpdate,
-					...domainUpdate,
-					...awaitingClear,
-					...fastApplyMark,
-					...confirmedMark,
-					...accountBackfill,
-				};
 				// One round-trip: apply the field updates and append the email ref (deduped by messageId).
-				await db.updateWithEmail(existing.id, merged, emailRef);
+				await db.updateWithEmail(existing.id, buildMergeUpdates(existing, classified, accountEmail), emailRef);
 				updated++;
 			} else {
 				await db.create({
@@ -369,9 +442,9 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 					status:          category,
 					interview_step:  null,
 					reached_interview: category === 'interview' || category === 'offer',
-					date_applied:    email.lastMessageDate,
-					last_activity:   email.lastMessageDate,
-					last_activity_ts: email.internalDate,
+					date_applied:    lastMessageDate,
+					last_activity:   lastMessageDate,
+					last_activity_ts: internalDate,
 					job_url:         null,
 					notes:           gmailNote(subject, !!role),
 					external_id:     externalId,
@@ -395,14 +468,19 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 			await db.markEmailSynced({ thread_id: threadId, message_id: messageId, classified_as: category });
 			emitProgress();
 		}
-        const durationMs = Date.now() - start;
-        const failed = failedIds.length + classifyFailedIds.length;
-        if (failedIds.length) console.warn(`[sync] ${failedIds.length} message(s) could not be fetched — NOT marked synced, will be retried next sync: ${failedIds.join(', ')}`);
-        if (classifyFailedIds.length) console.warn(`[sync] ${classifyFailedIds.length} message(s) could not be classified — NOT marked synced, will be retried next sync: ${classifyFailedIds.join(', ')}`);
-        debug(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (LinkedIn applied parsed: ${linkedinApplyParsed}, LinkedIn rejected parsed: ${linkedinRejectParsed}, Indeed parsed: ${indeedParsed}, General template parsed: ${generalParsed})`);
-        debug(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
+		const durationMs = Date.now() - start;
+		const failed = failedIds.length + classifyFailedIds.length;
+		if (failedIds.length) console.warn(`[sync] ${failedIds.length} message(s) could not be fetched — NOT marked synced, will be retried next sync: ${failedIds.join(', ')}`);
+		if (classifyFailedIds.length) console.warn(`[sync] ${classifyFailedIds.length} message(s) could not be classified — NOT marked synced, will be retried next sync: ${classifyFailedIds.join(', ')}`);
+		const parsedByBreakdown = Object.entries(PARSED_BY_LABEL)
+			.map(([classifierCode, label]) => `${label} parsed: ${parsedCountByClassifierCode.get(classifierCode) ?? 0}`)
+			.join(', ');
+		info(`[sync] completed: ${added} added, ${updated} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''} (${parsedByBreakdown})`);
+		info(`[sync] duration: ${formatDuration(durationMs)} (${(durationMs / 1000).toFixed(2)}s)`);
 
-		send({ phase: 'done', added, updated, skipped, failed, durationMs });
+		// A user cancel ends the run as 'cancelled' (partial counts, not an error) — everything processed so far
+		// is saved; the rest is left for the next sync.
+		send({ phase: isSyncCancelRequested() ? 'cancelled' : 'done', added, updated, skipped, failed, durationMs });
 		if (!res.writableEnded && !res.destroyed) res.end();   // no-op when the browser already disconnected
 	} catch (err) {
 		console.error('Sync error:', err);
@@ -410,7 +488,20 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		else res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
 	} finally {
 		setSyncRunning(false);
+		clearSyncCancel();   // never let this run's cancel bleed into the next sync
 	}
+});
+
+// Ask the running sync to stop. Cooperative: the sync loop checks the flag between emails and ends as
+// 'cancelled', keeping everything it already saved. 409 when nothing is running, so the button can't set a
+// flag that a later, unrelated sync would then honour.
+router.post('/sync/cancel', requireAuth, (_req: Request, res: Response) => {
+	if (!isSyncRunning()) {
+		res.status(409).json({ error: 'No sync is running.' });
+		return;
+	}
+	requestSyncCancel();
+	res.json({ cancelling: true });
 });
 
 // Lets a browser that reconnects mid-sync (a tab closed and reopened) restore its progress bar: the /sync

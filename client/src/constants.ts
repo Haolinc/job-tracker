@@ -1,4 +1,4 @@
-import type { Status, InterviewStep, Source } from './types';
+import type { Status, InterviewStep, Source, EmailOrigin } from './types';
 
 export const STATUS_LABELS: Record<Status, string> = {
 	applied:   'Applied',
@@ -6,6 +6,14 @@ export const STATUS_LABELS: Record<Status, string> = {
 	offer:     'Offer',
 	rejected:  'Rejected',
 };
+
+/**
+ * What one tracked email is called. A LinkedIn/Indeed fast-apply NOTICE shares category 'applied' with a
+ * real company confirmation, so the category alone renders both as "Applied" — this separates them, and
+ * both the card pills and the edit modal read the name from here so the wording can't drift apart.
+ */
+export const emailStageLabel = (emailRef: { category: Status; fast_apply?: boolean }): string =>
+	emailRef.fast_apply ? 'Fast Applied' : STATUS_LABELS[emailRef.category];
 
 export const STATUS_COLORS: Record<Status, string> = {
 	applied:   'bg-blue-100 text-blue-700',
@@ -29,7 +37,7 @@ interface ProvenanceBadge { label: string; cls: string; title: string }
 
 // Auto-detection badges — distinguish the rule-based parser from the AI classifier, for debugging.
 type Detection = 'parser' | 'llm';
-export const DETECTION_BADGE: Record<Detection, ProvenanceBadge> = {
+const DETECTION_BADGE: Record<Detection, ProvenanceBadge> = {
 	parser: { label: '⚙️ Detected by Parser', cls: 'bg-emerald-50 text-emerald-700', title: 'Detected by the rule-based parser' },
 	llm:    { label: '🤖 Detected by AI',     cls: 'bg-violet-50 text-violet-700',   title: 'Detected by the AI classifier' },
 };
@@ -41,7 +49,7 @@ const IMPORT_BADGE: ProvenanceBadge = {
 };
 
 /** Which detection badge to show, or null when there's none (manual entry, or the user has edited it). */
-export const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean }): Detection | null =>
+const detectionBadge = (app: { detected_by?: Detection | null; edited?: boolean }): Detection | null =>
 	app.edited ? null : (app.detected_by ?? null);
 
 /**
@@ -54,7 +62,22 @@ export const detectionBadge = (app: { detected_by?: Detection | null; edited?: b
 export const provenanceBadges = (app: { detected_by?: Detection | null; edited?: boolean; source: Source }): ProvenanceBadge[] => {
 	const badges: ProvenanceBadge[] = [];
 	if (app.source === 'csv') badges.push(IMPORT_BADGE);
-	const d = detectionBadge(app);
-	if (d) badges.push({ ...DETECTION_BADGE[d], title: `${DETECTION_BADGE[d].title} — edit to confirm and clear the tag` });
+	const detection = detectionBadge(app);
+	if (detection) badges.push({ ...DETECTION_BADGE[detection], title: `${DETECTION_BADGE[detection].title} — edit to confirm and clear the tag` });
 	return badges;
 };
+
+// Per-email origin badges, shown ONLY in the edit modal's rows — the board and table are scanning surfaces,
+// where per-email provenance would be permanent cost for rarely-wanted detail. Sky reuses IMPORT_BADGE's
+// tint since it means the same thing one level down. An untagged ref badges as a muted 'Unknown' rather than
+// nothing, so the row reads "we don't know" instead of looking like the badge failed to render.
+const EMAIL_ORIGIN_BADGE: Record<EmailOrigin | 'unknown', ProvenanceBadge> = {
+	synced:   { label: 'Synced',   cls: 'bg-emerald-50 text-emerald-700', title: 'Found by a Gmail sync' },
+	imported: { label: 'Imported', cls: 'bg-sky-50 text-sky-700',         title: 'First seen in a CSV import' },
+	manual:   { label: 'Manual',   cls: 'bg-amber-50 text-amber-700',     title: 'Attached by hand in this window' },
+	unknown:  { label: 'Unknown',  cls: 'bg-gray-100 text-gray-500',      title: 'Attached before origins were tracked — no way to tell now' },
+};
+
+/** The badge for one ref: its origin, or the unknown badge when it predates the field. */
+export const emailOriginBadge = (emailRef: { origin?: EmailOrigin }): ProvenanceBadge =>
+	EMAIL_ORIGIN_BADGE[emailRef.origin ?? 'unknown'];

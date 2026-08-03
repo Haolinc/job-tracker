@@ -3,12 +3,15 @@ import type { Request, Response } from 'express';
 import * as db from '../services/db';
 import { isSyncRunning, setImportRunning } from '../services/syncState';
 import { errMsg } from '../utils';
-import type { Status, InterviewStep, Source, EmailRef, CreateApplicationData } from '../types';
+import type { Status, InterviewStep, Source, EmailRef, EmailOrigin, CreateApplicationData } from '../types';
 
 const VALID_STATUSES    = new Set<string>(['applied', 'interview', 'offer', 'rejected']);
 const VALID_STEPS       = new Set<string>(['phone_screen', 'technical', 'onsite', 'final']);
 // User-creatable sources. 'gmail' is reserved for the sync pipeline and can't be set via this route.
 const VALID_SOURCES     = new Set<string>(['manual', 'csv']);
+// Every origin a caller may send. Unlike the sources above, none is reserved: the sync, an import, and a
+// manual attach all reach storage through this route, so each must be accepted here.
+const VALID_EMAIL_ORIGINS = new Set<string>(['synced', 'imported', 'manual'] satisfies EmailOrigin[]);
 
 const router = Router();
 
@@ -18,17 +21,21 @@ const router = Router();
 function sanitizeEmails(raw: unknown): EmailRef[] {
 	if (!Array.isArray(raw)) return [];
 	const seen = new Set<string>();
-	return raw.flatMap((e): EmailRef[] => {
-		const messageId = typeof e?.messageId === 'string' ? e.messageId.trim() : '';
-		const category  = e?.category;
+	return raw.flatMap((incomingRef): EmailRef[] => {
+		const messageId = typeof incomingRef?.messageId === 'string' ? incomingRef.messageId.trim() : '';
+		const category  = incomingRef?.category;
 		if (!messageId || seen.has(messageId) || !VALID_STATUSES.has(category)) return [];
 		seen.add(messageId);
-		return [{
+		const sanitizedRef: EmailRef = {
 			messageId,
 			category: category as EmailRef['category'],
-			date:    typeof e?.date === 'string' ? e.date : '',
-			fast_apply: e?.fast_apply === true,
-		}];
+			date:    typeof incomingRef?.date === 'string' ? incomingRef.date : '',
+			fast_apply: incomingRef?.fast_apply === true,
+		};
+		// Known values only. Left OFF when absent or unrecognized, so the ref reads as "origin unknown"
+		// rather than reaching the UI as a tag it can't render.
+		if (VALID_EMAIL_ORIGINS.has(incomingRef?.origin)) sanitizedRef.origin = incomingRef.origin as EmailOrigin;
+		return [sanitizedRef];
 	});
 }
 

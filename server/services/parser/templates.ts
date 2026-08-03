@@ -21,7 +21,7 @@ const GENERAL_APPLIED = /received your application|application (?:has been|was) 
 
 /** Returns a status only when keywords are decisive; null means "ask the LLM". */
 function generalStatus(body: string): 'applied' | 'rejected' | null {
-	if (body.split(/(?<=[.!?])\s+/).some(s => GENERAL_REJECT.test(s) && !/\bif\b/i.test(s))) return 'rejected';
+	if (body.split(/(?<=[.!?])\s+/).some(sentence => GENERAL_REJECT.test(sentence) && !/\bif\b/i.test(sentence))) return 'rejected';
 	if (GENERAL_APPLIED.test(body)) return 'applied';
 	return null;
 }
@@ -37,19 +37,22 @@ function generalStatus(body: string): 'applied' | 'rejected' | null {
  * equal-to-or-more-accurate than the LLM on every fired case.
  */
 function parseGeneralApplicationPattern(subject: string, from: string, body: string): Classification | null {
-	// Workday (*@myworkday.com) is per-company customised, so the general extraction mis-reads it — e.g.
+	// Workday (*@myworkday.com) is per-company customised and often mis-typed by the general extraction — e.g.
 	// "Leidos - Thank You For Applying to Mid-Level Software Engineer" makes "applying to [Company]" grab the
-	// ROLE as the company. The dispatcher already declares Workday the AI classifier's job (the prompt knows
-	// "leidos@myworkday.com" → "Leidos"), so defer these instead of emitting a wrong deterministic result.
-	if (/@myworkday\.com/i.test(from)) return null;
-
+	// ROLE as the company. We no longer blanket-defer Workday (legitimate employers use it heavily): the
+	// extraction runs, and the untyped result flows to the refiner, which reads the body ("working at Leidos")
+	// to name the real employer the sender subdomain would otherwise hide.
 	const extracted = extractGeneralCompanyRole(subject, body);
 	if (!extracted) return null;
 
 	const status = generalStatus(body);
 	if (!status) return null;                                // company/role known, status ambiguous → LLM
 
-	return { category: status, company: extracted.company, role: extracted.role, classifier_code: 'general_template' };
+	return {
+		category: status, company: extracted.company, role: extracted.role, classifier_code: 'general_template',
+		// Only set on the untyped patterns, where `company` is a guess the sync loop should have the LLM confirm.
+		...(extracted.ambiguous ? { ambiguous_spans: extracted.spans } : {}),
+	};
 }
 
 // Workday (*@myworkday.com) is intentionally NOT parsed here.
@@ -87,7 +90,10 @@ export function parseEmail(subject: string, from: string, body: string): Classif
 	for (const parser of PARSERS) {
 		const result = parser(subject, from, body);
 		if (result) {
-			debug(`[parser] hit subject="${subject}" → ${result.category} company="${result.company}" role="${result.role}" classifier_code="${result.classifier_code ? result.classifier_code : 'none'}"`);
+			// Untyped patterns attach every candidate span they found; log them so a wrong company is traceable
+			// to the raw options, even on the paths (non-sync callers) that never run the picker.
+			const candidates = result.ambiguous_spans ? ` candidates=${JSON.stringify(result.ambiguous_spans)}` : '';
+			debug(`[parser] hit subject="${subject}" → ${result.category} company="${result.company}" role="${result.role}" classifier_code="${result.classifier_code ? result.classifier_code : 'none'}"${candidates}`);
 			return result;
 		}
 	}

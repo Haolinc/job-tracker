@@ -16,6 +16,9 @@ interface LauncherConfig {
 	port: string;
 	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
 	ollamaModel: string;
+	/** 'true' turns on the server's per-email trace logging. Every field here mirrors a .env line, so this is
+	 *  the string the file holds, not a boolean — the panel's checkbox converts. Anything else means off. */
+	debugLogging: string;
 }
 
 /** What the control panel needs to render the status dots and button states. */
@@ -78,7 +81,7 @@ interface UpdateProgress {
 /** One event from the server's sync progress stream, mirrored to the launcher so the panel can show a live
  *  sync line instead of the per-email log detail. Mirrors the events routes/gmail.ts sends to the browser. */
 interface SyncProgressEvent {
-	phase: 'start' | 'warming' | 'progress' | 'done' | 'error';
+	phase: 'start' | 'warming' | 'progress' | 'done' | 'cancelled' | 'error';
 	/** The scan window in days (present on 'start') — how far back this sync searches Gmail. */
 	days?: number;
 	processed?: number;

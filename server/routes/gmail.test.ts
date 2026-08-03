@@ -3,24 +3,44 @@ import express from 'express';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import gmailRouter, { mapAhead, classifyOne } from './gmail';
-import { classifyEmail } from '../services/classifier';
-import { setSyncRunning, setImportRunning, setLastSyncEvent } from '../services/syncState';
+import { classifyEmail, pickCompanyRole } from '../services/classifier';
+import { listJobMessageIds, getAccountEmail, streamJobMessages } from '../services/gmail/messages';
+import { parseEmail } from '../services/parser/templates';
+import * as db from '../services/db';
+import { setSyncRunning, setImportRunning, setLastSyncEvent, isSyncCancelRequested, clearSyncCancel } from '../services/syncState';
 import type { EmailResult } from '../types';
 
-// classifyOne's LLM path is under test — force every fixture past the hard filter and the deterministic
-// parser so the mocked classifier is the only variable.
+// classifyOne's LLM path is under test — force every fixture past the hard filter so the mocked
+// classifier and parser are the only variables. parseEmail defaults to null (no deterministic hit).
 vi.mock('../services/classifier', () => ({
 	classifyEmail: vi.fn(),
 	warmUpModel: vi.fn(),
+	pickCompanyRole: vi.fn(),
 }));
 vi.mock('../services/filters', () => ({
 	isIgnorableEmail: () => false,
 }));
 vi.mock('../services/parser/templates', () => ({
-	parseEmail: () => null,
+	parseEmail: vi.fn(() => null),
+}));
+// Gmail itself is the only thing the sync route can't be run against — stub the three calls that reach it
+// so the route's own merge/write logic (which is what the origin tests below assert) runs for real.
+vi.mock('../services/gmail/messages', () => ({
+	listJobMessageIds: vi.fn(),
+	getAccountEmail: vi.fn(),
+	streamJobMessages: vi.fn(),
 }));
 
 const classifyEmailMock = vi.mocked(classifyEmail);
+const pickCompanyRoleMock = vi.mocked(pickCompanyRole);
+const parseEmailMock = vi.mocked(parseEmail);
+const listJobMessageIdsMock = vi.mocked(listJobMessageIds);
+const getAccountEmailMock = vi.mocked(getAccountEmail);
+const streamJobMessagesMock = vi.mocked(streamJobMessages);
+
+// Real in-memory database: what the sync WRITES is the behavior under test, so the data layer is not mocked.
+process.env.DB_PATH = ':memory:';
+db.initializeDatabase();
 
 async function* range(n: number): AsyncGenerator<number> {
 	for (let i = 0; i < n; i++) yield i;
@@ -39,6 +59,9 @@ describe('classifyOne', () => {
 
 	beforeEach(() => {
 		classifyEmailMock.mockReset();
+		pickCompanyRoleMock.mockReset();
+		parseEmailMock.mockReset();
+		parseEmailMock.mockReturnValue(null);   // default: no deterministic hit, so the LLM path runs
 	});
 
 	it('should report a classifier failure as failed, never as an ignored skip', async () => {
@@ -59,6 +82,134 @@ describe('classifyOne', () => {
 		classifyEmailMock.mockResolvedValue({ category: 'ignored', company: null, role: null });
 		const result = await classifyOne(email);
 		expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+	});
+
+	// Both LLM paths send the email alone. A hint block naming only a company read to the model as proof the
+	// email had no role, nulling it on the very call that exists to find one.
+	it('should never hand the LLM parser candidates, on either path', async () => {
+		classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Acme', role: 'Software Engineer' });
+		await classifyOne(email);   // no parser hit → full classify
+		parseEmailMock.mockReturnValue({ category: 'applied', company: 'Jack Henry', role: null, classifier_code: 'general_template' });
+		await classifyOne(email);   // parser hit without a role → role-fill
+		expect(classifyEmailMock).toHaveBeenCalledTimes(2);
+		for (const call of classifyEmailMock.mock.calls) expect(call).toEqual([email.subject, email.from, email.body]);
+	});
+
+	// The parser can capture a noun phrase without knowing whether it names a company or a job title
+	// ("your interest in X"), so it emits the candidates untyped. These cover how they get resolved: a lone
+	// span goes to the full classifier; ≥2 spans go to the cheap picker, which types them or declines.
+	describe('when the parser could not type its spans', () => {
+		// What the general template emits for "…applying to Acme … the Software Engineer position": two
+		// candidates, but which is the company is only a guess because "applying to X" doesn't say what X is.
+		const twoSpanParse = {
+			category: 'applied' as const, company: 'Acme', role: 'Software Engineer',
+			classifier_code: 'general_template' as const, ambiguous_spans: ['Acme', 'Software Engineer'],
+		};
+
+		// What it emits for "…your interest in Software Engineer": a LONE span that is really the role, grabbed
+		// as the company. Unconfirmed, this is the record that reaches the board with a bogus employer.
+		const loneSpanParse = {
+			category: 'applied' as const, company: 'Software Engineer', role: null,
+			classifier_code: 'general_template' as const, ambiguous_spans: ['Software Engineer'],
+		};
+
+		it('should keep the parser result and never call the LLM when the spans are typed', async () => {
+			// No ambiguous_spans → the sentence structure already named both slots; nothing to confirm.
+			parseEmailMock.mockReturnValue({ category: 'applied', company: 'Axoni', role: 'Software Engineer', classifier_code: 'general_template' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).not.toHaveBeenCalled();
+			expect(classifyEmailMock).not.toHaveBeenCalled();   // the free path stays free
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', detectedBy: 'parser' });
+		});
+
+		it('should skip the picker and defer a lone candidate to the full classifier', async () => {
+			// < 2 candidates: nothing to pick between, and the lone span is really a role — the Leidos trap. Go
+			// straight to the full classifier, which reads the whole email for the real employer.
+			parseEmailMock.mockReturnValue(loneSpanParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Leidos', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).not.toHaveBeenCalled();   // no genuine choice → don't burn a picker call
+			expect(classifyEmailMock).toHaveBeenCalledTimes(1);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Leidos', detectedBy: 'llm' });
+		});
+
+		it('should not resurrect a rejected candidate as the company when the LLM names none', async () => {
+			// The lone span IS the role. The parser still offers "Acme" from the body, but a rejected candidate
+			// must never be re-inserted — without the guard "Software Engineer"/"Acme" reaches the board as an
+			// employer the picker never confirmed.
+			parseEmailMock.mockReturnValue(loneSpanParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: null, role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'skip', classifiedAs: 'ignored' });
+		});
+
+		it('should fall back to the role the picker salvaged when the LLM returns none', async () => {
+			// The picker declined to name a company but still typed a role — the only place that role survives.
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue({ company: null, role: 'Staff Software Engineer' });
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Axoni', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Staff Software Engineer' });
+		});
+
+		it('should adopt the company/role the picker assigns to the candidates', async () => {
+			parseEmailMock.mockReturnValue({
+				category: 'applied', company: 'Axoni', role: null,
+				classifier_code: 'general_template', ambiguous_spans: ['Axoni', 'Software Engineer'],
+			});
+			pickCompanyRoleMock.mockResolvedValue({ company: 'Axoni', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(pickCompanyRoleMock).toHaveBeenCalledWith(['Axoni', 'Software Engineer'], email.subject, email.body);
+			expect(classifyEmailMock).not.toHaveBeenCalled();   // the picker replaces the full classification
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', role: 'Software Engineer', detectedBy: 'parser' });
+		});
+
+		it('should defer to a full classification when the picker is not confident of any employer', async () => {
+			// ≥2 candidates but the picker judges none a legitimate company (e.g. both are titles). It returns
+			// company:null → slide to the full classifier, which finds the real employer.
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue({ company: null, role: 'Software Engineer' });
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Axoni', role: 'Software Engineer' });
+			const result = await classifyOne(email);
+			expect(classifyEmailMock).toHaveBeenCalledTimes(1);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Axoni', detectedBy: 'llm' });
+		});
+
+		it('should keep the parser guess when the picker is unavailable', async () => {
+			parseEmailMock.mockReturnValue(twoSpanParse);
+			pickCompanyRoleMock.mockResolvedValue(null);   // Ollama down / unparseable response
+			const result = await classifyOne(email);
+			// Degrades to the pre-picker behaviour rather than losing the email or burning a full call.
+			expect(classifyEmailMock).not.toHaveBeenCalled();
+			expect(result).toMatchObject({ kind: 'merge', company: 'Acme', role: 'Software Engineer', detectedBy: 'parser' });
+		});
+	});
+
+	// Spans typed, company + category nailed, but no title in the template. The LLM is consulted for the ROLE
+	// ONLY — its company answer is discarded, so the parser's stands.
+	describe('when the parser has a company but no role', () => {
+		// Jack Henry: the body names the title, but a leading "Job ID 17182:" label kept the parser from it.
+		const companyOnlyParse = {
+			category: 'applied' as const, company: 'Jack Henry', role: null, classifier_code: 'general_template' as const,
+		};
+
+		it('should take the role and req id from the LLM but keep the parser company', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			// The fuller legal name the model reads off the subject is dropped on purpose — only role/req_id land.
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry & Associates', role: 'Entry Level Quality Assurance Engineer', req_id: '17182' });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({
+				kind: 'merge', company: 'Jack Henry', role: 'Entry Level Quality Assurance Engineer',
+				externalId: '17182', detectedBy: 'parser',
+			});
+		});
+
+		it('should leave the role unset when the LLM finds none either', async () => {
+			parseEmailMock.mockReturnValue(companyOnlyParse);
+			classifyEmailMock.mockResolvedValue({ category: 'applied', company: 'Jack Henry', role: null });
+			const result = await classifyOne(email);
+			expect(result).toMatchObject({ kind: 'merge', company: 'Jack Henry', detectedBy: 'parser' });
+		});
 	});
 });
 
@@ -143,26 +294,69 @@ describe('GET /sync/status', () => {
 	});
 });
 
+// The endpoint the Cancel button hits — it only sets the cooperative cancel flag the sync loop checks.
+describe('POST /sync/cancel', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	beforeAll(async () => {
+		const app = express();
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+		setSyncRunning(false);
+		clearSyncCancel();
+	});
+
+	it('sets the cancel flag and returns cancelling:true while a sync is running', async () => {
+		setSyncRunning(true);
+		clearSyncCancel();
+		try {
+			const response = await fetch(`${baseUrl}/api/gmail/sync/cancel`, { method: 'POST' });
+			expect(response.status).toBe(200);
+			const body = await response.json() as { cancelling: boolean };
+			expect(body.cancelling).toBe(true);
+			expect(isSyncCancelRequested()).toBe(true);
+		} finally {
+			setSyncRunning(false);
+			clearSyncCancel();
+		}
+	});
+
+	it('rejects with 409 and sets no flag when no sync is running', async () => {
+		setSyncRunning(false);
+		clearSyncCancel();
+		const response = await fetch(`${baseUrl}/api/gmail/sync/cancel`, { method: 'POST' });
+		expect(response.status).toBe(409);
+		expect(isSyncCancelRequested()).toBe(false);
+	});
+});
+
 describe('mapAhead', () => {
 	it('yields every result exactly once, in completion (not input) order', async () => {
 		// Item 0 resolves slowest, the last item fastest. Order is not preserved (the consumer sorts by date
 		// afterward), but every item must pass through exactly once — so a slow head can't drop or stall work.
-		const fn = (i: number) => new Promise<number>(resolve => setTimeout(() => resolve(i), (10 - i) * 5));
+		const resolveSlowestFirst = (item: number) => new Promise<number>(resolve => setTimeout(() => resolve(item), (10 - item) * 5));
 		const out: number[] = [];
-		for await (const r of mapAhead(range(10), 3, fn)) out.push(r);
-		expect(out.slice().sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+		for await (const yielded of mapAhead(range(10), 3, resolveSlowestFirst)) out.push(yielded);
+		expect(out.slice().sort((first, second) => first - second)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 		expect(out).not.toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);   // completion order differs from input order
 	});
 
 	it('never runs more than `depth` tasks concurrently', async () => {
 		let active = 0, peak = 0;
-		const fn = async (i: number) => {
+		const trackConcurrency = async (item: number) => {
 			active++; peak = Math.max(peak, active);
 			await new Promise(resolve => setTimeout(resolve, 5));
-			active--; return i;
+			active--; return item;
 		};
 		const out: number[] = [];
-		for await (const r of mapAhead(range(12), 3, fn)) out.push(r);
+		for await (const yielded of mapAhead(range(12), 3, trackConcurrency)) out.push(yielded);
 		expect(out).toEqual([...Array(12).keys()]);
 		expect(peak).toBeLessThanOrEqual(3);
 	});
@@ -177,5 +371,103 @@ describe('mapAhead', () => {
 		const out: number[] = [];
 		for await (const r of mapAhead(range(0), 3, async (i) => i)) out.push(r);
 		expect(out).toEqual([]);
+	});
+});
+
+// ── Email origin: the sync procedure's tag ──────────────────────────────────
+// Gmail is stubbed; the classifier is stubbed; everything the ROUTE does with the result — building the
+// ref, merging it onto an application, writing it — runs for real against an in-memory database. That is
+// what makes these assertions about origin 'synced' meaningful rather than a restatement of the literal.
+describe('POST /sync — email origin', () => {
+	let httpServer: Server;
+	let baseUrl: string;
+
+	// Each fixture carries its own subject so the classifier stub can answer per message (the route
+	// classifies concurrently, so a mockResolvedValueOnce chain would be order-dependent and flaky).
+	const syncedEmail = (messageId: string, subject: string, lastMessageDate: string): EmailResult => ({
+		threadId: messageId,
+		messageId,
+		subject,
+		from: 'careers@acme.com',
+		body: 'Thanks for applying to Acme as a Software Engineer.',
+		lastMessageDate,
+		internalDate: Date.parse(lastMessageDate),
+	});
+	const applicationConfirmation = syncedEmail('19f0000000000001', 'Your application to Acme', '2026-07-10');
+	const rejectionUpdate         = syncedEmail('19f0000000000002', 'Update on your Acme application', '2026-07-20');
+
+	// An 'applied' confirmation fills the application's confirmed slot; a 'rejected' status update joins the
+	// same-posting application that predates it. Together they exercise create-then-append in one sync.
+	const classifyBySubject = (subject: string) => Promise.resolve(
+		subject === rejectionUpdate.subject
+			? { category: 'rejected' as const, company: 'Acme', role: 'Software Engineer' }
+			: { category: 'applied' as const, company: 'Acme', role: 'Software Engineer' },
+	);
+
+	// Feed the route exactly these messages, then read back what it wrote.
+	const runSyncOver = async (emails: EmailResult[]) => {
+		listJobMessageIdsMock.mockResolvedValue(emails.map(email => email.messageId));
+		getAccountEmailMock.mockResolvedValue('me@work.com');
+		streamJobMessagesMock.mockImplementation(async function* () { yield* emails; });
+		const response = await fetch(`${baseUrl}/api/gmail/sync`, { method: 'POST' });
+		await response.text();   // drain the ndjson progress stream so the handler finishes
+		return db.getAll();
+	};
+
+	beforeAll(async () => {
+		const app = express();
+		app.use(express.json());
+		app.use((req, _res, next) => { Object.assign(req, { session: { tokens: {} } }); next(); });
+		app.use('/api/gmail', gmailRouter);
+		await new Promise<void>((resolve) => { httpServer = app.listen(0, '127.0.0.1', () => resolve()); });
+		baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+	});
+
+	afterAll(async () => {
+		await new Promise((resolve) => httpServer.close(resolve));
+		setSyncRunning(false);
+	});
+
+	beforeEach(async () => {
+		await db.clearAll();
+		classifyEmailMock.mockReset();
+		parseEmailMock.mockReset();
+		parseEmailMock.mockReturnValue(null);
+		classifyEmailMock.mockImplementation(classifyBySubject);
+	});
+
+	it('should tag a ref the sync creates as synced', async () => {
+		const board = await runSyncOver([applicationConfirmation]);
+		expect(board).toHaveLength(1);
+		expect(board[0].emails).toEqual([
+			{ messageId: '19f0000000000001', category: 'applied', date: '2026-07-10', fast_apply: false, origin: 'synced' },
+		]);
+	});
+
+	it('should tag a ref synced when the sync APPENDS it to an application it already matched', async () => {
+		// The confirmation creates the application; the later rejection merges onto it. Both refs are the
+		// sync's own work, so both are 'synced' — this covers the updateWithEmail append path, not just create.
+		const board = await runSyncOver([applicationConfirmation, rejectionUpdate]);
+		expect(board).toHaveLength(1);
+		expect(board[0].emails.map(emailRef => [emailRef.messageId, emailRef.origin])).toEqual([
+			['19f0000000000001', 'synced'],
+			['19f0000000000002', 'synced'],
+		]);
+	});
+
+	it('should NOT relabel a ref the user attached by hand when the sync merges into that application', async () => {
+		// The rule that matters most, end to end: the user attached this exact message id in the UI, and a
+		// later sync picks the same message up. It must keep 'manual' — and must not be recorded twice.
+		await db.create({
+			company: 'Acme', role: 'Software Engineer', status: 'applied', interview_step: null,
+			date_applied: '2026-07-10', last_activity: null, job_url: null, notes: null,
+			source: 'manual', gmail_thread_id: null, account: 'me@work.com',
+			emails: [{ messageId: rejectionUpdate.messageId, category: 'rejected', date: '2026-07-20', origin: 'manual' }],
+		});
+		const board = await runSyncOver([rejectionUpdate]);
+		expect(board).toHaveLength(1);
+		expect(board[0].status).toBe('rejected');           // the sync's field update still lands
+		expect(board[0].emails).toHaveLength(1);            // …without recording the ref a second time
+		expect(board[0].emails[0].origin).toBe('manual');   // …and without stealing its origin
 	});
 });

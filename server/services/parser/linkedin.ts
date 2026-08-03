@@ -18,8 +18,8 @@ import { senderEmail } from './sender';
 function parseApplied(subject: string, body: string): Classification | null {
 	if (!/your application was sent to/i.test(subject)) return null;
 
-	const lines = body.split('\n').map(l => l.trim()).filter(Boolean);
-	const idx = lines.findIndex(l => /^your application was sent to\b/i.test(l));
+	const lines = body.split('\n').map(line => line.trim()).filter(Boolean);
+	const idx = lines.findIndex(line => /^your application was sent to\b/i.test(line));
 	if (idx < 0) return null;
 
 	const role    = lines[idx + 1];
