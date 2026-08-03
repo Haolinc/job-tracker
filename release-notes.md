@@ -1,4 +1,8 @@
-- Improve local LLM and parser email extraction logic
-- Revise in-app update text
-- Fix issue on progress bar disappear when the browser is refreshed
-- Disable Add Application button while syncing
+- Improve parser and LLM accuracy
+- Now allowing mid-sync cancel
+- Added debug mode toggle
+- Added email source origin: synced, imported, or manual
+- Allow user to reorder email source
+- Fast-applied notices now read "Fast Applied" in the edit dialog
+- CSV export filenames and log timestamps now use your local time
+- A missing setting now points you at the launcher's Config panel
