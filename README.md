@@ -2,13 +2,15 @@
 
 <br />
 <div align="center">
+  <img src="docs/images/cover.png" alt="Job Application Tracker logo" width="110" />
+
   <h3 align="center">Job Application Tracker</h3>
 
   <p align="center">
     A Kanban board that fills itself: your job applications, auto-synced from Gmail,
     classified by a local AI so your inbox never leaves your machine.
     <br />
-    <a href="https://haolin-portfolio.vercel.app/job-tracker">See the UI walkthrough</a>
+    <a href="docs/README.md"><strong>Architecture &amp; Development</strong></a>
     <br />
     <a href="https://github.com/Haolinc/job-tracker/issues">Report Bug</a>
     &middot;
@@ -16,11 +18,21 @@
   </p>
 </div>
 
+<p align="center">
+  <img src="docs/images/board.png" alt="Kanban board with applications synced from Gmail" width="100%" />
+</p>
+
+<p align="center">
+  <em>525 applications, one Gmail sync.</em>
+</p>
+
 <details>
   <summary>Table of Contents</summary>
   <ol>
     <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#screenshots">Screenshots</a></li>
     <li><a href="#built-with">Built With</a></li>
+    <li><a href="#architecture--development">Architecture &amp; Development</a></li>
     <li>
       <a href="#getting-started">Getting Started</a>
       <ul>
@@ -31,6 +43,7 @@
       </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
     <li><a href="#privacy-notes">Privacy notes</a></li>
     <li><a href="#contact">Contact</a></li>
   </ol>
@@ -47,17 +60,49 @@ into a spreadsheet, and forgetting half of them. This tracker does it for you:
   the rest. No cloud API, no key, no inbox data leaving your machine.
 - **Keeps one card per job**: confirmations, interviews, and rejections for the same job merge into
   a single application, even when company names are spelled differently across emails.
-- **Two views**: a Kanban board with collapsible columns, or a sortable table.
+- **Two views**: a Kanban board with collapsible columns, or a sortable table. Both share a search
+  box and a stats bar showing total, active, offers, and interview rate.
 - **Links back to the source**: every card links to the actual Gmail messages behind each status
   change, and shows whether the parser or the AI classified it.
-- **Stays out of your way**: manual entries and edits are never overwritten by a sync, and CSV
-  import/export gets your data in or out anytime.
+- **Stays out of your way**: a sync only ever moves an application forward, never backward, and it
+  leaves notes you wrote yourself alone. CSV import/export gets your data in or out anytime.
 - **Desktop launcher**: one window that starts and stops everything, manages Ollama and its models,
   and holds your configuration. No terminal needed, and it packages into a **Windows app**
   (installer or portable zip) that runs on a machine with nothing preinstalled and keeps itself
   current with automatic updates.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/table.png" alt="Sortable table view" />
+      <p><strong>Table view.</strong> The same data sorted by company, role, status, applied date,
+      or last response, for when you want a list instead of a board.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/images/modal.png" alt="Edit application modal showing tracked Gmail messages" />
+      <p><strong>Every card traces back to its email.</strong> Each status change keeps the Gmail
+      message that caused it, so you can jump to the original message anytime.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/launcher.png" alt="Desktop launcher with server, Ollama and model status" />
+      <p><strong>Desktop launcher.</strong> Live status for the server, Ollama, and the model;
+      start/stop, config, and a log console. No terminal needed.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/images/csv.png" alt="Exported CSV opened in a spreadsheet" />
+      <p><strong>CSV in and out.</strong> Export to a spreadsheet, edit it there, and re-import;
+      your file wins over what the sync guessed.</p>
+    </td>
+  </tr>
+</table>
+
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 ## Built With
 
@@ -70,7 +115,21 @@ into a spreadsheet, and forgetting half of them. This tracker does it for you:
 * [![Electron][Electron]][Electron-url]
 * [![Ollama][Ollama]][Ollama-url]
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
+
+## Architecture & Development
+
+Everything below lives in **[docs/](docs/README.md)**:
+
+| | |
+|---|---|
+| [How it works](docs/README.md#how-it-works) | The full sync pipeline as a diagram, plus the three design decisions that shape it: dedup before download, parser before LLM, and concurrent classification with sequential merging. |
+| [Where each stage lives](docs/README.md#where-each-stage-lives) | Every pipeline stage mapped to the file that implements it, so you can go straight to the code. |
+| [Project structure](docs/README.md#project-structure) | What `client/`, `server/`, `desktop/`, and `scripts/` each hold. |
+| [Development](docs/README.md#development) | Running the three test suites, lint and typecheck, the build and packaging commands, and where the logs go. |
+| [CSV re-import spec](docs/csv-reimport-spec.md) | How an edited export is matched back onto existing applications, and why ambiguity always resolves toward creating a row rather than overwriting one. |
+
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 ## Getting Started
 
@@ -94,7 +153,7 @@ Keep the **Client ID** and **Client Secret**, you'll enter them in the next step
 2. Either way the app is fully self-contained, so the machine needs **nothing preinstalled**: no
    Node.js, and the launcher will offer to install Ollama and download the AI model for you.
 3. Open **Config**, paste your Client ID and Secret, and press **Save**; the server starts on its
-   own. Then hit **Open App**.
+   own. Then hit **Open App**. ([what the launcher looks like](#screenshots))
 4. The app checks for updates on launch and asks before installing one, so you never have to come
    back here for new versions.
 
@@ -129,38 +188,81 @@ Then open http://localhost:5173.
 
 ### Configuration
 
-The desktop launcher's **Config** panel manages all of these for you. For the terminal workflow,
-fill them into `server/.env`:
+The desktop launcher's **Config** panel manages the OAuth values, `SESSION_SECRET`, `PORT`,
+`OLLAMA_MODEL`, and the **Debug mode** checkbox for you. The remaining three (`CLIENT_URL`,
+`DB_PATH`, `SYNC_CONCURRENCY`), and everything at once for the terminal workflow, go in
+`server/.env`:
 
 | Variable | Description |
 |---|---|
 | `GOOGLE_CLIENT_ID` | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3001/api/auth/google/callback` |
-| `SESSION_SECRET` | Any long random string |
+| `SESSION_SECRET` | Signs the login session cookie. The launcher generates one for you if you leave the field blank, so you can ignore it; set it yourself only when running the server without the launcher |
 | `PORT` | Optional: backend port (default `3001`) |
 | `CLIENT_URL` | Optional: frontend origin (default `http://localhost:5173`) |
 | `DB_PATH` | Optional: SQLite file location (default `data/job-tracker.db`) |
 | `OLLAMA_MODEL` | Optional: classifier model (default `qwen2.5:7b`) |
+| `SYNC_CONCURRENCY` | Optional: emails classified in parallel (default `3`). Raise it if your machine has GPU headroom, lower it if a sync makes the box unusable |
+| `DEBUG_LOG` | Optional: `true` writes the per-email trace to the debug log (the launcher's **Debug mode** checkbox sets this) |
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 ## Usage
 
 1. Click **Connect Gmail** in the app header and approve read-only access.
-2. Pick a scan window (last 30 / 60 / 90 / 180 days) and hit **Sync Gmail**; a progress bar streams
-   results as they come in.
-3. Newly synced cards land on the board highlighted; drag them between columns or switch to the
-   table view. Cards whose role couldn't be detected are flagged for a quick manual fix.
-4. Re-sync whenever you like: already-processed emails are skipped, so it's fast, and your manual
-   edits are never touched.
-5. Use the toolbar to add applications by hand or import/export CSV.
+2. Pick a scan window (last 30 / 60 / 90 / 180 days) and hit **Sync Gmail**. The model warms up
+   first, then a progress bar streams results as they come in. **Cancel** stops a run you didn't
+   mean to start; applications already written stay, and the rest are picked up next time.
+3. Newly synced cards land on the board highlighted. Open one with the pencil icon to change its
+   status, interview stage, dates, or notes, or switch to the table view. Cards whose role couldn't
+   be detected are flagged for a quick manual fix.
+4. Re-sync whenever you like: already-processed emails are skipped, so it's fast. New email for a
+   job you added by hand attaches to that card rather than making a second one, which means a sync
+   can advance its status or fill in a date. Your own notes and a status you've already moved
+   forward are left as they are.
+5. Use the toolbar to add applications by hand, import/export CSV, or reset the database. On
+   re-import **your file is the source of truth**: its values win over whatever the sync guessed,
+   and nothing is deleted just for being absent from the file. Details in the
+   [CSV re-import spec](docs/csv-reimport-spec.md).
 
 If you use the desktop launcher: it warms up Ollama before starting the server, shows sync progress
 in its log console, and asks before letting you stop or quit while a sync is still running (an
 interrupted sync loses that run's work).
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
+
+## Troubleshooting
+
+**"Google hasn't verified this app" is expected.** Your OAuth client is your own and still in
+*Testing*, so Google warns on it. Choose **Advanced → Go to Job Tracker (unsafe)**. Nobody else's
+app is involved; you built this client in Step 1.
+
+**The launcher refuses to start because something already holds the port.** The OAuth callback URL
+is pinned to a specific port, so the launcher stops rather than crash into an occupied one later.
+Close the other process (often a leftover `npm run dev` server or an earlier launcher), or change
+both `PORT` and `GOOGLE_REDIRECT_URI` to match.
+
+**Ollama or the model is missing.** The launcher offers to install Ollama and pull the model, and
+tracks interrupted downloads so it can resume them. From source, `npm run predev` checks Ollama for
+you; the model is a one-time `ollama pull qwen2.5:7b`.
+
+**"A sync is already running".** Only one sync runs at a time, and a CSV import blocks one too.
+Both finish on their own; the launcher shows live progress.
+
+**The first sync takes a while.** Every email is new, so all of them are classified. Later syncs
+skip already-processed message ids before downloading anything, which is why they're fast.
+
+**A card says the role couldn't be extracted.** The email genuinely didn't name one, or named it in
+a way neither the parser nor the model could read. The card is flagged so you can fix it in a few
+seconds; your edit survives every future sync.
+
+**Two cards for the same job, or two jobs merged into one.** That decision is made in
+[`applicationMatcher.ts`](server/services/applicationMatcher.ts). Turn on
+[debug logging](docs/README.md#logs), re-run, and the trace shows the company and role each email
+resolved to. Bug reports with that trace are the useful kind.
+
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 ## Privacy notes
 
@@ -172,7 +274,7 @@ interrupted sync loses that run's work).
 - There is no per-account separation: everything you sync from any connected Gmail account
   accumulates in one board and dedups together.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 ## Contact
 
@@ -180,7 +282,7 @@ Haolin - haolin5175@gmail.com
 
 Project Link: [https://github.com/Haolinc/job-tracker](https://github.com/Haolinc/job-tracker)
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
 <!-- MARKDOWN LINKS & IMAGES -->
 [React.js]: https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB
