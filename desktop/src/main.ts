@@ -29,6 +29,8 @@ const OLLAMA_BASE_URL = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').re
 const OLLAMA_HEALTH_URL = `${OLLAMA_BASE_URL}/api/tags`;
 const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
 const MODEL_LIBRARY_URL = 'https://ollama.com/library';
+// Walkthrough for creating the Google Cloud project and OAuth client that GOOGLE_CLIENT_ID/SECRET come from.
+const SETUP_GUIDE_URL = 'https://github.com/Haolinc/job-tracker-gmail-setup';
 // Pulled automatically only after a fresh portable install (which ships no models); otherwise the user picks.
 const DEFAULT_MODEL = 'qwen2.5:7b';
 const STATUS_POLL_INTERVAL_MS = 2000;
@@ -504,6 +506,7 @@ ipcMain.handle('launcher:reclaim-incomplete', async () => {
 	return reclaimIncompleteDownloads();
 });
 ipcMain.on('launcher:browse-models', () => void shell.openExternal(MODEL_LIBRARY_URL));
+ipcMain.on('launcher:open-setup-guide', () => void shell.openExternal(SETUP_GUIDE_URL));
 
 // ── App lifecycle ───────────────────────────────────────────────────────────
 

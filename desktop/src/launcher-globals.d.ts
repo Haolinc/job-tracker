@@ -120,6 +120,8 @@ interface LauncherBridge {
 	reclaimIncompleteDownloads(): Promise<{ freedBytes: number }>;
 	/** Open Ollama's model catalog (ollama.com/library) in the default browser. */
 	openModelLibrary(): void;
+	/** Open the Google Cloud setup guide, which explains where the OAuth values come from. */
+	openSetupGuide(): void;
 	onLog(handler: (line: string) => void): void;
 	onStatus(handler: (status: LauncherStatus) => void): void;
 	/** Live progress for an in-flight model pull, so the panel can show a single updating line. */

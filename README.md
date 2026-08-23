@@ -141,7 +141,7 @@ with *your own* credentials; nothing is shared with anyone else).
 
 Follow the
 [**Google Cloud setup guide**](https://github.com/Haolinc/job-tracker-gmail-setup), it walks
-through this whole step in detail.
+through this whole step in detail. The desktop launcher's **Config** panel links to it as well.
 
 Keep the **Client ID** and **Client Secret**, you'll enter them in the next step.
 
