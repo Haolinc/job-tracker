@@ -1,16 +1,24 @@
 {
+	// The default project for everything under src/, INCLUDING the tests. Editors resolve a file's config by
+	// walking up for a file literally named tsconfig.json, so this is the only place that can put the tests in
+	// a project; a differently-named config would type-check them on the command line while the editor still
+	// showed "Cannot find name 'node:fs'" on every one of them.
+	//
+	// It emits nothing. tsconfig.build.json extends this to produce dist/, minus the tests. Same split as
+	// server/tsconfig.json and server/tsconfig.build.json.
 	"compilerOptions": {
 		"target": "ES2022",
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
 		"lib": ["ES2022", "DOM"],
 		"strict": true,
-		"outDir": "dist",
-		"rootDir": "src",
+		"noEmit": true,
 		"types": ["node"],
 		"skipLibCheck": true
 	},
 	"include": ["src"],
 	"files": ["src/launcher-globals.d.ts"],
-	"exclude": ["src/control.ts", "src/**/*.test.ts"]
+	// control.ts is the renderer's classic script: tsconfig.renderer.json compiles it with different module
+	// settings and no Node types, and it must stay that way so renderer code cannot reach for Node APIs.
+	"exclude": ["src/control.ts"]
 }
