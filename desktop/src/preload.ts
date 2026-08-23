@@ -20,6 +20,7 @@ const launcherBridge: LauncherBridge = {
 	listIncompleteDownloads: () => ipcRenderer.invoke('launcher:list-incomplete') as Promise<string[]>,
 	reclaimIncompleteDownloads: () => ipcRenderer.invoke('launcher:reclaim-incomplete') as Promise<{ freedBytes: number }>,
 	openModelLibrary: () => ipcRenderer.send('launcher:browse-models'),
+	openSetupGuide: () => ipcRenderer.send('launcher:open-setup-guide'),
 	onLog: (handler) => ipcRenderer.on('launcher:log', (_event, line: string) => handler(line)),
 	onStatus: (handler) => ipcRenderer.on('launcher:status', (_event, status: LauncherStatus) => handler(status)),
 	onPullProgress: (handler) => ipcRenderer.on('launcher:pull-progress', (_event, progress: PullProgress) => handler(progress)),

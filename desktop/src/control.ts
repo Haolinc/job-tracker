@@ -25,6 +25,7 @@ const openLogsButton = document.getElementById('open-logs-button') as HTMLButton
 const configButton = document.getElementById('config-button') as HTMLButtonElement;
 const configPanel = document.getElementById('config-panel') as HTMLElement;
 const saveConfigButton = document.getElementById('save-config-button') as HTMLButtonElement;
+const setupGuideButton = document.getElementById('setup-guide-button') as HTMLButtonElement;
 
 // Every config field is a plain text input EXCEPT the model (a dropdown of installed models) and debug
 // logging (a checkbox) — both are read and written on their own below.
@@ -394,6 +395,10 @@ configButton.addEventListener('click', () => {
 	const panelIsNowOpen = configPanel.classList.toggle('open');
 	if (panelIsNowOpen) void loadConfigIntoPanel();
 });
+
+// The OAuth values are the only settings the launcher cannot produce on its own; this is the way out to the
+// walkthrough that explains where they come from.
+setupGuideButton.addEventListener('click', () => launcher.openSetupGuide());
 
 // Re-check Ollama and rebuild the picker, keeping the current pick selected if it's still installed. Always
 // available — it's how the user re-detects models after starting Ollama or downloading one.
