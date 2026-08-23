@@ -1,0 +1,12 @@
+{
+	// Emits the main-process JS to dist/ for the packaged app. The base tsconfig.json stays --noEmit and
+	// covers the tests so editors type-check them; this build variant drops them, since compiled tests have
+	// no business shipping. Mirrors server/tsconfig.build.json.
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"outDir": "dist",
+		"rootDir": "src"
+	},
+	"exclude": ["src/control.ts", "src/**/*.test.ts"]
+}

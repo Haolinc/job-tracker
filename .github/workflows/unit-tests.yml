@@ -70,5 +70,8 @@ jobs:
           # The desktop tests mock Electron entirely, so skip the ~100MB binary download.
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      - name: Type-check Desktop Sources and Tests
+        run: npm run typecheck
+
       - name: Run Desktop Tests
         run: npx vitest run --dir desktop
