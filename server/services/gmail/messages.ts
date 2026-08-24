@@ -27,6 +27,19 @@ function isRateLimitError(err: unknown): boolean {
 	return statusCode === 429 || (statusCode === 403 && /rate.?limit|userRateLimitExceeded/i.test(reason));
 }
 
+/**
+ * True when Google has rejected the credentials themselves rather than one request — revoked consent, a
+ * changed password, or a "Testing" project's seven-day refresh-token expiry. Retrying never helps; only a
+ * fresh consent does. Two shapes because it depends on the access token's age: once expired the library
+ * refreshes first and the token endpoint answers `invalid_grant`, while inside its hour the request goes out
+ * and Gmail answers 401. NOT 403 — that is rate limiting, which isRateLimitError already retries.
+ */
+export function isReconnectRequiredError(err: unknown): boolean {
+	const gaxiosError = err as { code?: number; status?: number; response?: { status?: number; data?: { error?: unknown } } };
+	const statusCode = gaxiosError?.code ?? gaxiosError?.status ?? gaxiosError?.response?.status;
+	return statusCode === 401 || gaxiosError?.response?.data?.error === 'invalid_grant';
+}
+
 /** Retry a Gmail call with exponential backoff when rate-limited. */
 async function withRateLimitRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
 	let delay = 1000;

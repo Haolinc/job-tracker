@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { listJobMessageIds, streamJobMessages, getAccountEmail } from '../services/gmail/messages';
+import { listJobMessageIds, streamJobMessages, getAccountEmail, isReconnectRequiredError } from '../services/gmail/messages';
 import { classifyEmail, warmUpModel, pickCompanyRole } from '../services/classifier';
 import { parseEmail } from '../services/parser/templates';
 import { extractGeneralCompanyRole } from '../services/parser/companyRole';
@@ -25,6 +25,10 @@ const router = Router();
 // Each sync progress event is mirrored to stdout as "@sync-progress@ {json}" so the desktop launcher can
 // render a live sync line in its panel. Keep in sync with the same constant in desktop/src/serverManager.ts.
 const SYNC_PROGRESS_MARKER = '@sync-progress@';
+
+// Shown when Google rejects the stored credentials. Names the fix rather than the fault: the raw
+// "invalid_grant" or 401 tells the user nothing, and reconnecting is the only thing that resolves it.
+const GMAIL_RECONNECT_MESSAGE = 'Gmail access has expired or been revoked. Please reconnect your Google account.';
 
 // The deterministic-parser templates worth tallying per sync, keyed by the classifier_code each one stamps.
 // Drives both the counting and the summary line, so a new template needs one entry here and nothing else.
@@ -484,8 +488,13 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		if (!res.writableEnded && !res.destroyed) res.end();   // no-op when the browser already disconnected
 	} catch (err) {
 		console.error('Sync error:', err);
-		if (streaming) { send({ phase: 'error', error: errMsg(err, 'Unknown error') }); if (!res.writableEnded && !res.destroyed) res.end(); }
-		else res.status(500).json({ error: 'Sync failed: ' + errMsg(err, 'Unknown error') });
+		// Google rejected the credentials themselves, so they can never work again. Drop them so the app
+		// offers "connect" instead of a Sync button that could only fail the same way.
+		const needsReconnect = isReconnectRequiredError(err);
+		if (needsReconnect) req.session.tokens = null;
+		const failureMessage = needsReconnect ? GMAIL_RECONNECT_MESSAGE : errMsg(err, 'Unknown error');
+		if (streaming) { send({ phase: 'error', error: failureMessage }); if (!res.writableEnded && !res.destroyed) res.end(); }
+		else res.status(500).json({ error: 'Sync failed: ' + failureMessage });
 	} finally {
 		setSyncRunning(false);
 		clearSyncCancel();   // never let this run's cancel bleed into the next sync
