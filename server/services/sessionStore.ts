@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import session from 'express-session';
 import { getDatabase } from './db';
 
@@ -76,4 +77,28 @@ export class SqliteSessionStore extends session.Store {
 			callback?.(error);
 		}
 	};
+}
+
+// ── Session secret ───────────────────────────────────────────────────────────
+
+const SESSION_SECRET_SETTING_KEY = 'session_secret';
+
+/**
+ * The key express-session signs cookies with, owned by the app rather than the user: minted on first boot
+ * and read back on every boot after, so a restart never signs anyone out. INSERT OR IGNORE settles the
+ * race when a restart overlaps the outgoing server — the loser reads the winner's secret instead of
+ * tripping the primary key.
+ */
+export function getOrCreateSessionSecret(): string {
+	const connection = getDatabase();
+	connection.exec(`
+		CREATE TABLE IF NOT EXISTS app_settings (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+	`);
+	connection.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)')
+		.run(SESSION_SECRET_SETTING_KEY, randomBytes(32).toString('hex'));
+	return (connection.prepare('SELECT value FROM app_settings WHERE key = ?')
+		.get(SESSION_SECRET_SETTING_KEY) as { value: string }).value;
 }

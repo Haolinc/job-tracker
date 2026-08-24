@@ -188,23 +188,24 @@ Then open http://localhost:5173.
 
 ### Configuration
 
-The desktop launcher's **Config** panel manages the OAuth values, `SESSION_SECRET`, `PORT`,
-`OLLAMA_MODEL`, and the **Debug mode** checkbox for you. The remaining three (`CLIENT_URL`,
-`DB_PATH`, `SYNC_CONCURRENCY`), and everything at once for the terminal workflow, go in
-`server/.env`:
+The desktop launcher's **Config** panel manages the OAuth values, `PORT`, `OLLAMA_MODEL`, and the
+**Debug mode** checkbox for you. The remaining three (`CLIENT_URL`, `DB_PATH`, `SYNC_CONCURRENCY`),
+and everything at once for the terminal workflow, go in `server/.env`. The session secret is on
+neither list: the server generates its own on first boot and stores it in the database, so you never
+set one and a restart keeps you logged in.
 
 | Variable | Description |
 |---|---|
 | `GOOGLE_CLIENT_ID` | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3001/api/auth/google/callback` |
-| `SESSION_SECRET` | Signs the login session cookie. The launcher generates one for you if you leave the field blank, so you can ignore it; set it yourself only when running the server without the launcher |
 | `PORT` | Optional: backend port (default `3001`) |
 | `CLIENT_URL` | Optional: frontend origin (default `http://localhost:5173`) |
 | `DB_PATH` | Optional: SQLite file location (default `data/job-tracker.db`) |
 | `OLLAMA_MODEL` | Optional: classifier model (default `qwen2.5:7b`) |
 | `SYNC_CONCURRENCY` | Optional: emails classified in parallel (default `3`). Raise it if your machine has GPU headroom, lower it if a sync makes the box unusable |
 | `DEBUG_LOG` | Optional: `true` writes the per-email trace to the debug log (the launcher's **Debug mode** checkbox sets this) |
+| `SESSION_SECRET` | Optional: overrides the secret the server generates and stores for itself. You do not need this; set it only to pin the cookie-signing key to a value you control |
 
 <p align="right">(<a href="#readme-top">Back to top</a>)</p>
 

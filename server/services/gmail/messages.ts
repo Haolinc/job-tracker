@@ -42,9 +42,23 @@ async function withRateLimitRetry<T>(fn: () => Promise<T>, label: string): Promi
 	}
 }
 
+/**
+ * Fold a refresh's new credentials into the ones we hold. Google returns a refresh token only on the very
+ * first exchange, so a later refresh that omits it must never blank the one we already have.
+ */
+export function applyRefreshedTokens(tokens: Credentials, refreshed: Credentials): void {
+	const { refresh_token, ...rest } = refreshed;
+	Object.assign(tokens, rest);
+	if (refresh_token) tokens.refresh_token = refresh_token;
+}
+
 function getGmail(tokens: Credentials): gmail_v1.Gmail {
 	const client = getOAuthClient();
 	client.setCredentials(tokens);
+	// googleapis refreshes the access token onto its own client, leaving our copy stale — every later call
+	// would then pay another refresh round-trip. Write it back into the caller's credentials instead: that
+	// object is req.session.tokens, so express-session persists it when the response ends.
+	client.on('tokens', refreshed => applyRefreshedTokens(tokens, refreshed));
 	return google.gmail({ version: 'v1', auth: client });
 }
 

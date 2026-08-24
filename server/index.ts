@@ -27,7 +27,7 @@ if (launcherPid) {
 	}, 3000).unref();
 }
 
-const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'SESSION_SECRET'];
+const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
 for (const key of required) {
 	if (!process.env[key]) {
 		// Every required key is also editable in the launcher's Config panel (see desktop/src/config.ts),
@@ -43,7 +43,7 @@ import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
 import { initializeDatabase } from './services/db';
-import { SqliteSessionStore } from './services/sessionStore';
+import { SqliteSessionStore, getOrCreateSessionSecret } from './services/sessionStore';
 import applicationsRouter from './routes/applications';
 import authRouter from './routes/auth';
 import gmailRouter from './routes/gmail';
@@ -71,7 +71,8 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 app.use(session({
-	secret: process.env.SESSION_SECRET!,
+	// App-owned (see getOrCreateSessionSecret); the env var still wins, so existing installs keep their sessions.
+	secret: process.env.SESSION_SECRET || getOrCreateSessionSecret(),
 	resave: false,
 	saveUninitialized: false,
 	cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 },

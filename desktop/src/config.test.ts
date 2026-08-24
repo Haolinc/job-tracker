@@ -15,7 +15,6 @@ const A_FULL_CONFIG: LauncherConfig = {
 	googleClientId: 'client-id',
 	googleClientSecret: 'client-secret',
 	googleRedirectUri: 'http://localhost:3001/api/auth/google/callback',
-	sessionSecret: 'already-set',   // non-empty, so no secret is generated as a side effect
 	port: '3001',
 	ollamaModel: 'qwen2.5:7b',
 	debugLogging: 'false',

@@ -37,7 +37,6 @@ const configInputs: Record<TextConfigField, HTMLInputElement> = {
 	googleClientId: document.getElementById('google-client-id') as HTMLInputElement,
 	googleClientSecret: document.getElementById('google-client-secret') as HTMLInputElement,
 	googleRedirectUri: document.getElementById('google-redirect-uri') as HTMLInputElement,
-	sessionSecret: document.getElementById('session-secret') as HTMLInputElement,
 	port: document.getElementById('server-port') as HTMLInputElement,
 };
 const configFields = Object.keys(configInputs) as TextConfigField[];

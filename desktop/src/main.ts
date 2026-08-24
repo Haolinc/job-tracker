@@ -356,8 +356,7 @@ function confirmInterruptingSync(actionText: string): boolean {
 
 /** Persist the panel's config and apply it: restart a running server, or start it if first-run left none. */
 function saveConfig(config: LauncherConfig): void {
-	const { generatedSessionSecret } = writeConfig(paths.serverEnvPath, config);
-	if (generatedSessionSecret) log('launcher', 'No session secret provided — generated a random one.');
+	writeConfig(paths.serverEnvPath, config);
 	log('launcher', 'Config saved.');
 	applyConfigToServer();
 }
