@@ -13,12 +13,12 @@ interface Props {
 	lastResult: SyncResult | null;
 	error: string | null;
 	onConnect: () => void;
-	onDisconnect: () => void;
 	onSync: (days: number) => void;
 	onCancel: () => void;
 }
 
-export default function GmailSync({ connected, syncing, cancelling, progress, lastResult, error, onConnect, onDisconnect, onSync, onCancel }: Props) {
+// Signing out lives in the header's AccountMenu (next to the address it disconnects), not here.
+export default function GmailSync({ connected, syncing, cancelling, progress, lastResult, error, onConnect, onSync, onCancel }: Props) {
 	const [days, setDays] = useState(30);
 	const [cancelConfirmRequested, setCancelConfirmRequested] = useState(false);
 	// The "Stop this sync?" question is only meaningful while a sync is running, so visibility is DERIVED from
@@ -75,13 +75,6 @@ export default function GmailSync({ connected, syncing, cancelling, progress, la
 							saved and you'll need to sync again.
 						</WarningConfirmDialog>
 					)}
-					<button
-						data-testid="gmail-disconnect-btn"
-						onClick={onDisconnect}
-						disabled={syncing}
-						title={syncing ? 'Wait for the sync to finish before disconnecting' : undefined}
-						className="text-xs text-gray-400 hover:text-red-500 underline disabled:opacity-60 disabled:hover:text-gray-400"
-					>Disconnect</button>
 					{syncing && (
 						progress?.phase === 'warming' ? (
 							<span className="text-xs text-gray-500 whitespace-nowrap">Preparing model&hellip;</span>

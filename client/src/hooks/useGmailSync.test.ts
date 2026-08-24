@@ -42,6 +42,38 @@ describe('useGmailSync disconnect', () => {
 	});
 });
 
+describe('useGmailSync account email', () => {
+	beforeEach(() => {
+		vi.mocked(getSyncStatus).mockResolvedValue({ running: false, event: null });
+		disconnectGmailMock.mockReset();
+	});
+
+	it('should expose the signed-in address reported by the status check', async () => {
+		vi.mocked(getAuthStatus).mockResolvedValue({ connected: true, email: 'jane@gmail.com' });
+		const { result } = renderHook(() => useGmailSync());
+		await act(async () => { await result.current.checkStatus(); });
+		expect(result.current.accountEmail).toBe('jane@gmail.com');
+	});
+
+	it('should hold a null address when the server could not read one', async () => {
+		// getAccountEmail is non-fatal server-side: a failed profile lookup still reports the connection.
+		vi.mocked(getAuthStatus).mockResolvedValue({ connected: true });
+		const { result } = renderHook(() => useGmailSync());
+		await act(async () => { await result.current.checkStatus(); });
+		expect(result.current.connected).toBe(true);
+		expect(result.current.accountEmail).toBeNull();
+	});
+
+	it('should forget the address on disconnect', async () => {
+		vi.mocked(getAuthStatus).mockResolvedValue({ connected: true, email: 'jane@gmail.com' });
+		disconnectGmailMock.mockResolvedValue({ success: true });
+		const { result } = renderHook(() => useGmailSync());
+		await act(async () => { await result.current.checkStatus(); });
+		await act(async () => { await result.current.disconnect(); });
+		expect(result.current.accountEmail).toBeNull();
+	});
+});
+
 describe('useGmailSync connection state after a failed sync', () => {
 	beforeEach(() => {
 		vi.mocked(getSyncStatus).mockResolvedValue({ running: false, event: null });

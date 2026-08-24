@@ -22,6 +22,9 @@ function progressFromEvent(event: NonNullable<SyncStatus['event']>): SyncProgres
 // loaded — finishes, so the caller can refresh the board. The tab that starts a sync refreshes in its own handler.
 export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 	const [connected, setConnected] = useState(false);
+	// The signed-in Gmail address, shown by the account badge. Null while disconnected, and also when the
+	// server couldn't read it — the badge stays usable either way.
+	const [accountEmail, setAccountEmail] = useState<string | null>(null);
 	const [syncing, setSyncing] = useState(false);
 	// True from the moment the user asks to cancel until the sync actually ends — drives the "Cancelling…" label
 	// and stops a second cancel click. Reset whenever a sync starts or settles.
@@ -78,8 +81,10 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 	// rather than offering a fresh "Sync" the user would only collide with (the button disables while syncing).
 	const checkStatus = useCallback(async () => {
 		try {
-			const [{ connected: connectedNow }, syncStatus] = await Promise.all([getAuthStatus(), getSyncStatus()]);
+			const [{ connected: connectedNow, email: accountEmailNow }, syncStatus] =
+				await Promise.all([getAuthStatus(), getSyncStatus()]);
 			setConnected(connectedNow);
+			setAccountEmail(accountEmailNow ?? null);
 			if (syncStatus.running) {
 				setSyncing(true);
 				setError(null);
@@ -95,6 +100,7 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 		try {
 			await disconnectGmail();
 			setConnected(false);
+			setAccountEmail(null);
 			setLastResult(null);
 			setError(null);
 		} catch (caughtError) {
@@ -137,5 +143,5 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 		try { await cancelGmailSync(); } catch { /* already ending — the terminal event settles it */ }
 	}, []);
 
-	return { connected, syncing, cancelling, progress, lastResult, error, checkStatus, disconnect, sync, cancel };
+	return { connected, accountEmail, syncing, cancelling, progress, lastResult, error, checkStatus, disconnect, sync, cancel };
 }

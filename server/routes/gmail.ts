@@ -491,7 +491,7 @@ router.post('/sync', requireAuth, async (req: Request, res: Response) => {
 		// Google rejected the credentials themselves, so they can never work again. Drop them so the app
 		// offers "connect" instead of a Sync button that could only fail the same way.
 		const needsReconnect = isReconnectRequiredError(err);
-		if (needsReconnect) req.session.tokens = null;
+		if (needsReconnect) { req.session.tokens = null; req.session.accountEmail = null; }
 		const failureMessage = needsReconnect ? GMAIL_RECONNECT_MESSAGE : errMsg(err, 'Unknown error');
 		if (streaming) { send({ phase: 'error', error: failureMessage }); if (!res.writableEnded && !res.destroyed) res.end(); }
 		else res.status(500).json({ error: 'Sync failed: ' + failureMessage });
