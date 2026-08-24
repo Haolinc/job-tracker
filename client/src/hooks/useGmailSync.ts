@@ -117,13 +117,17 @@ export function useGmailSync(onBackgroundSyncSettled?: () => void) {
 			const errorMessage = (caughtError as { response?: { data?: { error?: string } } })
 				?.response?.data?.error ?? (caughtError instanceof Error ? caughtError.message : 'Sync failed');
 			setError(errorMessage);
+			// The server drops the Gmail tokens when Google rejects them, so re-read the connection state
+			// rather than trust a stale flag — otherwise the UI keeps offering a Sync that can only fail
+			// again. Unconditional: it also catches any other cause of a dropped session.
+			void checkStatus();
 			throw caughtError;
 		} finally {
 			setSyncing(false);
 			setCancelling(false);
 			setProgress(null);
 		}
-	}, []);
+	}, [checkStatus]);
 
 	// Ask the server to stop the running sync. The sync ends cooperatively a moment later — the stream (this
 	// tab) or the poll (a reopened tab) delivers the 'cancelled' result, which flips syncing off. A failure
