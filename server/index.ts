@@ -71,8 +71,7 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 app.use(session({
-	// App-owned (see getOrCreateSessionSecret); the env var still wins, so existing installs keep their sessions.
-	secret: process.env.SESSION_SECRET || getOrCreateSessionSecret(),
+	secret: getOrCreateSessionSecret(),
 	resave: false,
 	saveUninitialized: false,
 	cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 },

@@ -85,9 +85,11 @@ const SESSION_SECRET_SETTING_KEY = 'session_secret';
 
 /**
  * The key express-session signs cookies with, owned by the app rather than the user: minted on first boot
- * and read back on every boot after, so a restart never signs anyone out. INSERT OR IGNORE settles the
- * race when a restart overlaps the outgoing server — the loser reads the winner's secret instead of
- * tripping the primary key.
+ * and read back on every boot after, so a restart never signs anyone out. The database is the only source
+ * of truth — nothing in the environment can set or override it.
+ *
+ * INSERT OR IGNORE settles the race when a restart overlaps the outgoing server — the loser reads the
+ * winner's secret instead of tripping the primary key.
  */
 export function getOrCreateSessionSecret(): string {
 	const connection = getDatabase();

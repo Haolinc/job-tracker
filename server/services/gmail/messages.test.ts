@@ -13,23 +13,17 @@ const storedTokens = (): Credentials => ({
 });
 
 describe('applyRefreshedTokens', () => {
-	it('should take the new access token and expiry', () => {
+	it('should take the new access token and expiry while keeping the stored refresh token', () => {
+		// Google returns a refresh token only on the first exchange, omitting the key on later refreshes or
+		// sending it as undefined. Blanking ours either way would strand the user at the next expiry with
+		// nothing to refresh from, forcing a full reconnect.
 		const tokens = storedTokens();
 
 		applyRefreshedTokens(tokens, { access_token: 'new-access-token', expiry_date: 2000 });
-
-		expect(tokens.access_token).toBe('new-access-token');
-		expect(tokens.expiry_date).toBe(2000);
-	});
-
-	it('should keep the stored refresh token when the refresh omits one', () => {
-		// Google returns refresh_token only on the first exchange. Blanking it here would strand the user
-		// at the next expiry with nothing to refresh from, forcing a full reconnect.
-		const tokens = storedTokens();
-
-		applyRefreshedTokens(tokens, { access_token: 'new-access-token' });
 		applyRefreshedTokens(tokens, { access_token: 'newer-access-token', refresh_token: undefined });
 
+		expect(tokens.access_token).toBe('newer-access-token');
+		expect(tokens.expiry_date).toBe(2000);
 		expect(tokens.refresh_token).toBe('the-only-refresh-token-we-will-ever-get');
 	});
 

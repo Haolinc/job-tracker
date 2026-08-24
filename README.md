@@ -205,7 +205,6 @@ set one and a restart keeps you logged in.
 | `OLLAMA_MODEL` | Optional: classifier model (default `qwen2.5:7b`) |
 | `SYNC_CONCURRENCY` | Optional: emails classified in parallel (default `3`). Raise it if your machine has GPU headroom, lower it if a sync makes the box unusable |
 | `DEBUG_LOG` | Optional: `true` writes the per-email trace to the debug log (the launcher's **Debug mode** checkbox sets this) |
-| `SESSION_SECRET` | Optional: overrides the secret the server generates and stores for itself. You do not need this; set it only to pin the cookie-signing key to a value you control |
 
 <p align="right">(<a href="#readme-top">Back to top</a>)</p>
 
