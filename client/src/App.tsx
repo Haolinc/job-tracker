@@ -4,6 +4,7 @@ import TableView from './components/TableView';
 import AddModal from './components/AddModal';
 import StatsBar from './components/StatsBar';
 import GmailSync from './components/GmailSync';
+import AccountMenu from './components/AccountMenu';
 import Filters from './components/Filters';
 import Toolbar, { type View } from './components/Toolbar';
 import WarningConfirmDialog from './components/WarningConfirmDialog';
@@ -23,7 +24,7 @@ export default function App() {
 
 	// When a sync this tab RECONNECTED to (reopened mid-sync) finishes, refetch so the board shows its results.
 	// The normal, tab-initiated sync refetches in handleSync instead (it also computes the "new" highlight).
-	const { connected, syncing, cancelling, progress, lastResult, error: syncError, checkStatus, disconnect, sync, cancel } =
+	const { connected, accountEmail, syncing, cancelling, progress, lastResult, error: syncError, checkStatus, disconnect, sync, cancel } =
 		useGmailSync(() => { void fetchAll(filters); });
 	const [modal, setModal] = useState<Partial<ApplicationFormData> | null>(null);
 	const [view, setView] = useState<View>('board');
@@ -218,18 +219,29 @@ export default function App() {
 			<header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4">
 				<div className="max-w-screen-xl mx-auto flex flex-wrap items-center justify-between gap-3">
 					<h1 className="text-xl font-bold text-gray-900">Job Tracker</h1>
-					<GmailSync
-						connected={connected}
-						syncing={syncing}
-						cancelling={cancelling}
-						progress={progress}
-						lastResult={lastResult}
-						error={syncError}
-						onConnect={() => { window.location.href = '/api/auth/google'; }}
-						onDisconnect={disconnect}
-						onSync={handleSync}
-						onCancel={cancel}
-					/>
+					{/* Sync controls and the account badge share the right end of the header, badge last so it
+					    stays in the corner however wide the sync row grows mid-sync. */}
+					<div className="flex flex-1 flex-wrap items-center justify-end gap-3">
+						<GmailSync
+							connected={connected}
+							syncing={syncing}
+							cancelling={cancelling}
+							progress={progress}
+							lastResult={lastResult}
+							error={syncError}
+							onConnect={() => { window.location.href = '/api/auth/google'; }}
+							onSync={handleSync}
+							onCancel={cancel}
+						/>
+						{connected && (
+							<AccountMenu
+								email={accountEmail}
+								signOutDisabled={syncing}
+								signOutDisabledReason="Wait for the sync to finish before signing out"
+								onSignOut={disconnect}
+							/>
+						)}
+					</div>
 				</div>
 			</header>
 

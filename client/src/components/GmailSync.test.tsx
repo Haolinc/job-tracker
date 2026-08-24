@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import GmailSync from './GmailSync';
 
 const user = userEvent.setup();
-const base = { connected: true, syncing: false, cancelling: false, progress: null, lastResult: null, error: null, onConnect: vi.fn(), onDisconnect: vi.fn(), onSync: vi.fn(), onCancel: vi.fn() };
+const base = { connected: true, syncing: false, cancelling: false, progress: null, lastResult: null, error: null, onConnect: vi.fn(), onSync: vi.fn(), onCancel: vi.fn() };
 
 describe('GmailSync', () => {
 	it('should call onConnect when disconnected', async () => {
@@ -12,13 +12,6 @@ describe('GmailSync', () => {
 		render(<GmailSync {...base} connected={false} onConnect={onConnect} />);
 		await user.click(screen.getByTestId('gmail-connect-btn'));
 		expect(onConnect).toHaveBeenCalledTimes(1);
-	});
-
-	it('should call onDisconnect when connected', async () => {
-		const onDisconnect = vi.fn();
-		render(<GmailSync {...base} onDisconnect={onDisconnect} />);
-		await user.click(screen.getByTestId('gmail-disconnect-btn'));
-		expect(onDisconnect).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([30, 60, 90, 180] as const)('should call onSync with the %s scan window when syncing', async (scanDay) => {
@@ -37,15 +30,6 @@ describe('GmailSync', () => {
 		expect(btn).toBeDisabled();                  // guarded so a sync can't be fired on top of one in flight
 		await user.click(btn);
 		expect(onSync).not.toHaveBeenCalled();
-	});
-
-	it('should NOT call onDisconnect when clicked while syncing', async () => {
-		const onDisconnect = vi.fn();
-		render(<GmailSync {...base} syncing onDisconnect={onDisconnect} />);
-		const disconnectButton = screen.getByTestId('gmail-disconnect-btn');
-		expect(disconnectButton).toBeDisabled();     // disconnecting mid-sync would revoke the tokens the sync is using
-		await user.click(disconnectButton);
-		expect(onDisconnect).not.toHaveBeenCalled();
 	});
 
 	it('should NOT render a sync button when disconnected', () => {

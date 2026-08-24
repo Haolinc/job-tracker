@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getAuthUrl, exchangeCode, revokeTokens } from '../services/gmail/oauth';
+import { getAccountEmail } from '../services/gmail/messages';
 import { isSyncRunning } from '../services/syncState';
 
 const router = Router();
@@ -19,6 +20,9 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 	try {
 		const tokens = await exchangeCode(code);
 		req.session.tokens = tokens;
+		// Drop any address cached for the PREVIOUS connection — this consent may well be a different
+		// mailbox, and /status re-reads it from the new tokens on the next check.
+		req.session.accountEmail = null;
 		// Explicitly save before redirecting — express-session only auto-saves when the response
 		// ends, so the browser may follow the redirect before the session is persisted, causing a
 		// phantom "not connected" state on the very next request.
@@ -36,8 +40,19 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 	}
 });
 
-router.get('/status', (req: Request, res: Response) => {
-	res.json({ connected: !!req.session?.tokens });
+router.get('/status', async (req: Request, res: Response) => {
+	const tokens = req.session?.tokens;
+	if (!tokens) {
+		res.json({ connected: false, email: null });
+		return;
+	}
+	// The address comes from users.getProfile, which the read-only Gmail scope already covers — no extra
+	// consent. Cached on the session because it never changes for a given connection: only the first status
+	// check after connecting pays the round-trip. A failed lookup caches nothing, so the next check retries.
+	if (!req.session.accountEmail) {
+		req.session.accountEmail = await getAccountEmail(tokens);
+	}
+	res.json({ connected: true, email: req.session.accountEmail ?? null });
 });
 
 router.post('/disconnect', async (req: Request, res: Response) => {
@@ -52,6 +67,7 @@ router.post('/disconnect', async (req: Request, res: Response) => {
 		if (req.session?.tokens) {
 			await revokeTokens(req.session.tokens).catch(() => {});
 			req.session.tokens = null;
+			req.session.accountEmail = null;   // the cached address belongs to the connection we just dropped
 		}
 		res.json({ success: true });
 	} catch {

@@ -4,6 +4,9 @@ import type { Credentials } from 'google-auth-library';
 declare module 'express-session' {
 	interface SessionData {
 		tokens: Credentials | null;
+		// The connected mailbox's address, cached on the session so /auth/status can name the signed-in
+		// account without a Gmail round-trip on every check. Null/absent until the first successful lookup.
+		accountEmail: string | null;
 	}
 }
 

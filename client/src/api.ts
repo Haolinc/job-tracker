@@ -39,8 +39,15 @@ export interface ImportApplyResult {
 export const importApplications = (payload: ImportApplyPayload): Promise<ImportApplyResult> =>
 	api.post('/applications/import', payload).then(response => response.data as ImportApplyResult);
 
-export const getAuthStatus = (): Promise<{ connected: boolean }> =>
-	api.get('/auth/status').then(response => response.data as { connected: boolean });
+export interface AuthStatus {
+	connected: boolean;
+	// The signed-in Gmail address, for the account badge. Optional: null when disconnected, and absent from
+	// the response of a server older than the field — the badge just falls back to a generic avatar.
+	email?: string | null;
+}
+
+export const getAuthStatus = (): Promise<AuthStatus> =>
+	api.get('/auth/status').then(response => response.data as AuthStatus);
 
 export const disconnectGmail = (): Promise<{ success: boolean }> =>
 	api.post('/auth/disconnect').then(response => response.data as { success: boolean });
