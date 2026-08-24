@@ -11,8 +11,6 @@ interface LauncherConfig {
 	googleClientId: string;
 	googleClientSecret: string;
 	googleRedirectUri: string;
-	/** Left empty in the panel → a random secret is generated on save. */
-	sessionSecret: string;
 	port: string;
 	/** Ollama model the classifier uses; the panel offers the user's installed models. Empty → server default. */
 	ollamaModel: string;

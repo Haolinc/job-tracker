@@ -2,7 +2,6 @@
 // so it can be exercised standalone. Unknown lines and comments in the file are always preserved — the
 // launcher only ever touches the keys it manages.
 
-import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 export const DEFAULT_PORT = '3001';
@@ -14,7 +13,6 @@ const ENV_KEYS_BY_CONFIG_FIELD: Record<keyof LauncherConfig, string> = {
 	googleClientId: 'GOOGLE_CLIENT_ID',
 	googleClientSecret: 'GOOGLE_CLIENT_SECRET',
 	googleRedirectUri: 'GOOGLE_REDIRECT_URI',
-	sessionSecret: 'SESSION_SECRET',
 	port: 'PORT',
 	ollamaModel: 'OLLAMA_MODEL',
 	debugLogging: 'DEBUG_LOG',
@@ -26,7 +24,6 @@ const DEFAULT_CONFIG_VALUES: Record<keyof LauncherConfig, string> = {
 	googleClientId: '',
 	googleClientSecret: '',
 	googleRedirectUri: `http://localhost:${DEFAULT_PORT}/api/auth/google/callback`,
-	sessionSecret: '',
 	port: DEFAULT_PORT,
 	ollamaModel: '',
 	debugLogging: 'false',
@@ -53,26 +50,19 @@ export function readConfig(envPath: string): LauncherConfig {
 
 /**
  * Update the managed keys in the .env file IN PLACE — existing unknown lines and comments survive, missing
- * keys are appended. An empty session secret is replaced with a generated one (reported via the return so
- * the caller can log it).
+ * keys are appended.
  */
-export function writeConfig(envPath: string, config: LauncherConfig): { generatedSessionSecret: boolean } {
-	const generatedSessionSecret = !config.sessionSecret;
-	const configToWrite: LauncherConfig = generatedSessionSecret
-		? { ...config, sessionSecret: randomBytes(32).toString('hex') }
-		: config;
-
+export function writeConfig(envPath: string, config: LauncherConfig): void {
 	let updatedContent = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
 	for (const configField of CONFIG_FIELDS) {
-		updatedContent = upsertAssignment(updatedContent, ENV_KEYS_BY_CONFIG_FIELD[configField], configToWrite[configField]);
+		updatedContent = upsertAssignment(updatedContent, ENV_KEYS_BY_CONFIG_FIELD[configField], config[configField]);
 	}
 	writeFileSync(envPath, updatedContent);
-	return { generatedSessionSecret };
 }
 
 /**
- * Persist a single managed key in place, leaving every other line (and the session secret) untouched. Used to
- * adopt an auto-selected model without the full-save side effects (e.g. generating a session secret).
+ * Persist a single managed key in place, leaving every other line untouched. Used to adopt an auto-selected
+ * model without rewriting the rest of the file.
  */
 export function updateConfigValue(envPath: string, field: keyof LauncherConfig, value: string): void {
 	const content = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';

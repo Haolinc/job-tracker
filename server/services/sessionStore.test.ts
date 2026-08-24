@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import session from 'express-session';
 import * as db from './db';
-import { SqliteSessionStore } from './sessionStore';
+import { SqliteSessionStore, getOrCreateSessionSecret } from './sessionStore';
 
 // Explicit lifecycle: point the database at memory, then initialize once for this test process.
 process.env.DB_PATH = ':memory:';
@@ -74,5 +74,18 @@ describe('SqliteSessionStore', () => {
 		expect(after.expires_at).toBeGreaterThan(before.expires_at);
 		const restored = await getSession('session-1');
 		expect((restored as { tokens?: { access_token: string } }).tokens?.access_token).toBe('access-token-value');
+	});
+});
+
+describe('session secret', () => {
+	it('should mint one secret and reuse it on every later boot', () => {
+		// The whole point of storing it: a restart that minted a fresh secret would invalidate every
+		// signed cookie and sign the user out.
+		db.getDatabase().exec('DROP TABLE IF EXISTS app_settings');
+
+		const secret = getOrCreateSessionSecret();
+
+		expect(secret).toMatch(/^[0-9a-f]{64}$/);
+		expect(getOrCreateSessionSecret()).toBe(secret);
 	});
 });

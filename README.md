@@ -188,17 +188,17 @@ Then open http://localhost:5173.
 
 ### Configuration
 
-The desktop launcher's **Config** panel manages the OAuth values, `SESSION_SECRET`, `PORT`,
-`OLLAMA_MODEL`, and the **Debug mode** checkbox for you. The remaining three (`CLIENT_URL`,
-`DB_PATH`, `SYNC_CONCURRENCY`), and everything at once for the terminal workflow, go in
-`server/.env`:
+The desktop launcher's **Config** panel manages the OAuth values, `PORT`, `OLLAMA_MODEL`, and the
+**Debug mode** checkbox for you. The remaining three (`CLIENT_URL`, `DB_PATH`, `SYNC_CONCURRENCY`),
+and everything at once for the terminal workflow, go in `server/.env`. The session secret is on
+neither list: the server generates its own on first boot and stores it in the database, so you never
+set one and a restart keeps you logged in.
 
 | Variable | Description |
 |---|---|
 | `GOOGLE_CLIENT_ID` | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3001/api/auth/google/callback` |
-| `SESSION_SECRET` | Signs the login session cookie. The launcher generates one for you if you leave the field blank, so you can ignore it; set it yourself only when running the server without the launcher |
 | `PORT` | Optional: backend port (default `3001`) |
 | `CLIENT_URL` | Optional: frontend origin (default `http://localhost:5173`) |
 | `DB_PATH` | Optional: SQLite file location (default `data/job-tracker.db`) |
